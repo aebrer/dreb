@@ -82,6 +82,16 @@ describe("openai-completions kimi thinkingFormat", () => {
 		mockState.chunks = undefined;
 	});
 
+	it("serializes the model output limit as max_completion_tokens", async () => {
+		await streamSimple(
+			{ ...KIMI_MODEL, maxTokens: 100000 },
+			{ messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "test" },
+		).result();
+
+		expect(mockState.lastParams).toMatchObject({ max_completion_tokens: 100000 });
+	});
+
 	it("sets thinking effort using the Kimi Code request shape", async () => {
 		let payload: unknown;
 

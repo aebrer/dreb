@@ -524,13 +524,11 @@ dreb.on("stream_retry", async (event, ctx) => {
 
 #### length_retry
 
-Fired when a turn ends with `stopReason: "length"` (the model exhausted its output token budget mid-response) and dreb discards the truncated partial before retrying with a larger `maxTokens` budget. If all retries are exhausted (or the budget already sits at the model's ceiling), the turn fails loudly instead with an error message ("Response truncated at token limit after N attempts") rather than returning a silently truncated response.
+Fired when a turn ends with `stopReason: "length"` (the model exhausted its configured output limit mid-response) and dreb discards the truncated partial before retrying at that same configured limit. If all retries are exhausted, the agent loop fails loudly with an error message ("Response truncated at the configured output token limit after N attempts") rather than returning a silently truncated response. The session layer may then perform one compact-and-retry recovery when provider evidence or input-plus-output arithmetic indicates that remaining context, rather than the output limit alone, caused the truncation.
 
 ```typescript
 dreb.on("length_retry", async (event, ctx) => {
-  // event.attempt, event.maxAttempts
-  // event.previousMaxTokens - the budget used for the truncated attempt
-  // event.nextMaxTokens - the escalated budget the retry will request
+  // event.attempt, event.maxAttempts, event.maxTokens
   // event.discardedPartial - partial assistant message discarded before retry (debug/instrumentation only)
 });
 ```

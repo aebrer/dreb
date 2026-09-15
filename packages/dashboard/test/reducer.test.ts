@@ -758,12 +758,12 @@ describe("applySessionEvent — streaming lifecycle", () => {
 		});
 		expect(state.entries).toHaveLength(1);
 
-		applySessionEvent(state, { type: "length_retry", attempt: 2, maxAttempts: 4 });
+		applySessionEvent(state, { type: "length_retry", attempt: 2, maxAttempts: 4, maxTokens: 4096 });
 		expect(state.entries).toHaveLength(0);
 		expect(state.statusEntries).toContainEqual(
 			expect.objectContaining({
 				key: "retry",
-				text: "response truncated, retrying with larger budget (2/4)",
+				text: "response truncated, retrying at the configured output limit (2/4)",
 				tone: "warning",
 			}),
 		);
@@ -1007,7 +1007,7 @@ describe("applySessionEvent — session-level events", () => {
 		const state = makeState();
 		applySessionEvent(state, { type: "stream_retry", attempt: 1, maxAttempts: 3 });
 		const firstRetry = state.statusEntries[0];
-		applySessionEvent(state, { type: "length_retry", attempt: 2, maxAttempts: 4 });
+		applySessionEvent(state, { type: "length_retry", attempt: 2, maxAttempts: 4, maxTokens: 4096 });
 		const secondRetry = state.statusEntries[0];
 		applySessionEvent(state, { type: "parent_paused_for_background_agents", runningAgentCount: 1 });
 		const paused = state.statusEntries.find((entry) => entry.key === "paused");

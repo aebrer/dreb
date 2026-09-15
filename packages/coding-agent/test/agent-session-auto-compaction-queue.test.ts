@@ -386,7 +386,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		const model = session.model!;
 		const message = createAssistant(
 			"error",
-			"Response truncated at token limit after 3 attempts — output exceeded the model's maximum token budget",
+			"Response truncated at the configured output token limit after 3 attempts",
 		);
 		message.usage.totalTokens = model.contextWindow;
 		seedConversation(message);
@@ -408,6 +408,64 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledWith("overflow", true, false);
 		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
+	});
+
+	it("should recover after exhausted retries when the configured output could not fit", async () => {
+		const model = session.model!;
+		const message = createAssistant(
+			"error",
+			"Response truncated at the configured output token limit after 3 attempts",
+		);
+		message.usage.input = model.contextWindow - model.maxTokens + 1;
+		message.usage.output = 1;
+		message.usage.totalTokens = message.usage.input + message.usage.output;
+		seedConversation(message);
+		const runAutoCompactionSpy = vi
+			.spyOn(
+				session as unknown as {
+					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+				},
+				"_runAutoCompaction",
+			)
+			.mockResolvedValue();
+		const checkCompaction = (
+			session as unknown as {
+				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
+			}
+		)._checkCompaction.bind(session);
+
+		await checkCompaction(message);
+
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("overflow", true, false);
+	});
+
+	it("should not compact genuine output-limit exhaustion that could fit in context", async () => {
+		const model = session.model!;
+		const message = createAssistant(
+			"error",
+			"Response truncated at the configured output token limit after 3 attempts",
+		);
+		message.usage.input = Math.max(1, model.contextWindow - model.maxTokens - 1);
+		message.usage.output = 1;
+		message.usage.totalTokens = message.usage.input + message.usage.output;
+		seedConversation(message);
+		const runAutoCompactionSpy = vi
+			.spyOn(
+				session as unknown as {
+					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+				},
+				"_runAutoCompaction",
+			)
+			.mockResolvedValue();
+		const checkCompaction = (
+			session as unknown as {
+				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
+			}
+		)._checkCompaction.bind(session);
+
+		await checkCompaction(message);
+
+		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
 
 	it("should not compact repeatedly after overflow recovery already attempted", async () => {

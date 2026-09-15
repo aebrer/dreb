@@ -48,7 +48,7 @@ describe("openai-responses github-copilot defaults", () => {
 		});
 	});
 
-	it("streamSimple applies reasoning defaults without synthetic one-token cap", async () => {
+	it("streamSimple uses the model maximum with reasoning defaults", async () => {
 		const model: Model<"openai-responses"> = {
 			id: "gpt-5.5",
 			name: "gpt-5.5",
@@ -86,9 +86,8 @@ describe("openai-responses github-copilot defaults", () => {
 
 		expect(capturedPayload).toMatchObject({
 			reasoning: { effort: "xhigh", summary: "auto" },
-			max_output_tokens: 32000,
+			max_output_tokens: 100000,
 			include: ["reasoning.encrypted_content"],
 		});
-		expect(capturedPayload?.max_output_tokens).not.toBe(1);
 	});
 });

@@ -189,6 +189,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				} else if (item.messageStop) {
 					receivedMessageStop = true;
 					output.stopReason = mapStopReason(item.messageStop.stopReason);
+					if (item.messageStop.stopReason === BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED) {
+						output.errorMessage = "model_context_window_exceeded";
+					}
 				} else if (item.metadata) {
 					handleMetadata(item.metadata, model, output);
 				} else if (item.internalServerException) {

@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.js";
-import { isContextOverflow } from "../src/utils/overflow.js";
+import { isContextOverflow, isOutputLimitExhaustion } from "../src/utils/overflow.js";
 
-const LENGTH_EXHAUSTED_ERROR =
-	"Response truncated at token limit after 3 attempts — output exceeded the model's maximum token budget";
+const LENGTH_EXHAUSTED_ERROR = "Response truncated at the configured output token limit after 3 attempts";
 
 function createErrorMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 	return {
@@ -97,14 +96,48 @@ describe("context-filled length exhaustion detection", () => {
 		expect(isContextOverflow(message, 100)).toBe(true);
 	});
 
+	it("classifies exhaustion when the configured output could not fit beside the recorded input", () => {
+		const message = createErrorMessage({
+			usage: {
+				...createErrorMessage().usage,
+				input: 60,
+				output: 10,
+				totalTokens: 70,
+			},
+		});
+		expect(isContextOverflow(message, 100, { maxOutputTokens: 50 })).toBe(true);
+	});
+
+	it("uses estimated input when the provider omitted input usage", () => {
+		const message = createErrorMessage({
+			usage: {
+				...createErrorMessage().usage,
+				input: 0,
+				output: 10,
+				totalTokens: 10,
+			},
+		});
+		expect(isContextOverflow(message, 100, { maxOutputTokens: 50, estimatedInputTokens: 60 })).toBe(true);
+	});
+
 	it("keeps genuine output-budget exhaustion below the context boundary", () => {
 		const message = createErrorMessage({
 			usage: {
 				...createErrorMessage().usage,
-				totalTokens: 99,
+				input: 20,
+				output: 10,
+				totalTokens: 30,
 			},
 		});
-		expect(isContextOverflow(message, 100)).toBe(false);
+		expect(isContextOverflow(message, 100, { maxOutputTokens: 50 })).toBe(false);
+		expect(isOutputLimitExhaustion(message)).toBe(true);
+	});
+
+	it("recognizes a preserved provider context detail", () => {
+		const message = createErrorMessage({
+			errorMessage: `${LENGTH_EXHAUSTED_ERROR}\nProvider detail: model_context_window_exceeded`,
+		});
+		expect(isContextOverflow(message, 1000, { maxOutputTokens: 50 })).toBe(true);
 	});
 
 	it("requires the configured context window", () => {

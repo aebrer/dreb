@@ -1008,7 +1008,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 });
 
 describe("length stop reason handling", () => {
-	it("retries with a larger maxTokens when a turn ends with stopReason length", async () => {
+	it("retries at the same maxTokens when a turn ends with stopReason length", async () => {
 		const context: AgentContext = {
 			systemPrompt: "",
 			messages: [],
@@ -1016,13 +1016,12 @@ describe("length stop reason handling", () => {
 		};
 		const userPrompt: AgentMessage = createUserMessage("write a long thing");
 
-		// model.maxTokens is 2048, config.maxTokens starts at 500.
+		// An explicit 500-token call-site limit remains fixed across retries.
 		const config: AgentLoopConfig = {
 			model: createModel(),
 			convertToLlm: identityConverter,
 			maxTokens: 500,
 			lengthRetries: 2,
-			lengthRetryBudgetMultiplier: 2,
 		};
 
 		const observedMaxTokens: Array<number | undefined> = [];
@@ -1059,13 +1058,12 @@ describe("length stop reason handling", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 500,
-			nextMaxTokens: 1000,
+			maxTokens: 500,
 		});
 		expect(lengthRetries[0].type === "length_retry" && lengthRetries[0].discardedPartial).toBeDefined();
 
-		// The retry requested a strictly larger budget than the first attempt.
-		expect(observedMaxTokens).toEqual([500, 1000]);
+		// The retry preserves the explicit call-site limit.
+		expect(observedMaxTokens).toEqual([500, 500]);
 
 		// No stream_retry events fired (length is not a stream drop).
 		expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(0);
@@ -1077,17 +1075,14 @@ describe("length stop reason handling", () => {
 		expect(assistant.content).toEqual([{ type: "text", text: "complete!" }]);
 	});
 
-	it("escalates budget up to the model ceiling across multiple retries", async () => {
+	it("uses the model maximum for every retry when no call-site limit is set", async () => {
 		const context: AgentContext = { systemPrompt: "", messages: [], tools: [] };
 		const userPrompt: AgentMessage = createUserMessage("write forever");
 
-		// Start at 1500, multiplier 2 → 3000 clamped to 2048 ceiling.
 		const config: AgentLoopConfig = {
 			model: createModel(),
 			convertToLlm: identityConverter,
-			maxTokens: 1500,
 			lengthRetries: 2,
-			lengthRetryBudgetMultiplier: 2,
 		};
 
 		const observedMaxTokens: Array<number | undefined> = [];
@@ -1107,12 +1102,12 @@ describe("length stop reason handling", () => {
 			events.push(event);
 		}
 
-		// First length retry escalates 1500 → 2048 (clamped). After that the budget
-		// is at the ceiling, so no further retry is attempted.
+		// Both retries use the model's configured 2048-token maximum.
 		const lengthRetries = events.filter((e) => e.type === "length_retry");
-		expect(lengthRetries).toHaveLength(1);
-		expect(lengthRetries[0]).toMatchObject({ previousMaxTokens: 1500, nextMaxTokens: 2048 });
-		expect(observedMaxTokens).toEqual([1500, 2048]);
+		expect(lengthRetries).toHaveLength(2);
+		expect(lengthRetries[0]).toMatchObject({ maxTokens: 2048 });
+		expect(lengthRetries[1]).toMatchObject({ maxTokens: 2048 });
+		expect(observedMaxTokens).toEqual([2048, 2048, 2048]);
 
 		// Then it fails loudly.
 		const messages = await stream.result();
@@ -1131,7 +1126,6 @@ describe("length stop reason handling", () => {
 			convertToLlm: identityConverter,
 			maxTokens: 100,
 			lengthRetries: 2,
-			lengthRetryBudgetMultiplier: 2,
 		};
 
 		let callIndex = 0;
@@ -1139,7 +1133,11 @@ describe("length stop reason handling", () => {
 			callIndex++;
 			const stream = new MockAssistantStream();
 			queueMicrotask(() => {
-				const message = createAssistantMessage([{ type: "text", text: "truncated" }], "length");
+				const message = createAssistantMessage(
+					[{ type: "text", text: "truncated" }],
+					"length",
+					"incomplete: max_output_tokens",
+				);
 				stream.push({ type: "done", reason: "length", message });
 			});
 			return stream;
@@ -1158,7 +1156,8 @@ describe("length stop reason handling", () => {
 		const messages = await stream.result();
 		const assistant = messages.find((m) => m.role === "assistant") as AssistantMessage;
 		expect(assistant.stopReason).toBe("error");
-		expect(assistant.errorMessage).toMatch(/truncated|token limit/);
+		expect(assistant.errorMessage).toContain("configured output token limit");
+		expect(assistant.errorMessage).toContain("Provider detail: incomplete: max_output_tokens");
 
 		// The loop terminated (agent_end fired).
 		expect(events.filter((e) => e.type === "agent_end")).toHaveLength(1);
@@ -1211,7 +1210,6 @@ describe("length stop reason handling", () => {
 			convertToLlm: identityConverter,
 			maxTokens: 500,
 			lengthRetries: 2,
-			lengthRetryBudgetMultiplier: 2,
 		};
 
 		const controller = new AbortController();
@@ -1267,7 +1265,6 @@ describe("length stop reason handling", () => {
 			lengthRetries: 1,
 			streamRetries: 1,
 			streamRetryBaseDelayMs: 1,
-			lengthRetryBudgetMultiplier: 2,
 		};
 
 		let callIndex = 0;

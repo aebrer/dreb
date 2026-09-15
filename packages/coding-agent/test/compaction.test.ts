@@ -199,6 +199,16 @@ describe("shouldCompact", () => {
 		expect(shouldCompact(89000, 100000, settings)).toBe(false);
 	});
 
+	it("does not compact at half-context merely because a model may allow a large response", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 16384,
+			keepRecentTokens: 20000,
+		};
+
+		expect(shouldCompact(64000, 128000, settings)).toBe(false);
+	});
+
 	it("should return false when disabled", () => {
 		const settings: CompactionSettings = {
 			enabled: false,

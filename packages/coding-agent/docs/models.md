@@ -200,11 +200,13 @@ Leave `authHeader` unset or `false` for endpoints that expect `x-api-key`.
 | `reasoning` | No | `false` | Supports extended thinking |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
 | `contextWindow` | No | `128000` | Context window size in tokens |
-| `maxTokens` | No | `16384` | Maximum output tokens |
+| `maxTokens` | No | `16384` | Ordinary request maximum output tokens, including per-model overrides; explicit bounded internal calls may use less |
 | `cost` | No | all zeros | `{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}` (per million tokens) |
 | `compat` | No | provider `compat` | OpenAI compatibility overrides. Merged with provider-level `compat` when both are set. |
 | `systemPrompt` | No | — | Replace dreb's built-in prompt whenever this exact custom model is active. Mutually exclusive with `appendSystemPrompt`. |
 | `appendSystemPrompt` | No | — | Preserve the selected base prompt and append model-specific instructions. Mutually exclusive with `systemPrompt`. |
+
+`maxTokens` is sent as the ordinary request's output maximum; dreb does not reserve or pre-consume that allowance, and providers charge only for tokens actually generated. Purpose-specific internal calls may pass a smaller explicit limit. The ChatGPT-backed `openai-codex` protocol rejects `max_output_tokens`, so its built-in ceiling remains server-controlled and dreb rejects `maxTokens` overrides for that provider rather than silently ignoring them.
 
 Current behavior:
 - `/model` and `--list-models` list entries by model `id`.
@@ -287,7 +289,7 @@ Use `modelOverrides` to customize specific built-in models without replacing the
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `headers`, `compat`, `systemPrompt`, `appendSystemPrompt`.
+`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `headers`, `compat`, `systemPrompt`, `appendSystemPrompt`. The ChatGPT-backed `openai-codex` protocol rejects `max_output_tokens`, so dreb rejects `maxTokens` overrides for that provider rather than silently ignoring them; its built-in model ceiling remains server-controlled.
 
 Prompt fields follow the same rules as custom model entries: choose replacement or append,
 not both; use a non-empty string; and do not also configure prompt behavior for the canonical

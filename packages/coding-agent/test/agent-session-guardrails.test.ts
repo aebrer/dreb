@@ -587,7 +587,7 @@ describe("AgentSession background agent guardrails", () => {
 					exitCode: 0,
 					output: "partial answer that got cut off",
 					stderr: "",
-					errorMessage: "Response truncated at token limit after 3 attempts",
+					errorMessage: "Response truncated at the configured output token limit after 3 attempts",
 				},
 				false,
 			);
@@ -596,7 +596,7 @@ describe("AgentSession background agent guardrails", () => {
 			const promptMsg = promptSpy.mock.calls[0][0] as any;
 			const text = promptMsg.content[0].text as string;
 			// Both the loud error and the preserved partial output must be present.
-			expect(text).toContain("Error: Response truncated at token limit after 3 attempts");
+			expect(text).toContain("Error: Response truncated at the configured output token limit after 3 attempts");
 			expect(text).toContain("partial answer that got cut off");
 
 			promptSpy.mockRestore();

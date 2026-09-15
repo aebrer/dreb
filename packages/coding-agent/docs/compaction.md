@@ -36,7 +36,7 @@ By default, `reserveTokens` is 16384 tokens (configurable in `~/.dreb/agent/sett
 
 The threshold is checked after a run ends, before a new prompt, and inside a running agent loop before each LLM request. Mid-turn checks run only when context is settled on a user or tool-result message, after all tool calls from the preceding assistant message have matching results. If the threshold is crossed, dreb compacts and replaces the running loop's context before that loop makes its next request; it does not start a second agent run.
 
-If response-length retries are exhausted, dreb distinguishes a genuine output-budget failure from a full-context truncation using recorded usage. Usage at or beyond `contextWindow` enters overflow compact-and-retry recovery; usage below it remains a loud output-budget error.
+When a response reaches its configured output limit, length retries discard the partial response and retry at that same configured limit; they never increase `maxTokens`. After those retries are exhausted, dreb distinguishes a genuine output-budget failure from possible context pressure. It enters one reactive compact-and-retry recovery only when the provider reports context exhaustion, recorded usage reaches `contextWindow`, or the measured request input plus configured output maximum could not fit in the window. Otherwise the turn fails loudly without discarding conversation history. This reactive recovery does not change the proactive threshold above: a large theoretical output maximum alone never triggers early compaction.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 

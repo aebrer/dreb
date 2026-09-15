@@ -130,16 +130,10 @@ export interface AgentOptions {
 
 	/**
 	 * Maximum number of times to retry when a turn ends with stopReason "length".
-	 * Each retry escalates the token budget. Separate from streamRetries.
+	 * Each retry uses the same configured output limit. Separate from streamRetries.
 	 * Default: 2
 	 */
 	lengthRetries?: number;
-
-	/**
-	 * Factor by which to multiply maxTokens on each length retry, clamped to the
-	 * model's output ceiling. Default: 2
-	 */
-	lengthRetryBudgetMultiplier?: number;
 
 	/** Called before a tool is executed, after arguments have been validated. */
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
@@ -195,7 +189,6 @@ export class Agent {
 	private _streamRetries?: number;
 	private _streamRetryBaseDelayMs?: number;
 	private _lengthRetries?: number;
-	private _lengthRetryBudgetMultiplier?: number;
 	private _toolExecution: ToolExecutionMode;
 	private _beforeToolCall?: (
 		context: BeforeToolCallContext,
@@ -226,7 +219,6 @@ export class Agent {
 		this._streamRetries = opts.streamRetries;
 		this._streamRetryBaseDelayMs = opts.streamRetryBaseDelayMs;
 		this._lengthRetries = opts.lengthRetries;
-		this._lengthRetryBudgetMultiplier = opts.lengthRetryBudgetMultiplier;
 		this._toolExecution = opts.toolExecution ?? "parallel";
 		this._beforeToolCall = opts.beforeToolCall;
 		this._shouldContinue = opts.shouldContinue;
@@ -637,7 +629,6 @@ export class Agent {
 			streamRetries: this._streamRetries,
 			streamRetryBaseDelayMs: this._streamRetryBaseDelayMs,
 			lengthRetries: this._lengthRetries,
-			lengthRetryBudgetMultiplier: this._lengthRetryBudgetMultiplier,
 			onWarning: this._onWarning,
 			toolExecution: this._toolExecution,
 			beforeToolCall: this._beforeToolCall,

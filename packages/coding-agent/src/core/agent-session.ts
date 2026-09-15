@@ -27,7 +27,14 @@ import type {
 	ThinkingLevel,
 } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
-import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsMax, supportsXhigh } from "@dreb/ai";
+import {
+	isContextOverflow,
+	isOutputLimitExhaustion,
+	modelsAreEqual,
+	resetApiProviders,
+	supportsMax,
+	supportsXhigh,
+} from "@dreb/ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { sleep } from "../utils/sleep.js";
@@ -1370,8 +1377,7 @@ export class AgentSession {
 				type: "length_retry",
 				attempt: event.attempt,
 				maxAttempts: event.maxAttempts,
-				previousMaxTokens: event.previousMaxTokens,
-				nextMaxTokens: event.nextMaxTokens,
+				maxTokens: event.maxTokens,
 				discardedPartial: event.discardedPartial,
 			};
 			await this._extensionRunner.emit(extensionEvent);
@@ -2739,8 +2745,16 @@ export class AgentSession {
 			return;
 		}
 
-		// Case 1: Overflow - LLM returned context overflow error
-		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+		// Case 1: Overflow - LLM returned a context error, or exhausted its
+		// configured output limit when that output could not fit beside the request.
+		const estimatedInputTokens = estimateContextTokens(this.agent.state.messages.slice(0, -1)).tokens;
+		if (
+			sameModel &&
+			isContextOverflow(assistantMessage, contextWindow, {
+				maxOutputTokens: this.model?.maxTokens,
+				estimatedInputTokens,
+			})
+		) {
 			// K3 auto context tier: an overflow in the 256k tier upgrades to the
 			// 1M tier instead of compacting — the Kimi backend grows the prompt
 			// cache seamlessly. This runs even when compaction is disabled since
@@ -2782,6 +2796,10 @@ export class AgentSession {
 			await this._trackAutoCompaction("overflow", true, requestWillFollow);
 			return;
 		}
+
+		// A genuine output-limit exhaustion cannot be fixed by discarding conversation
+		// history. Only the context-constrained case above enters compact-and-retry.
+		if (isOutputLimitExhaustion(assistantMessage)) return;
 
 		// Case 2: Threshold - context is getting large
 		// For error messages (no usage data), estimate from last successful response.

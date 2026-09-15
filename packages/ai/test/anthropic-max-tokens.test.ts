@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findModel } from "../src/models.js";
-import { streamAnthropic } from "../src/providers/anthropic.js";
+import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 
 interface AnthropicParams {
@@ -14,10 +14,10 @@ function makeContext(): Context {
 	};
 }
 
-// streamAnthropic routes straight through buildParams; onPayload exposes the
-// fully-built request params (including max_tokens and thinking.budget_tokens)
-// before the request leaves the process. Pointing baseUrl at a closed port makes
-// the request fail fast after the payload is captured.
+// streamSimple resolves the model's output limit before routing to Anthropic;
+// onPayload exposes the fully-built request params (including max_tokens and
+// thinking.budget_tokens) before the request leaves the process. Pointing baseUrl
+// at a closed port makes the request fail fast after the payload is captured.
 async function captureParams(
 	model: Model<"anthropic-messages">,
 	options: Record<string, unknown>,
@@ -28,7 +28,7 @@ async function captureParams(
 		baseUrl: "http://127.0.0.1:9",
 	};
 
-	const s = streamAnthropic(captureModel, makeContext(), {
+	const s = streamSimple(captureModel, makeContext(), {
 		apiKey: "fake-key",
 		onPayload: (payload: unknown) => {
 			captured = payload as AnthropicParams;
@@ -73,8 +73,8 @@ describe("Anthropic max_tokens default", () => {
 		// Request a huge thinking budget at/above the default full max_tokens to
 		// exercise the headroom guard.
 		const params = await captureParams(model, {
-			thinkingEnabled: true,
-			thinkingBudgetTokens: model.maxTokens,
+			reasoning: "high",
+			thinkingBudgets: { high: model.maxTokens },
 		});
 
 		expect(params.thinking?.type).toBe("enabled");
@@ -93,8 +93,8 @@ describe("Anthropic max_tokens default", () => {
 		const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
 
 		const params = await captureParams(model, {
-			thinkingEnabled: true,
-			thinkingBudgetTokens: 8192,
+			reasoning: "high",
+			thinkingBudgets: { high: 8192 },
 		});
 
 		expect(params.thinking?.budget_tokens).toBe(8192);
@@ -111,8 +111,8 @@ describe("Anthropic max_tokens default", () => {
 
 		const params = await captureParams(model, {
 			maxTokens: 1024,
-			thinkingEnabled: true,
-			thinkingBudgetTokens: 1024,
+			reasoning: "high",
+			thinkingBudgets: { high: 1024 },
 		});
 
 		expect(params.max_tokens).toBe(1024);

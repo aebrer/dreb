@@ -567,6 +567,11 @@ export class ModelRegistry {
 
 			for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides ?? {})) {
 				validateModelPromptSettings(modelOverride, `${providerName}/${modelId}`);
+				if (providerName === "openai-codex" && modelOverride.maxTokens !== undefined) {
+					throw new Error(
+						`Provider ${providerName}, model ${modelId}: maxTokens cannot be overridden because the Codex backend rejects max_output_tokens`,
+					);
+				}
 			}
 
 			for (const modelDef of models) {

@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model, OpenAICompletionsCompat } from "@dreb/ai";
-import { getApiProvider, getModels, getProviders } from "@dreb/ai";
+import { getApiProvider, getModels, getProviders, streamSimple } from "@dreb/ai";
 import { getOAuthProvider } from "@dreb/ai/oauth";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearApiKeyCache, ModelRegistry } from "../src/core/model-registry.js";
 
@@ -25,6 +25,7 @@ describe("ModelRegistry", () => {
 			rmSync(tempDir, { recursive: true });
 		}
 		clearApiKeyCache();
+		vi.restoreAllMocks();
 	});
 
 	/** Create minimal provider config  */
@@ -199,6 +200,20 @@ describe("ModelRegistry", () => {
 			expect(anthropicModels.length).toBeGreaterThan(1);
 			expect(anthropicModels.some((m) => m.id === "claude-custom")).toBe(true);
 			expect(anthropicModels.some((m) => m.id.includes("claude"))).toBe(true);
+		});
+
+		test("custom model without maxTokens retains the documented 16384 default", () => {
+			writeRawModelsJson({
+				custom: {
+					baseUrl: "https://custom.example.com/v1",
+					apiKey: "TEST_API_KEY",
+					api: "openai-completions",
+					models: [{ id: "default-budget-model" }],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.find("custom", "default-budget-model")?.maxTokens).toBe(16384);
 		});
 
 		test("custom model with same id replaces built-in model by id", () => {
@@ -704,6 +719,52 @@ describe("ModelRegistry", () => {
 			expect(other?.name).not.toBe("Custom Name");
 		});
 
+		test("applies maxTokens as the built-in model's resolved request maximum", () => {
+			writeRawModelsJson({
+				[testProvider]: {
+					modelOverrides: {
+						[testModel1.id]: { maxTokens: 128000 },
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.find(testProvider, testModel1.id)?.maxTokens).toBe(128000);
+		});
+
+		test("carries an overridden maxTokens value into the first provider payload", async () => {
+			writeRawModelsJson({
+				"github-copilot": {
+					modelOverrides: {
+						"gpt-6-astra": { maxTokens: 96000 },
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const model = registry.find("github-copilot", "gpt-6-astra")!;
+			let payload: { max_output_tokens?: number } | undefined;
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response("data: [DONE]\n\n", {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				}),
+			);
+
+			await streamSimple(
+				model,
+				{ messages: [{ role: "user", content: "hello", timestamp: Date.now() }] },
+				{
+					apiKey: "test-key",
+					onPayload: (value) => {
+						payload = value as { max_output_tokens?: number };
+					},
+				},
+			).result();
+
+			expect(payload?.max_output_tokens).toBe(96000);
+		});
+
 		test("applies prompt metadata only to the exact overridden built-in model", () => {
 			writeRawModelsJson({
 				[testProvider]: {
@@ -829,6 +890,21 @@ describe("ModelRegistry", () => {
 			const other = models.find((m) => m.id === testModel2.id);
 			expect(other?.baseUrl).toBe("https://my-proxy.example.com/v1");
 			expect(other?.name).not.toBe("Proxied Model");
+		});
+
+		test("rejects maxTokens overrides for the server-controlled Codex backend", () => {
+			writeRawModelsJson({
+				"openai-codex": {
+					modelOverrides: {
+						"gpt-5.6-sol": { maxTokens: 64000 },
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getError()).toContain(
+				"maxTokens cannot be overridden because the Codex backend rejects max_output_tokens",
+			);
 		});
 
 		test("model override for non-existent model ID is ignored", () => {

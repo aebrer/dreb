@@ -141,8 +141,7 @@ describe("length_retry handler", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 4096,
-			nextMaxTokens: 8192,
+			maxTokens: 4096,
 		});
 
 		expect(fakeThis.isAgentWorking).toBe(true);
@@ -155,8 +154,7 @@ describe("length_retry handler", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 4096,
-			nextMaxTokens: 8192,
+			maxTokens: 4096,
 		});
 
 		expect(fakeThis.retryLoader).toBeUndefined();
@@ -169,8 +167,7 @@ describe("length_retry handler", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 4096,
-			nextMaxTokens: 8192,
+			maxTokens: 4096,
 		});
 
 		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
@@ -190,8 +187,7 @@ describe("length_retry handler", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 4096,
-			nextMaxTokens: 8192,
+			maxTokens: 4096,
 		});
 
 		expect((fakeThis.chatContainer as any).removeChild).toHaveBeenCalledWith(mockComponent);
@@ -208,8 +204,7 @@ describe("length_retry handler", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 4096,
-			nextMaxTokens: 8192,
+			maxTokens: 4096,
 		});
 
 		expect((fakeThis.chatContainer as any).removeChild).toHaveBeenCalledWith(mockTool);
@@ -223,8 +218,7 @@ describe("length_retry handler", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 4096,
-			nextMaxTokens: 8192,
+			maxTokens: 4096,
 		});
 
 		expect((fakeThis.chatContainer as any).removeChild).not.toHaveBeenCalled();

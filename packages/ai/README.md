@@ -701,7 +701,7 @@ console.log(`Using ${model.name} via ${model.api} API`);
 
 ### Custom Models
 
-You can create custom models for local inference servers or custom endpoints:
+You can create custom models for local inference servers or custom endpoints. `maxTokens` is the ordinary per-request output maximum used by `streamSimple`; callers may still pass an explicit smaller `maxTokens` for bounded operations. The configured maximum is an allowance, not a reservation—providers charge only for tokens actually generated. The ChatGPT-backed `openai-codex-responses` protocol rejects client-supplied output limits, so that adapter intentionally uses the server-controlled ceiling.
 
 ```typescript
 import { Model, stream } from '@dreb/ai';

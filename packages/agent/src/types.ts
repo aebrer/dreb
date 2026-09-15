@@ -239,22 +239,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 	/**
 	 * Maximum number of times to retry when a turn ends with stopReason "length"
-	 * (the model exhausted its output token budget mid-response). Each retry
-	 * discards the truncated partial and re-issues the request with an escalated
-	 * `maxTokens` budget. This is SEPARATE from `streamRetries`.
+	 * (the model reached its configured output limit mid-response). Each retry
+	 * discards the truncated partial and re-issues the request at the same
+	 * `maxTokens` limit. This is SEPARATE from `streamRetries`.
 	 *
 	 * Default: 2
 	 */
 	lengthRetries?: number;
-
-	/**
-	 * Factor by which to multiply `maxTokens` on each length retry, clamped to the
-	 * model's output ceiling (`model.maxTokens`). Each retry requests a strictly
-	 * larger budget than the previous attempt.
-	 *
-	 * Default: 2
-	 */
-	lengthRetryBudgetMultiplier?: number;
 
 	/**
 	 * Called before a tool is executed, after arguments have been validated.
@@ -395,15 +386,13 @@ export type AgentEvent =
 			/** Partial assistant message discarded before retry, for debugging/instrumentation only. */
 			discardedPartial?: AssistantMessage;
 	  }
-	// Emitted when a turn ends with stopReason "length" and is retried with a larger token budget.
+	// Emitted when a turn ends with stopReason "length" and is retried at the configured output limit.
 	| {
 			type: "length_retry";
 			attempt: number;
 			maxAttempts: number;
-			/** The maxTokens budget used for the truncated attempt. */
-			previousMaxTokens: number;
-			/** The escalated maxTokens budget the retry will request. */
-			nextMaxTokens: number;
+			/** The maxTokens limit used for both the truncated attempt and retry. */
+			maxTokens: number;
 			/** Partial assistant message discarded before retry, for debugging/instrumentation only. */
 			discardedPartial?: AssistantMessage;
 	  };

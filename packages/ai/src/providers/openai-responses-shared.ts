@@ -493,8 +493,12 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 				options.applyServiceTierPricing(output.usage, serviceTier);
 			}
-			// Map status to stop reason
+			// Map status to stop reason and preserve the provider's incomplete detail
+			// so post-retry recovery can distinguish context pressure where possible.
 			output.stopReason = mapStopReason(response?.status);
+			if (output.stopReason === "length" && response?.incomplete_details?.reason) {
+				output.errorMessage = `incomplete: ${response.incomplete_details.reason}`;
+			}
 			if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
 				output.stopReason = "toolUse";
 			}

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamGoogleGeminiCli } from "../src/providers/google-gemini-cli.js";
+import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 
 const originalFetch = global.fetch;
@@ -76,6 +77,40 @@ describe("google-gemini-cli SSE parse error counting", () => {
 
 		expect(text).toBe("Hello");
 		expect(onWarning).toHaveBeenCalledWith("sse_parse_error", expect.stringContaining("2 malformed"));
+	});
+});
+
+describe("google-gemini-cli max output tokens", () => {
+	it("streamSimple serializes the model maximum as generationConfig.maxOutputTokens", async () => {
+		global.fetch = vi.fn(async () => {
+			return new Response("data: [DONE]\n\n", {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		}) as typeof fetch;
+
+		const model: Model<"google-gemini-cli"> = {
+			id: "gemini-2.5-flash",
+			name: "Gemini 2.5 Flash",
+			api: "google-gemini-cli",
+			provider: "google-gemini-cli",
+			baseUrl: "https://cloudcode-pa.googleapis.com",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 100000,
+		};
+
+		await streamSimple(
+			model,
+			{ messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] },
+			{ apiKey: JSON.stringify({ token: "token", projectId: "project" }) },
+		).result();
+
+		const request = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as RequestInit;
+		const body = JSON.parse(request.body as string);
+		expect(body.request.generationConfig.maxOutputTokens).toBe(100000);
 	});
 });
 

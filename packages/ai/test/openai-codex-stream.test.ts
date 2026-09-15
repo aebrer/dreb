@@ -133,6 +133,8 @@ describe("openai-codex streaming", () => {
 			}
 			if (url === "https://chatgpt.com/backend-api/codex/responses") {
 				const headers = init?.headers instanceof Headers ? init.headers : undefined;
+				const requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				expect(requestBody.max_output_tokens).toBeUndefined();
 				expect(headers?.get("Authorization")).toBe(`Bearer ${token}`);
 				expect(headers?.get("chatgpt-account-id")).toBe("acc_test");
 				expect(headers?.get("OpenAI-Beta")).toBe("responses=experimental");
@@ -229,6 +231,7 @@ describe("openai-codex streaming", () => {
 			});
 			expect(litePayload.instructions).toBeUndefined();
 			expect(litePayload.tools).toBeUndefined();
+			expect(litePayload.max_output_tokens).toBeUndefined();
 			expect(litePayload.input).toEqual([
 				{ type: "additional_tools", role: "developer", tools: [] },
 				{
@@ -267,6 +270,7 @@ describe("openai-codex streaming", () => {
 		});
 		expect(requestBody?.tools).toBeUndefined();
 		expect(requestBody?.instructions).toBeUndefined();
+		expect(requestBody?.max_output_tokens).toBeUndefined();
 		expect(requestBody?.input).toEqual([
 			{ type: "additional_tools", role: "developer", tools: [] },
 			{
@@ -537,6 +541,7 @@ describe("openai-codex streaming", () => {
 
 		expect(result.content.find((c) => c.type === "text")?.text).toBe("Hello");
 		expect(result.stopReason).toBe("length");
+		expect(result.errorMessage).toBe("incomplete: max_output_tokens");
 	});
 
 	it("sets session_id header and prompt_cache_key when sessionId is provided", async () => {

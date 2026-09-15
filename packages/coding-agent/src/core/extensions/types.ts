@@ -654,15 +654,13 @@ export interface StreamRetryEvent {
 	discardedPartial?: AgentMessage;
 }
 
-/** Fired when a turn ends with stopReason "length" and is retried with a larger token budget. */
+/** Fired when a turn ends with stopReason "length" and is retried at the configured output limit. */
 export interface LengthRetryEvent {
 	type: "length_retry";
 	attempt: number;
 	maxAttempts: number;
-	/** The maxTokens budget used for the truncated attempt. */
-	previousMaxTokens: number;
-	/** The escalated maxTokens budget the retry will request. */
-	nextMaxTokens: number;
+	/** The maxTokens limit used for both the truncated attempt and retry. */
+	maxTokens: number;
 	/** Partial assistant message discarded before retry, for debugging/instrumentation only. */
 	discardedPartial?: AgentMessage;
 }

@@ -1770,7 +1770,7 @@ Response:
 | `tool_execution_update` | Tool execution progress (streaming output) |
 | `tool_execution_end` | Tool completes |
 | `stream_retry` | Stream dropped mid-turn; retrying (partial output discarded) |
-| `length_retry` | Response hit the token limit; retrying with a larger budget |
+| `length_retry` | Response hit the token limit; retrying at the configured output limit |
 | `auto_compaction_start` | Auto-compaction begins |
 | `auto_compaction_end` | Auto-compaction completes |
 | `context_window_upgrade` | Wire model tier auto-upgraded (e.g. Kimi K3 256k → 1M); includes `provider`, `modelId`, `fromContextWindow`, `toContextWindow` |

@@ -328,8 +328,7 @@ describe("EventHub", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 2,
-			previousMaxTokens: 100,
-			nextMaxTokens: 200,
+			maxTokens: 100,
 			discardedPartial: { huge: "x".repeat(200) },
 		};
 		const childEnd = {

@@ -1,19 +1,10 @@
 import { supportsMax, supportsXhigh } from "../models.js";
 import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, ThinkingLevel } from "../types.js";
 
-/**
- * Default cap on output tokens when no explicit maxTokens is requested. The
- * provider sends `Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS)` rather
- * than the full model ceiling. Consumers (e.g. the agent loop's length-retry
- * guard) must reference this constant to reason correctly about the real
- * budget a default request uses.
- */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 32000;
-
 export function buildBaseOptions(model: Model<Api>, options?: SimpleStreamOptions, apiKey?: string): StreamOptions {
 	return {
 		temperature: options?.temperature,
-		maxTokens: options?.maxTokens || Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS),
+		maxTokens: options?.maxTokens ?? model.maxTokens,
 		signal: options?.signal,
 		apiKey: apiKey || options?.apiKey,
 		cacheRetention: options?.cacheRetention,
@@ -55,7 +46,9 @@ export function adjustMaxTokensForThinking(
 	const minOutputTokens = 1024;
 	const level = clampReasoning(reasoningLevel)!;
 	let thinkingBudget = budgets[level]!;
-	const maxTokens = Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens);
+	// maxTokens is the total configured response limit. Thinking must fit inside
+	// it rather than silently increasing the request beyond the caller's limit.
+	const maxTokens = Math.min(baseMaxTokens, modelMaxTokens);
 
 	if (maxTokens <= thinkingBudget) {
 		thinkingBudget = Math.max(0, maxTokens - minOutputTokens);

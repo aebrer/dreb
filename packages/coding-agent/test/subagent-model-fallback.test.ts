@@ -1973,7 +1973,7 @@ describe("subagent truncation (stopReason length) surfacing", () => {
 			output: "",
 			emitEmptyMessage: true,
 			stopReason: "error",
-			messageErrorMessage: "Response truncated at token limit after 3 attempts",
+			messageErrorMessage: "Response truncated at the configured output token limit after 3 attempts",
 		});
 
 		const result = await executeSingle(
@@ -1991,7 +1991,7 @@ describe("subagent truncation (stopReason length) surfacing", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(result.errorMessage).toContain("Response truncated at token limit after 3 attempts");
+		expect(result.errorMessage).toContain("Response truncated at the configured output token limit after 3 attempts");
 	});
 
 	test("clean exit with stopReason length WITH text keeps output and warns of truncation", async () => {
@@ -2031,7 +2031,7 @@ describe("subagent truncation (stopReason length) surfacing", () => {
 			model: "parent-model",
 			output: "partial answer that got cut off",
 			stopReason: "error",
-			messageErrorMessage: "Response truncated at token limit after 3 attempts",
+			messageErrorMessage: "Response truncated at the configured output token limit after 3 attempts",
 		});
 
 		const result = await executeSingle(
@@ -2051,7 +2051,7 @@ describe("subagent truncation (stopReason length) surfacing", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toContain("partial answer that got cut off");
 		expect(result.errorMessage).not.toBeNull();
-		expect(result.errorMessage).toContain("Response truncated at token limit after 3 attempts");
+		expect(result.errorMessage).toContain("Response truncated at the configured output token limit after 3 attempts");
 	});
 
 	test("regression: clean exit with normal text and stopReason stop leaves errorMessage null", async () => {

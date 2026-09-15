@@ -313,7 +313,7 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
 		...base,
 		thinking: {
 			enabled: true,
-			budgetTokens: getGoogleBudget(googleModel, effort, options.thinkingBudgets),
+			budgetTokens: getGoogleBudget(googleModel, effort, base.maxTokens, options.thinkingBudgets),
 		},
 	} satisfies GoogleOptions);
 };
@@ -452,31 +452,16 @@ function getGemini3ThinkingLevel(
 function getGoogleBudget(
 	model: Model<"google-generative-ai">,
 	effort: ClampedThinkingLevel,
+	maxTokens: number | undefined,
 	customBudgets?: ThinkingBudgets,
 ): number {
-	if (customBudgets?.[effort] !== undefined) {
-		return customBudgets[effort]!;
+	let budget = customBudgets?.[effort];
+	if (budget === undefined && model.id.includes("2.5-pro")) {
+		budget = { minimal: 128, low: 2048, medium: 8192, high: 32768 }[effort];
 	}
-
-	if (model.id.includes("2.5-pro")) {
-		const budgets: Record<ClampedThinkingLevel, number> = {
-			minimal: 128,
-			low: 2048,
-			medium: 8192,
-			high: 32768,
-		};
-		return budgets[effort];
+	if (budget === undefined && model.id.includes("2.5-flash")) {
+		budget = { minimal: 128, low: 2048, medium: 8192, high: 24576 }[effort];
 	}
-
-	if (model.id.includes("2.5-flash")) {
-		const budgets: Record<ClampedThinkingLevel, number> = {
-			minimal: 128,
-			low: 2048,
-			medium: 8192,
-			high: 24576,
-		};
-		return budgets[effort];
-	}
-
-	return -1;
+	if (budget === undefined) return -1;
+	return Math.min(budget, Math.max(0, (maxTokens ?? model.maxTokens) - 1024));
 }

@@ -365,6 +365,10 @@ function buildRequestBody(
 		body.temperature = options.temperature;
 	}
 
+	// ChatGPT's Codex backend rejects max_output_tokens. Its built-in model
+	// metadata mirrors the server-controlled ceiling, so this route intentionally
+	// omits the field rather than sending a synthetic local cap.
+
 	if (context.tools) {
 		body.tools = convertResponsesTools(context.tools, { strict: null });
 	}

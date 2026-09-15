@@ -869,7 +869,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			state.statusEntries.push(
 				createStatusLineEntry({
 					key: "retry",
-					text: `response truncated, retrying with larger budget (${event.attempt}/${event.maxAttempts})`,
+					text: `response truncated, retrying at the configured output limit (${event.attempt}/${event.maxAttempts})`,
 					tone: "warning",
 				}),
 			);

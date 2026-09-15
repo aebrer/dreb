@@ -285,11 +285,9 @@ describe("AgentSession retry", () => {
 	});
 
 	it("forwards length_retry events to extensions with correct field mapping and discarded partial", async () => {
-		// Positive path: the request uses the provider default budget (32000 for
-		// sonnet, below its 64000 ceiling). The first call truncates with
-		// stopReason "length", so a retry fires escalating 32000 → 64000; the
-		// second call succeeds. This drives the _handleEvents length_retry branch
-		// that forwards all 5 fields to the extension runner.
+		// Positive path: the first call truncates at Sonnet's configured 64000-token
+		// limit and the retry uses that same limit. This drives the _handleEvents
+		// length_retry branch and verifies its fixed-budget event shape.
 		let callCount = 0;
 		const model = { ...findModel("anthropic", "sonnet")!, maxTokens: 64000 };
 		// Keep the test fixture stable even if the live registry changes Sonnet's ceiling.
@@ -352,8 +350,7 @@ describe("AgentSession retry", () => {
 			type: "length_retry",
 			attempt: 1,
 			maxAttempts: 1,
-			previousMaxTokens: 32000,
-			nextMaxTokens: 64000,
+			maxTokens: 64000,
 			discardedPartial: { content: [{ type: "text", text: "partial" }] },
 		});
 
@@ -365,13 +362,9 @@ describe("AgentSession retry", () => {
 		expect((messageEnd?.message as AssistantMessage).stopReason).toBe("stop");
 	});
 
-	it("retries on length truncation from the provider default budget, then fails loudly at the model ceiling", async () => {
-		// The Agent API does not expose a maxTokens option, so the loop's
-		// requestMaxTokens is undefined. The provider sends the default budget —
-		// Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS) = 32000 for sonnet —
-		// NOT the model ceiling. So a "length" truncation can still escalate: the
-		// first retry bumps 32000 → 64000 (sonnet's ceiling); a second truncation
-		// at the ceiling then fails loudly.
+	it("retries length truncation at the model maximum, then fails loudly", async () => {
+		// Ordinary Agent calls use the model's configured maximum on every attempt.
+		// Two retries are allowed before the third truncation fails loudly.
 		let callCount = 0;
 		const model = { ...findModel("anthropic", "sonnet")!, maxTokens: 64000 };
 		// Keep the test fixture stable even if the live registry changes Sonnet's ceiling.
@@ -422,16 +415,12 @@ describe("AgentSession retry", () => {
 
 		await session.prompt("Test");
 
-		// One retry: attempt 1 at the 32000 default budget escalates to 64000,
-		// then attempt 2 at the ceiling fails loudly. Exactly one length_retry
-		// event is emitted, escalating 32000 → 64000.
-		expect(callCount).toBe(2);
+		// The initial call and both retries use 64000; the third truncation fails.
+		expect(callCount).toBe(3);
 		const lengthRetries = extensionEvents.filter((event) => event.type === "length_retry");
-		expect(lengthRetries).toHaveLength(1);
-		expect(lengthRetries[0]).toMatchObject({
-			previousMaxTokens: 32000,
-			nextMaxTokens: 64000,
-		});
+		expect(lengthRetries).toHaveLength(2);
+		expect(lengthRetries[0]).toMatchObject({ maxTokens: 64000 });
+		expect(lengthRetries[1]).toMatchObject({ maxTokens: 64000 });
 
 		// The turn fails loudly with a truncation error.
 		const messageEnd = extensionEvents.findLast((event) => event.type === "message_end") as

@@ -25,7 +25,23 @@ import type { AssistantMessage } from "../types.js";
  * - Ollama: Silently truncates input - not detectable via error message
  */
 const LENGTH_RETRY_EXHAUSTED_PATTERN =
-	/^Response truncated at token limit after \d+ attempts? — output exceeded the model's maximum token budget$/i;
+	/^Response truncated at (?:the configured output token limit|token limit) after \d+ attempts?(?: — output exceeded the model's maximum token budget)?(?:\nProvider detail: .+)?$/is;
+
+export interface ContextOverflowOptions {
+	/** Maximum output tokens requested for the exhausted response. */
+	maxOutputTokens?: number;
+	/** Estimated request-input tokens when the provider omitted usage. */
+	estimatedInputTokens?: number;
+}
+
+/** Whether the agent exhausted its bounded retries at the configured output limit. */
+export function isOutputLimitExhaustion(message: AssistantMessage): boolean {
+	return (
+		message.stopReason === "error" &&
+		typeof message.errorMessage === "string" &&
+		LENGTH_RETRY_EXHAUSTED_PATTERN.test(message.errorMessage)
+	);
+}
 
 const OVERFLOW_PATTERNS = [
 	/prompt is too long/i, // Anthropic
@@ -53,8 +69,9 @@ const OVERFLOW_PATTERNS = [
  * This handles three cases:
  * 1. Error-based overflow: Most providers return stopReason "error" with a
  *    specific error message pattern.
- * 2. Context-filled truncation: dreb exhausted its length retries because the
- *    recorded request filled the model's context window, not just its output budget.
+ * 2. Context-constrained truncation: dreb exhausted its length retries and the
+ *    provider signal or input-plus-configured-output budget indicates that the
+ *    response may not have fit in the remaining context window.
  * 3. Silent overflow: Some providers accept requests beyond the configured window
  *    and return successfully (the server's hard limit may be higher). For these,
  *    we compare input + cacheRead + cacheWrite against the configured window;
@@ -95,9 +112,14 @@ const OVERFLOW_PATTERNS = [
  *
  * @param message - The assistant message to check
  * @param contextWindow - Optional configured window for usage-based overflow detection
+ * @param options - Output limit and input estimate used only after bounded length retries are exhausted
  * @returns true if the message indicates a context overflow
  */
-export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
+export function isContextOverflow(
+	message: AssistantMessage,
+	contextWindow?: number,
+	options: ContextOverflowOptions = {},
+): boolean {
 	// Case 1: Check error message patterns
 	if (message.stopReason === "error" && message.errorMessage) {
 		// Check known patterns
@@ -111,15 +133,21 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 			return true;
 		}
 
-		// A provider can report finish_reason "length" when the prompt itself filled
-		// the KV cache. dreb turns an exhausted length-retry sequence into this error.
-		// Only classify that known error as overflow when usage reaches the configured
-		// context ceiling; below it, this is a genuine output-budget exhaustion.
-		if (contextWindow && LENGTH_RETRY_EXHAUSTED_PATTERN.test(message.errorMessage)) {
+		// A provider can report finish_reason "length" when the response ran out of
+		// context rather than output allowance. dreb turns an exhausted retry sequence
+		// into this error. Classify it as overflow only when actual usage reaches the
+		// context ceiling or the configured output could not fit beside the request.
+		if (contextWindow && isOutputLimitExhaustion(message)) {
 			const usageTokens =
 				message.usage.totalTokens ||
 				message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite;
 			if (usageTokens >= contextWindow) {
+				return true;
+			}
+
+			const recordedInput = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
+			const inputTokens = recordedInput || options.estimatedInputTokens || 0;
+			if (options.maxOutputTokens && inputTokens + options.maxOutputTokens > contextWindow) {
 				return true;
 			}
 		}
