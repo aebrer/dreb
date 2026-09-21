@@ -186,22 +186,13 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 			const page: Page = await context.newPage();
 			const startupErrors: string[] = [];
 			page.on("pageerror", (error) => startupErrors.push(error.message));
+			page.on("console", (message) => {
+				if (message.type() === "error") startupErrors.push(`console: ${message.text()}`);
+			});
 			page.on("response", (response) => {
 				if (response.status() >= 400)
 					startupErrors.push(`${response.status()} ${new URL(response.url()).pathname}`);
 			});
-			const cdp = await context.newCDPSession(page);
-			await cdp.send("Network.enable");
-			// CDP's optional packetLoss setting applies to WebRTC, not HTTP/SSE, so
-			// it is intentionally omitted rather than claiming unreliable coverage.
-			await cdp.send("Network.emulateNetworkConditions", {
-				offline: false,
-				latency: 100,
-				downloadThroughput: 1_500_000 / 8,
-				uploadThroughput: 1_500_000 / 8,
-				connectionType: "cellular3g",
-			});
-
 			const requests: RequestObservation[] = [];
 			page.on("request", (request) => {
 				const url = new URL(request.url());
@@ -216,12 +207,35 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 			try {
 				await card.waitFor({ state: "visible", timeout: 60_000 });
 			} catch (cause) {
-				throw new Error(`Fleet card did not load. Browser errors: ${JSON.stringify(startupErrors)}`, { cause });
+				throw new Error(
+					`Fleet card did not load. Browser errors: ${JSON.stringify(startupErrors)}; API requests: ${JSON.stringify(requests)}; HTML: ${(await page.content()).slice(0, 2_000)}`,
+					{ cause },
+				);
 			}
 			expect(await card.textContent()).toContain("mobile acceptance session");
 			await page.locator(".connection-indicator .chip-idle").waitFor({ state: "visible", timeout: 30_000 });
 			expect(requests.filter((request) => request.url === "/api/fleet")).toHaveLength(1);
 			await card.locator(".chip-idle").waitFor({ state: "visible" });
+
+			// Apply request-scoped throttling only after Vite's source module graph has loaded.
+			// Changing network conditions during module loading aborts in-flight requests with
+			// ERR_NETWORK_CHANGED; startup is not the behavior under test. The SSE lifecycle
+			// update and subsequent drill-in remain under the emulated mobile connection.
+			const cdp = await context.newCDPSession(page);
+			await cdp.send("Network.enable");
+			await cdp.send("Network.emulateNetworkConditionsByRule", {
+				matchedNetworkConditions: [
+					{
+						urlPattern: "",
+						offline: false,
+						latency: 100,
+						downloadThroughput: 1_500_000 / 8,
+						uploadThroughput: 1_500_000 / 8,
+					},
+				],
+			});
+			await page.waitForTimeout(500);
+			await page.locator(".connection-indicator .chip-idle").waitFor({ state: "visible", timeout: 30_000 });
 
 			const fleetSnapshotsBeforeLifecycle = fleetSnapshots;
 			const lifecycleStartedAt = Date.now();
