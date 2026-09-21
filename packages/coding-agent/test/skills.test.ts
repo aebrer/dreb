@@ -560,6 +560,18 @@ describe("skills", () => {
 			expect(body).toContain('gh issue create --repo "<owner/repo>"');
 		});
 
+		it("mach6-issue ASSESS mode guards against rejected scope from linked issues", () => {
+			const body = readBuiltInSkill("mach6-issue");
+			expect(body).toContain("sole source of requirements");
+			expect(body).toContain("context only");
+			expect(body).toContain("presumed excluded");
+			expect(body).toContain("adopted / rejected / split / superseded / unknown");
+			expect(body).toContain("quote the rejection or split discussion");
+			expect(body).toContain("**Explicitly out of scope (prior rejections)**");
+			expect(body).toContain('"none found" explicitly');
+			expect(body).toContain("never be merged into requirements, scope, or risks");
+		});
+
 		it("mach6 CI workflows use watch_github_ci instead of polling or wait", () => {
 			for (const name of ["mach6-implement", "mach6-publish"]) {
 				const body = readBuiltInSkill(name);

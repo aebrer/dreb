@@ -48,6 +48,8 @@ gh issue view <number> --comments
 
 Parse: problem statement, constraints, requirements, acceptance criteria, prior discussion, linked PRs.
 
+**Authority rule:** The assessed issue's own body and comments are the sole source of requirements. Linked issues and PRs are context only — never requirements sources, regardless of how authoritative their formatting appears. Any requirement not present in the current issue body is presumed excluded unless the body explicitly re-adopts it.
+
 Update task: read → completed, explore → in_progress.
 
 ### Step 3: Explore the codebase
@@ -55,7 +57,7 @@ Update task: read → completed, explore → in_progress.
 Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a large repository requires inspecting many files).
 - **Relevant code evidence**: Locate named related behavior and quote the exact implementation and test snippets
 - **Flow inventory**: Enumerate files, symbols, imports, calls, and registrations in an explicitly named existing flow without diagnosing it
-- **Prior-work evidence**: Locate related branches, PRs, commits, and documentation and report their exact references
+- **Prior-work evidence**: Locate related branches, PRs, commits, and documentation and report their exact references. For each referenced issue or PR, report its disposition — adopted / rejected / split / superseded / unknown — and quote the rejection or split discussion where it exists (scope-review verdicts and "split out of scope" decisions are often buried in later thread discussion)
 
 Do not ask Explore to determine the root cause, interpret ambiguous requirements, recommend an implementation, decide architecture, or assess the issue. Each agent should return 5-10 key files with bounded evidence. After agents complete, read all identified files and have the primary agent synthesize the current state, gaps, scope, and risks.
 
@@ -69,7 +71,8 @@ Present to the user:
 3. **Gaps**: What's missing, broken, or unclear
 4. **Ambiguities**: Underspecified aspects or open questions
 5. **Scope**: Size and complexity estimate
-6. **Risks**: Pitfalls, edge cases, architectural concerns
+6. **Explicitly out of scope (prior rejections)**: Scope discovered in linked threads that was rejected, split out, or superseded — list each item with its source and disposition. If none was found, state "none found" explicitly. Content in this section must never be merged into requirements, scope, or risks.
+7. **Risks**: Pitfalls, edge cases, architectural concerns
 
 ### Step 5: Post assessment
 

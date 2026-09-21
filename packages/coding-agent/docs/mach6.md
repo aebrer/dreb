@@ -30,7 +30,7 @@ Assess an existing GitHub issue or create a new one.
 /skill:mach6-issue add dark mode   # Create issue from description
 ```
 
-**Assess mode:** Launches parallel Explore agents to retrieve bounded code/documentation evidence, then has the primary agent synthesize and post the assessment (summary, gaps, ambiguities, scope, risks) as an issue comment.
+**Assess mode:** Launches parallel Explore agents to retrieve bounded code/documentation evidence, then has the primary agent synthesize and post the assessment (summary, gaps, ambiguities, scope, explicitly-out-of-scope prior rejections, risks) as an issue comment. The issue body is the sole source of requirements: linked issues and PRs are context only, and scope discovered in linked threads that was rejected, split out, or superseded is recorded as a documented exclusion rather than absorbed into requirements.
 
 **Create mode:** Drafts a structured issue with title, summary, acceptance criteria, and technical notes.
 
