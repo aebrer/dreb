@@ -1108,7 +1108,7 @@ Each session has:
 
 #### list_all_sessions
 
-List sessions across all projects. Returns sessions sorted by most recently modified first. May be slow with many sessions. If the underlying listing fails (an I/O error reading the sessions store), the command responds `success: false` rather than a silently-empty list — so a client can distinguish "no sessions" from "listing failed."
+List the active main-session inventory, sorted by most recently modified first. For a session manager created with an explicit custom `sessionDir`, this reads JSONL files directly from that flat directory. Otherwise it preserves built-in all-project discovery across the nested `<agent-dir>/sessions` tree. The custom root is resolved by CLI precedence before RPC starts; no protocol field is added. If the underlying listing fails, the command responds `success: false` rather than a silently-empty list, so a client can distinguish "no sessions" from "listing failed."
 
 ```json
 {"type": "list_all_sessions"}
@@ -1143,7 +1143,7 @@ Each session has the same fields as `list_sessions`.
 
 #### list_background_agents
 
-List background subagents tracked by this process's registry — running and recently completed (finished entries are pruned after ~5 minutes). `sessionDir` is known from launch; `sessionFile` appears once the child process exits. Live transcripts are delivered via `background_agent_event` events (see Events), not by reading these paths.
+List background subagents tracked by this process's registry — running and recently completed (finished entries are pruned after ~5 minutes). `sessionDir` is the concrete per-launch directory under the global-only configured `subagentSessionDir` (or the legacy default); `sessionFile` appears once the child process exits. On a resumed parent, startup rehydration scans the configured write root first and the legacy `<agent-dir>/subagent-sessions` root second when different, skips absent roots, and deduplicates canonical paths. Files are not migrated. Live transcripts are delivered via `background_agent_event` events (see Events), not by reading these paths.
 
 ```json
 {"type": "list_background_agents"}
@@ -2013,7 +2013,7 @@ On final failure (max retries exceeded):
 
 Lifecycle, pre-spawn routing, and live-observability events for background subagents (the `subagent` tool's background mode).
 
-`background_agent_start` fires at launch. `sessionDir` is the directory the child will write its session JSONL into (per-launch, known before spawn):
+`background_agent_start` fires at launch. `sessionDir` is the actual directory the child will write its session JSONL into (per-launch, known before spawn). Its root is the AgentSession-startup snapshot of global-only `subagentSessionDir`; absolute/tilde/relative resolution is described in [Settings](settings.md#sessions):
 
 ```json
 {

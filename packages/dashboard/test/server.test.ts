@@ -3,6 +3,7 @@ import { type IncomingMessage, request, type Server, ServerResponse } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDashboardSessionLister } from "../src/index.js";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
 import { DashboardImageService } from "../src/server/dashboard-images.js";
 import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
@@ -532,7 +533,12 @@ describe("dashboard server — fleet and runtimes", () => {
 			allMessagesText: "private complete searchable transcript",
 			futureInternalField: "must not cross the wire",
 		};
-		const { base } = await startServer({ listAllSessions: async () => [internalSession] });
+		const sessionInventory = {
+			listAll: vi.fn(async () => []),
+			listAllFromDir: vi.fn(async () => [internalSession]),
+		};
+		const listAllSessions = createDashboardSessionLister("/custom/main-sessions", sessionInventory);
+		const { base } = await startServer({ listAllSessions });
 
 		const fleet = (await fetch(`${base}/api/fleet`).then((response) => response.json())) as {
 			diskSessions: Array<Record<string, unknown>>;
@@ -574,6 +580,9 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("private complete searchable transcript");
 		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("private-parent");
 		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("futureInternalField");
+		expect(sessionInventory.listAllFromDir).toHaveBeenCalledTimes(3);
+		expect(sessionInventory.listAllFromDir).toHaveBeenCalledWith("/custom/main-sessions");
+		expect(sessionInventory.listAll).not.toHaveBeenCalled();
 	});
 
 	it("preserves session previews below and at the character limit", async () => {

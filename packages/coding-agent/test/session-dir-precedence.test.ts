@@ -1,25 +1,31 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ENV_AGENT_DIR } from "../src/config.js";
+import { ENV_AGENT_DIR, getSubagentSessionsDir, resolveConfiguredDirectory } from "../src/config.js";
 
 const mocks = vi.hoisted(() => ({
 	state: {
 		hookSessionDir: undefined as string | undefined,
 		capturedSessionDir: undefined as string | undefined,
+		capturedInventoryRoot: undefined as string | undefined,
 	},
-	createAgentSession: vi.fn(async (options: { sessionManager?: { getSessionDir(): string } }) => {
-		mocks.state.capturedSessionDir = options.sessionManager?.getSessionDir();
-		return {
-			session: {
-				model: { id: "test-model", provider: "test", reasoning: false },
-				thinkingLevel: "off",
-				setThinkingLevel: vi.fn(),
-			},
-			modelFallbackMessage: undefined,
-		};
-	}),
+	createAgentSession: vi.fn(
+		async (options: {
+			sessionManager?: { getSessionDir(): string; getCustomSessionInventoryRoot(): string | undefined };
+		}) => {
+			mocks.state.capturedSessionDir = options.sessionManager?.getSessionDir();
+			mocks.state.capturedInventoryRoot = options.sessionManager?.getCustomSessionInventoryRoot();
+			return {
+				session: {
+					model: { id: "test-model", provider: "test", reasoning: false },
+					thinkingLevel: "off",
+					setThinkingLevel: vi.fn(),
+				},
+				modelFallbackMessage: undefined,
+			};
+		},
+	),
 	runPrintMode: vi.fn(async () => 0),
 	selectSession: vi.fn(),
 }));
@@ -73,11 +79,33 @@ vi.mock("../src/core/resource-loader.js", async (importOriginal) => {
 	};
 });
 
+describe("resolveConfiguredDirectory", () => {
+	it("preserves absolute paths", () => {
+		const absolute = join(tmpdir(), "absolute-sessions");
+		expect(resolveConfiguredDirectory(absolute, "/unused/base")).toBe(absolute);
+	});
+
+	it("expands tilde paths from the home directory", () => {
+		expect(resolveConfiguredDirectory("~/session-logs", "/unused/base")).toBe(join(homedir(), "session-logs"));
+		expect(resolveConfiguredDirectory("~//session-logs", "/unused/base")).toBe(join(homedir(), "session-logs"));
+		expect(resolveConfiguredDirectory("~\\session-logs", "/unused/base")).toBe(join(homedir(), "session-logs"));
+		expect(resolveConfiguredDirectory("~", "/unused/base")).toBe(homedir());
+	});
+
+	it("resolves relative paths against the explicit base and treats whitespace as unset", () => {
+		const base = join(tmpdir(), "runtime-cwd");
+		expect(resolveConfiguredDirectory("./session-logs", base)).toBe(resolve(base, "session-logs"));
+		expect(getSubagentSessionsDir("./child-logs", base)).toBe(resolve(base, "child-logs"));
+		expect(resolveConfiguredDirectory("   ", base)).toBeUndefined();
+	});
+});
+
 describe("sessionDir precedence", () => {
 	let tempDir: string;
 	let agentDir: string;
 	let projectDir: string;
 	let originalCwd: string;
+	let runtimeCwd: string;
 	let originalAgentDir: string | undefined;
 	let originalExitCode: typeof process.exitCode;
 	let originalIsTTY: boolean | undefined;
@@ -86,6 +114,7 @@ describe("sessionDir precedence", () => {
 		vi.resetModules();
 		mocks.state.hookSessionDir = "./hook-sessions";
 		mocks.state.capturedSessionDir = undefined;
+		mocks.state.capturedInventoryRoot = undefined;
 		mocks.createAgentSession.mockClear();
 		mocks.runPrintMode.mockClear();
 		mocks.selectSession.mockReset();
@@ -103,6 +132,7 @@ describe("sessionDir precedence", () => {
 		process.exitCode = undefined;
 		process.env[ENV_AGENT_DIR] = agentDir;
 		process.chdir(projectDir);
+		runtimeCwd = process.cwd();
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 	});
 
@@ -124,7 +154,15 @@ describe("sessionDir precedence", () => {
 		const { main } = await import("../src/main.js");
 		await main(["--print", "test prompt"]);
 
-		expect(mocks.state.capturedSessionDir).toBe("./settings-sessions");
+		expect(mocks.state.capturedSessionDir).toBe(join(runtimeCwd, "settings-sessions"));
+		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
+	}, 15_000);
+
+	it("resolves a relative extension hook directory against the runtime cwd", async () => {
+		const { main } = await import("../src/main.js");
+		await main(["--print", "test prompt"]);
+
+		expect(mocks.state.capturedSessionDir).toBe(join(runtimeCwd, "hook-sessions"));
 		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
 	}, 15_000);
 
@@ -134,7 +172,16 @@ describe("sessionDir precedence", () => {
 		const { main } = await import("../src/main.js");
 		await main(["--print", "--session-dir", "./cli-sessions", "test prompt"]);
 
-		expect(mocks.state.capturedSessionDir).toBe("./cli-sessions");
+		expect(mocks.state.capturedSessionDir).toBe(join(runtimeCwd, "cli-sessions"));
+		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
+	}, 15_000);
+
+	it("retains the configured inventory root when active-session persistence is disabled", async () => {
+		const { main } = await import("../src/main.js");
+		await main(["--print", "--no-session", "--session-dir", "./history", "test prompt"]);
+
+		expect(mocks.state.capturedSessionDir).toBe("");
+		expect(mocks.state.capturedInventoryRoot).toBe(join(runtimeCwd, "history"));
 		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
 	}, 15_000);
 
@@ -151,8 +198,12 @@ describe("sessionDir precedence", () => {
 		const { main } = await import("../src/main.js");
 		await main(["--print", "--resume"]);
 
-		expect(listSpy).toHaveBeenCalledWith(expect.any(String), "./settings-sessions", expect.any(Function));
-		expect(mocks.state.capturedSessionDir).toBe("./settings-sessions");
+		expect(listSpy).toHaveBeenCalledWith(
+			expect.any(String),
+			join(runtimeCwd, "settings-sessions"),
+			expect.any(Function),
+		);
+		expect(mocks.state.capturedSessionDir).toBe(join(runtimeCwd, "settings-sessions"));
 		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
 	}, 15_000);
 });

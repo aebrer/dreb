@@ -1,6 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, type Dirent, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import {
+	closeSync,
+	type Dirent,
+	existsSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { AgentTool, ThinkingLevel } from "@dreb/agent-core";
@@ -682,7 +692,7 @@ interface SessionFileCandidate {
 
 const STEP_SESSION_DIR_RE = /^step-(\d+)$/;
 
-function findNewestJsonlFileInDir(dir: string): SessionFileCandidate | undefined {
+function findNewestJsonlFileInDir(dir: string, throwOnOperationalError = false): SessionFileCandidate | undefined {
 	let best: SessionFileCandidate | undefined;
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		if (!entry.name.endsWith(".jsonl")) continue;
@@ -692,14 +702,17 @@ function findNewestJsonlFileInDir(dir: string): SessionFileCandidate | undefined
 			const mtime = statSync(fullPath).mtime.getTime();
 			if (!best || mtime > best.mtime) best = { path: fullPath, mtime };
 		} catch (err) {
-			if (isExpectedFilesystemError(err)) continue;
+			if (isExpectedFilesystemError(err) && (!throwOnOperationalError || isMissingFilesystemError(err))) continue;
 			throw err;
 		}
 	}
 	return best;
 }
 
-function discoverStepSessionFileCandidates(sessionDir: string): SessionFileCandidate[] {
+function discoverStepSessionFileCandidates(
+	sessionDir: string,
+	throwOnOperationalError = false,
+): SessionFileCandidate[] {
 	const steps: Array<{ name: string; index: number }> = [];
 	for (const entry of readdirSync(sessionDir, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
@@ -712,10 +725,10 @@ function discoverStepSessionFileCandidates(sessionDir: string): SessionFileCandi
 	const files: SessionFileCandidate[] = [];
 	for (const step of steps) {
 		try {
-			const candidate = findNewestJsonlFileInDir(join(sessionDir, step.name));
+			const candidate = findNewestJsonlFileInDir(join(sessionDir, step.name), throwOnOperationalError);
 			if (candidate) files.push(candidate);
 		} catch (err) {
-			if (isExpectedFilesystemError(err)) continue;
+			if (isExpectedFilesystemError(err) && (!throwOnOperationalError || isMissingFilesystemError(err))) continue;
 			throw err;
 		}
 	}
@@ -731,16 +744,21 @@ function discoverStepSessionFileCandidates(sessionDir: string): SessionFileCandi
  * present this recurses one level into step-* directories and returns one file
  * per step in numeric step order.
  */
-export function discoverSessionFiles(sessionDir: string, agentName: string): string[] {
+export function discoverSessionFiles(
+	sessionDir: string,
+	agentName: string,
+	options: { throwOnOperationalError?: boolean } = {},
+): string[] {
+	const throwOnOperationalError = options.throwOnOperationalError ?? false;
 	try {
-		if (!existsSync(sessionDir)) return [];
-		const flatFile = findNewestJsonlFileInDir(sessionDir);
+		if (!throwOnOperationalError && !existsSync(sessionDir)) return [];
+		const flatFile = findNewestJsonlFileInDir(sessionDir, throwOnOperationalError);
 		if (flatFile) {
 			log.debug(`[subagent] session file: ${flatFile.path} (agent=${agentName})`);
 			return [flatFile.path];
 		}
 
-		const stepFiles = discoverStepSessionFileCandidates(sessionDir);
+		const stepFiles = discoverStepSessionFileCandidates(sessionDir, throwOnOperationalError);
 		if (stepFiles.length > 0) {
 			log.debug(
 				`[subagent] chain session files: ${stepFiles.map((file) => file.path).join(", ")} (agent=${agentName})`,
@@ -748,6 +766,10 @@ export function discoverSessionFiles(sessionDir: string, agentName: string): str
 			return stepFiles.map((file) => file.path);
 		}
 	} catch (err) {
+		if (throwOnOperationalError) {
+			if (isMissingFilesystemError(err)) return [];
+			throw err;
+		}
 		if (!isExpectedFilesystemError(err)) throw err;
 		log.warn(
 			`[subagent] failed to discover session file (agent=${agentName}): ${err instanceof Error ? err.message : String(err)}`,
@@ -1665,6 +1687,20 @@ function isExpectedFilesystemError(err: unknown): boolean {
 	return typeof (err as NodeJS.ErrnoException | undefined)?.code === "string";
 }
 
+/** Only absence is optional during primary-root restart recovery. */
+function isMissingFilesystemError(err: unknown): boolean {
+	return (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+function shouldSkipRehydrationFilesystemError(err: unknown, isPrimaryRoot: boolean, context: string): boolean {
+	if (isMissingFilesystemError(err)) return true;
+	if (isPrimaryRoot || !isExpectedFilesystemError(err)) return false;
+	log.warn(
+		`[subagent] skipped compatibility-root recovery (${context}): ${err instanceof Error ? err.message : String(err)}`,
+	);
+	return true;
+}
+
 function parseJsonlLine(line: string): Record<string, unknown> | undefined {
 	try {
 		const parsed = JSON.parse(line);
@@ -1699,7 +1735,7 @@ function readFirstNonEmptyLine(filePath: string): string | undefined {
 
 		return buffered.trim() ? buffered : undefined;
 	} catch (err) {
-		if (isExpectedFilesystemError(err)) return undefined;
+		if (isMissingFilesystemError(err)) return undefined;
 		throw err;
 	} finally {
 		if (fd !== undefined) {
@@ -1720,7 +1756,7 @@ function readFileSlice(filePath: string, start: number, length: number): string 
 		const bytesRead = readSync(fd, buffer, 0, length, start);
 		return buffer.toString("utf8", 0, bytesRead);
 	} catch (err) {
-		if (isExpectedFilesystemError(err)) return undefined;
+		if (isMissingFilesystemError(err)) return undefined;
 		throw err;
 	} finally {
 		if (fd !== undefined) {
@@ -1738,7 +1774,7 @@ function readFileStart(filePath: string, maxBytes: number): string | undefined {
 	try {
 		size = Math.min(statSync(filePath).size, maxBytes);
 	} catch (err) {
-		if (isExpectedFilesystemError(err)) return undefined;
+		if (isMissingFilesystemError(err)) return undefined;
 		throw err;
 	}
 	return readFileSlice(filePath, 0, size);
@@ -1752,7 +1788,7 @@ function readFileTail(filePath: string, maxBytes: number): string | undefined {
 		start = Math.max(0, size - maxBytes);
 		length = size - start;
 	} catch (err) {
-		if (isExpectedFilesystemError(err)) return undefined;
+		if (isMissingFilesystemError(err)) return undefined;
 		throw err;
 	}
 	return readFileSlice(filePath, start, length);
@@ -1767,6 +1803,18 @@ function parseSessionHeader(sessionFile: string): Record<string, unknown> | unde
 function comparablePath(pathValue: string): string {
 	const resolved = resolve(pathValue);
 	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+/** Canonical identity for an existing path, with a lexical fallback for races/missing paths. */
+function canonicalExistingPath(pathValue: string): string {
+	let canonical: string;
+	try {
+		canonical = realpathSync.native(pathValue);
+	} catch (err) {
+		if (!isMissingFilesystemError(err)) throw err;
+		canonical = resolve(pathValue);
+	}
+	return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
 function parentSessionMatches(recordedParentSession: string, parentSessionFile: string): boolean {
@@ -1840,81 +1888,122 @@ function parseStartedAt(header: Record<string, unknown>, sessionFile: string): n
 	try {
 		return statSync(sessionFile).mtime.getTime();
 	} catch (err) {
-		if (isExpectedFilesystemError(err)) return Date.now();
+		if (isMissingFilesystemError(err)) return Date.now();
 		throw err;
 	}
 }
 
 function hasRegisteredSession(sessionDir: string, sessionFile: string): boolean {
-	const comparableSessionDir = comparablePath(sessionDir);
-	const comparableSessionFile = comparablePath(sessionFile);
+	const comparableSessionDir = canonicalExistingPath(sessionDir);
+	const comparableSessionFile = canonicalExistingPath(sessionFile);
 	for (const agent of backgroundAgentRegistry.values()) {
-		if (agent.sessionDir && comparablePath(agent.sessionDir) === comparableSessionDir) return true;
-		if (agent.sessionFile && comparablePath(agent.sessionFile) === comparableSessionFile) return true;
+		if (agent.sessionDir && canonicalExistingPath(agent.sessionDir) === comparableSessionDir) return true;
+		if (agent.sessionFile && canonicalExistingPath(agent.sessionFile) === comparableSessionFile) return true;
 	}
 	return false;
 }
 
 /**
- * Best-effort recovery for completed background subagents after a dashboard/RPC
- * process resumes an existing parent session. Live background-agent state is an
- * in-memory registry, while child sessions are durable JSONL files under the
- * subagent sessions directory.
+ * Recover completed background subagents after a dashboard/RPC process resumes
+ * an existing parent session. Live background-agent state is an in-memory
+ * registry, while child sessions are durable JSONL files under the subagent
+ * sessions directory.
  *
- * Returns the number of newly registered agents. Expected filesystem and JSONL
- * parse failures are skipped; unexpected programming errors are allowed to throw.
+ * The first root is authoritative: absence races and malformed JSON are skipped,
+ * while operational filesystem failures throw. Later roots are compatibility
+ * stores, so their operational filesystem failures are warned and skipped.
+ * Returns the number of newly registered agents.
  */
 export function rehydrateBackgroundAgentsFromDisk(
 	parentSessionFile: string | undefined,
-	subagentSessionsBase = getSubagentSessionsDir(),
+	subagentSessionRoots: string | readonly string[] = getSubagentSessionsDir(),
 ): number {
 	if (!parentSessionFile) return 0;
 
-	let entries: Dirent[];
-	try {
-		entries = readdirSync(subagentSessionsBase, { withFileTypes: true });
-	} catch (err) {
-		if (isExpectedFilesystemError(err)) return 0;
-		throw err;
-	}
-
+	const roots = typeof subagentSessionRoots === "string" ? [subagentSessionRoots] : subagentSessionRoots;
+	const scannedRoots = new Set<string>();
+	const seenSessionDirs = new Set<string>();
+	const seenSessionFiles = new Set<string>();
 	let registered = 0;
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
 
-		const sessionDir = join(subagentSessionsBase, entry.name);
-		const sessionFiles = discoverSessionFiles(sessionDir, entry.name);
-		if (sessionFiles.length === 0) continue;
-
-		let sessionFile: string | undefined;
-		let header: Record<string, unknown> | undefined;
-		for (const candidateFile of sessionFiles) {
-			const candidateHeader = parseSessionHeader(candidateFile);
-			if (candidateHeader?.type !== "session" || typeof candidateHeader.parentSession !== "string") continue;
-			if (!parentSessionMatches(candidateHeader.parentSession, parentSessionFile)) continue;
-			sessionFile = candidateFile;
-			header = candidateHeader;
-			break;
+	for (const [rootIndex, subagentSessionsBase] of roots.entries()) {
+		const isPrimaryRoot = rootIndex === 0;
+		let canonicalRoot: string;
+		try {
+			canonicalRoot = canonicalExistingPath(subagentSessionsBase);
+		} catch (err) {
+			if (shouldSkipRehydrationFilesystemError(err, isPrimaryRoot, `root ${subagentSessionsBase}`)) continue;
+			throw err;
 		}
-		if (!sessionFile || !header) continue;
+		if (scannedRoots.has(canonicalRoot)) continue;
+		scannedRoots.add(canonicalRoot);
 
-		const agentId = `${REHYDRATED_AGENT_ID_PREFIX}${entry.name}`;
-		if (backgroundAgentRegistry.has(agentId) || hasRegisteredSession(sessionDir, sessionFile)) continue;
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(subagentSessionsBase, { withFileTypes: true });
+		} catch (err) {
+			if (shouldSkipRehydrationFilesystemError(err, isPrimaryRoot, `root ${subagentSessionsBase}`)) continue;
+			throw err;
+		}
 
-		const statusFile = sessionFiles[sessionFiles.length - 1] ?? sessionFile;
-		const agentType = typeof header.agentType === "string" && header.agentType.trim() ? header.agentType : "agent";
-		const taskSummary = findFirstUserMessageSummary(sessionFile) ?? `${agentType} (${entry.name})`;
-		backgroundAgentRegistry.set(agentId, {
-			agentId,
-			agentType,
-			taskSummary,
-			startedAt: parseStartedAt(header, sessionFile),
-			status: inferCompletedSessionStatus(statusFile),
-			sessionDir,
-			sessionFile,
-			cwd: typeof header.cwd === "string" ? header.cwd : undefined,
-		});
-		registered++;
+		for (const entry of entries) {
+			const sessionDir = join(subagentSessionsBase, entry.name);
+			try {
+				let isDirectory = entry.isDirectory();
+				if (!isDirectory && entry.isSymbolicLink()) {
+					isDirectory = statSync(sessionDir).isDirectory();
+				}
+				if (!isDirectory) continue;
+
+				const canonicalSessionDir = canonicalExistingPath(sessionDir);
+				if (seenSessionDirs.has(canonicalSessionDir)) continue;
+				seenSessionDirs.add(canonicalSessionDir);
+
+				const sessionFiles = discoverSessionFiles(sessionDir, entry.name, { throwOnOperationalError: true });
+				if (sessionFiles.length === 0) continue;
+
+				let sessionFile: string | undefined;
+				let header: Record<string, unknown> | undefined;
+				for (const candidateFile of sessionFiles) {
+					const candidateHeader = parseSessionHeader(candidateFile);
+					if (candidateHeader?.type !== "session" || typeof candidateHeader.parentSession !== "string") continue;
+					if (!parentSessionMatches(candidateHeader.parentSession, parentSessionFile)) continue;
+					const canonicalSessionFile = canonicalExistingPath(candidateFile);
+					if (seenSessionFiles.has(canonicalSessionFile)) break;
+					seenSessionFiles.add(canonicalSessionFile);
+					sessionFile = candidateFile;
+					header = candidateHeader;
+					break;
+				}
+				if (!sessionFile || !header || hasRegisteredSession(sessionDir, sessionFile)) continue;
+
+				const baseAgentId = `${REHYDRATED_AGENT_ID_PREFIX}${entry.name}`;
+				let agentId = baseAgentId;
+				let suffix = 2;
+				while (backgroundAgentRegistry.has(agentId)) {
+					agentId = `${baseAgentId}-${suffix++}`;
+				}
+
+				const statusFile = sessionFiles[sessionFiles.length - 1] ?? sessionFile;
+				const agentType =
+					typeof header.agentType === "string" && header.agentType.trim() ? header.agentType : "agent";
+				const taskSummary = findFirstUserMessageSummary(sessionFile) ?? `${agentType} (${entry.name})`;
+				backgroundAgentRegistry.set(agentId, {
+					agentId,
+					agentType,
+					taskSummary,
+					startedAt: parseStartedAt(header, sessionFile),
+					status: inferCompletedSessionStatus(statusFile),
+					sessionDir,
+					sessionFile,
+					cwd: typeof header.cwd === "string" ? header.cwd : undefined,
+				});
+				registered++;
+			} catch (err) {
+				if (shouldSkipRehydrationFilesystemError(err, isPrimaryRoot, `entry ${sessionDir}`)) continue;
+				throw err;
+			}
+		}
 	}
 
 	return registered;
@@ -1986,6 +2075,8 @@ export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
 }
 
 export interface SubagentToolOptions {
+	/** Resolved root for new subagent child-session directories. Defaults to the legacy agent root. */
+	subagentSessionsDir?: string;
 	/** Called when a background subagent starts. Used by TUI to show status indicators. */
 	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string, sessionDir?: string) => void;
 	/** Called when a background subagent completes with its result. `cancelled` is true if the user aborted it. */
@@ -2236,6 +2327,7 @@ export function createSubagentToolDefinition(
 	cwd: string,
 	options?: SubagentToolOptions,
 ): ToolDefinition<typeof subagentSchema, SubagentToolDetails | undefined> {
+	const subagentSessionsBase = options?.subagentSessionsDir ?? getSubagentSessionsDir();
 	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
 	const onBackgroundEvent = options?.onBackgroundEvent;
@@ -2475,7 +2567,6 @@ export function createSubagentToolDefinition(
 				};
 
 				// Helper to launch a single background task
-				const subagentSessionsBase = getSubagentSessionsDir();
 				const launchBackgroundTask = (
 					agentName: string,
 					task: string,

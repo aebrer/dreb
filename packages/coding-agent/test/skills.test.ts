@@ -479,9 +479,12 @@ describe("skills", () => {
 			expect(body).toContain("no special runtime support is required");
 			expect(body).toContain("stop with an actionable error before researching or writing a guide");
 			expect(body).toContain("unbounded all-model research");
-			expect(body).toContain("directory does not exist or contains no session JSONL files");
+			expect(body).toContain("all discovery roots are absent or contain no session JSONL files");
+			expect(body).toContain("Read `subagentSessionDir` only from the global");
+			expect(body).toContain("Use that configured write root first and the legacy root second");
+			expect(body).toContain("Do not move, copy, delete, or rewrite session files");
 			expect(body).toContain("cold-start mode");
-			expect(body).toContain("every snapshotted file is required evidence");
+			expect(body).toContain("every deduplicated snapshotted file is required evidence");
 			expect(body).toContain("every non-empty JSONL line parses");
 			expect(body).toContain("stop loudly and identify the affected file");
 			expect(body).toContain("do not silently skip it and do not call the run cold-start");

@@ -339,9 +339,10 @@ export async function deleteSessionForRpc(
 	return { ok: true, method: result.method };
 }
 
-/** Handle the `list_all_sessions` RPC command: list every project's sessions as RPC DTOs. */
-export async function listAllSessionsForRpc(): Promise<RpcSessionInfo[]> {
-	const sessions = await SessionManager.listAll();
+/** Handle `list_all_sessions` using a custom flat store when one is active. */
+export async function listAllSessionsForRpc(customDir?: string): Promise<RpcSessionInfo[]> {
+	const sessions =
+		customDir !== undefined ? await SessionManager.listAllFromDir(customDir) : await SessionManager.listAll();
 	return sessions.map(toRpcSessionInfo);
 }
 
@@ -1793,7 +1794,10 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	};
 
 	if (session.sessionFile && session.messages.length > 0) {
-		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(session.sessionFile);
+		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(
+			session.sessionFile,
+			session.subagentSessionDiscoveryRoots,
+		);
 		if (rehydratedCount > 0) {
 			console.error(
 				`[rpc] Rehydrated ${rehydratedCount} background subagent${rehydratedCount === 1 ? "" : "s"} from disk`,
@@ -2307,7 +2311,9 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "list_all_sessions": {
-				return success(id, "list_all_sessions", { sessions: await listAllSessionsForRpc() });
+				return success(id, "list_all_sessions", {
+					sessions: await listAllSessionsForRpc(session.sessionManager.getCustomSessionInventoryRoot()),
+				});
 			}
 
 			// =================================================================

@@ -245,4 +245,24 @@ describe("listAllSessionsForRpc (server-side handler wiring)", () => {
 		expect(dtos).toEqual([toRpcSessionInfo(info)]);
 		expect(typeof dtos[0]?.created).toBe("string");
 	});
+
+	it("uses the flat custom-directory listing API when a custom inventory root is active", async () => {
+		const customDir = "/srv/dreb/main-sessions";
+		const info: SessionInfo = {
+			path: `${customDir}/session.jsonl`,
+			id: "custom-123",
+			cwd: "/home/user/project",
+			created: new Date("2026-09-18T10:00:00.000Z"),
+			modified: new Date("2026-09-18T11:00:00.000Z"),
+			messageCount: 1,
+			firstMessage: "custom",
+			allMessagesText: "custom",
+		};
+		const listAllSpy = vi.spyOn(SessionManager, "listAll").mockResolvedValue([]);
+		const listCustomSpy = vi.spyOn(SessionManager, "listAllFromDir").mockResolvedValue([info]);
+
+		await expect(listAllSessionsForRpc(customDir)).resolves.toEqual([toRpcSessionInfo(info)]);
+		expect(listCustomSpy).toHaveBeenCalledWith(customDir);
+		expect(listAllSpy).not.toHaveBeenCalled();
+	});
 });

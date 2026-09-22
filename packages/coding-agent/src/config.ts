@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { dirname, join, resolve } from "path";
+import { dirname, isAbsolute, join, resolve } from "path";
 import { fileURLToPath } from "url";
 
 // =============================================================================
@@ -231,9 +231,30 @@ export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");
 }
 
-/** Get path to subagent sessions directory */
-export function getSubagentSessionsDir(): string {
-	return join(getAgentDir(), "subagent-sessions");
+/**
+ * Resolve a configured directory using an explicit runtime base directory.
+ * Absolute paths are preserved, `~` expands to the user's home directory, and
+ * relative paths are resolved against `baseCwd`. Empty values are treated as unset.
+ */
+export function resolveConfiguredDirectory(configuredDir: string | undefined, baseCwd: string): string | undefined {
+	const value = configuredDir?.trim();
+	if (!value) return undefined;
+	if (isAbsolute(value)) return value;
+	if (value === "~") return homedir();
+	if (/^~[\\/]/.test(value)) {
+		const homeRelativePath = value.slice(1).replace(/^[\\/]+/, "");
+		return homeRelativePath ? join(homedir(), homeRelativePath) : homedir();
+	}
+	return resolve(baseCwd, value);
+}
+
+/**
+ * Get the subagent sessions directory. With no arguments this preserves the
+ * legacy `<agent-dir>/subagent-sessions` location. A configured value may be
+ * supplied with the runtime cwd used to resolve relative paths.
+ */
+export function getSubagentSessionsDir(configuredDir?: string, cwd: string = process.cwd()): string {
+	return resolveConfiguredDirectory(configuredDir, cwd) ?? join(getAgentDir(), "subagent-sessions");
 }
 
 /** Get path to debug log file */

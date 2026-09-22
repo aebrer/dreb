@@ -156,7 +156,9 @@ export interface Settings {
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
-	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
+	sessionDir?: string; // Custom main-session storage directory (same format as --session-dir CLI flag)
+	/** Global-only custom root for subagent child-session logs. Project settings are ignored. */
+	subagentSessionDir?: string;
 	forbiddenCommands?: string[]; // Regex patterns for commands blocked by the forbidden-commands guard
 	sensitiveFilePaths?: string[]; // Additional glob patterns for sensitive file paths blocked by the read/bash guard
 	secretOutputPatterns?: { name: string; pattern: string }[]; // Additional regex patterns for secret scrubbing in tool output
@@ -696,6 +698,11 @@ export class SettingsManager {
 
 	getSessionDir(): string | undefined {
 		return this.settings.sessionDir;
+	}
+
+	/** Read the global-only subagent transcript root; project settings cannot redirect it. */
+	getGlobalSubagentSessionDir(): string | undefined {
+		return this.globalSettings.subagentSessionDir;
 	}
 
 	getDefaultProvider(): string | undefined {

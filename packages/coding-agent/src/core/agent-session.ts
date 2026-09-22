@@ -35,7 +35,7 @@ import {
 	supportsMax,
 	supportsXhigh,
 } from "@dreb/ai";
-import { getDocsPath } from "../config.js";
+import { getDocsPath, getSubagentSessionsDir } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { sleep } from "../utils/sleep.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
@@ -328,6 +328,10 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
+	/** Root used for all new subagent child-session writes in this session. */
+	readonly subagentSessionsDir: string;
+	/** Ordered restart-discovery roots: configured write root first, then legacy when different. */
+	readonly subagentSessionDiscoveryRoots: readonly string[];
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -460,6 +464,16 @@ export class AgentSession {
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
+		const legacySubagentSessionsDir = getSubagentSessionsDir();
+		this.subagentSessionsDir = getSubagentSessionsDir(this.settingsManager.getGlobalSubagentSessionDir(), this._cwd);
+		const comparableSubagentRoot = (path: string) => {
+			const resolved = resolve(path);
+			return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+		};
+		this.subagentSessionDiscoveryRoots =
+			comparableSubagentRoot(this.subagentSessionsDir) === comparableSubagentRoot(legacySubagentSessionsDir)
+				? [this.subagentSessionsDir]
+				: [this.subagentSessionsDir, legacySubagentSessionsDir];
 		this._modelRegistry = config.modelRegistry;
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
@@ -3471,6 +3485,7 @@ export class AgentSession {
 						},
 					},
 					subagent: {
+						subagentSessionsDir: this.subagentSessionsDir,
 						parentProvider: () => this.model?.provider,
 						parentModel: () => this.model?.id,
 						parentSessionFile: () => this.sessionFile,

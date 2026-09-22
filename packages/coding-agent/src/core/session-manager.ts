@@ -187,6 +187,7 @@ export type ReadonlySessionManager = Pick<
 	SessionManager,
 	| "getCwd"
 	| "getSessionDir"
+	| "getCustomSessionInventoryRoot"
 	| "getSessionId"
 	| "getSessionFile"
 	| "getLeafId"
@@ -568,7 +569,7 @@ function resolveForDeletion(filePath: string): string {
 	return resolve(filePath);
 }
 
-async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
+async function buildSessionInfo(filePath: string, throwOnFilesystemError = false): Promise<SessionInfo | null> {
 	try {
 		const content = await readFile(filePath, "utf8");
 		const entries: FileEntry[] = [];
@@ -634,7 +635,10 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.join(" "),
 		};
-	} catch {
+	} catch (error) {
+		if (throwOnFilesystemError && typeof (error as NodeJS.ErrnoException | undefined)?.code === "string") {
+			throw error;
+		}
 		/* Corrupt session file — exclude from listing */
 		return null;
 	}
@@ -647,33 +651,40 @@ async function listSessionsFromDir(
 	onProgress?: SessionListProgress,
 	progressOffset = 0,
 	progressTotal?: number,
+	throwOnFilesystemError = false,
 ): Promise<SessionInfo[]> {
 	const sessions: SessionInfo[] = [];
-	if (!existsSync(dir)) {
+	if (!throwOnFilesystemError && !existsSync(dir)) {
 		return sessions;
 	}
 
+	let dirEntries: string[];
 	try {
-		const dirEntries = await readdir(dir);
-		const files = dirEntries.filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f));
-		const total = progressTotal ?? files.length;
+		dirEntries = await readdir(dir);
+	} catch (error) {
+		if (throwOnFilesystemError && (error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") throw error;
+		return sessions;
+	}
 
+	const files = dirEntries.filter((file) => file.endsWith(".jsonl")).map((file) => join(dir, file));
+	const total = progressTotal ?? files.length;
+
+	try {
 		let loaded = 0;
 		const results = await Promise.all(
 			files.map(async (file) => {
-				const info = await buildSessionInfo(file);
+				const info = await buildSessionInfo(file, throwOnFilesystemError);
 				loaded++;
 				onProgress?.(progressOffset + loaded, total);
 				return info;
 			}),
 		);
 		for (const info of results) {
-			if (info) {
-				sessions.push(info);
-			}
+			if (info) sessions.push(info);
 		}
-	} catch {
-		/* Session directory read failed — return partial results */
+	} catch (error) {
+		if (throwOnFilesystemError) throw error;
+		/* Session file read failed — return partial results */
 	}
 
 	return sessions;
@@ -694,6 +705,7 @@ export class SessionManager {
 	private sessionId: string = "";
 	private sessionFile: string | undefined;
 	private sessionDir: string;
+	private customSessionInventoryRoot: string | undefined;
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
@@ -702,9 +714,16 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
 
-	private constructor(cwd: string, sessionDir: string, sessionFile: string | undefined, persist: boolean) {
+	private constructor(
+		cwd: string,
+		sessionDir: string,
+		sessionFile: string | undefined,
+		persist: boolean,
+		customSessionInventoryRoot?: string,
+	) {
 		this.cwd = cwd;
 		this.sessionDir = sessionDir;
+		this.customSessionInventoryRoot = customSessionInventoryRoot;
 		this.persist = persist;
 		if (persist && sessionDir && !existsSync(sessionDir)) {
 			mkdirSync(sessionDir, { recursive: true });
@@ -840,6 +859,14 @@ export class SessionManager {
 
 	getSessionDir(): string {
 		return this.sessionDir;
+	}
+
+	/**
+	 * Flat inventory root selected explicitly for this manager, if any.
+	 * Built-in per-project managers and in-memory managers return undefined.
+	 */
+	getCustomSessionInventoryRoot(): string | undefined {
+		return this.customSessionInventoryRoot;
 	}
 
 	getSessionId(): string {
@@ -1357,9 +1384,11 @@ export class SessionManager {
 	 * @param cwd Working directory (stored in session header)
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.dreb/agent/sessions/<encoded-cwd>/).
 	 */
-	static create(cwd: string, sessionDir?: string): SessionManager {
+	static create(cwd: string, sessionDir?: string, options: { customSessionInventory?: boolean } = {}): SessionManager {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
-		return new SessionManager(cwd, dir, undefined, true);
+		const customInventoryRoot =
+			sessionDir !== undefined && options.customSessionInventory !== false ? sessionDir : undefined;
+		return new SessionManager(cwd, dir, undefined, true, customInventoryRoot);
 	}
 
 	/**
@@ -1374,7 +1403,7 @@ export class SessionManager {
 		const cwd = header?.cwd ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ?? resolve(path, "..");
-		return new SessionManager(cwd, dir, path, true);
+		return new SessionManager(cwd, dir, path, true, sessionDir);
 	}
 
 	/**
@@ -1386,14 +1415,14 @@ export class SessionManager {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
 		const mostRecent = findMostRecentSession(dir);
 		if (mostRecent) {
-			return new SessionManager(cwd, dir, mostRecent, true);
+			return new SessionManager(cwd, dir, mostRecent, true, sessionDir);
 		}
-		return new SessionManager(cwd, dir, undefined, true);
+		return new SessionManager(cwd, dir, undefined, true, sessionDir);
 	}
 
-	/** Create an in-memory session (no file persistence) */
-	static inMemory(cwd: string = process.cwd()): SessionManager {
-		return new SessionManager(cwd, "", undefined, false);
+	/** Create an in-memory session (no active-file persistence), optionally retaining a flat inventory root. */
+	static inMemory(cwd: string = process.cwd(), customSessionInventoryRoot?: string): SessionManager {
+		return new SessionManager(cwd, "", undefined, false, customSessionInventoryRoot);
 	}
 
 	/**
@@ -1443,7 +1472,7 @@ export class SessionManager {
 			}
 		}
 
-		return new SessionManager(targetCwd, dir, newSessionFile, true);
+		return new SessionManager(targetCwd, dir, newSessionFile, true, sessionDir);
 	}
 
 	/**
@@ -1525,6 +1554,17 @@ export class SessionManager {
 	static async list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
 		const sessions = await listSessionsFromDir(dir, onProgress);
+		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		return sessions;
+	}
+
+	/**
+	 * List every session stored directly in one explicit flat directory.
+	 * This is intentionally separate from listAll(), whose default contract scans
+	 * the built-in nested all-project tree.
+	 */
+	static async listAllFromDir(dir: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
+		const sessions = await listSessionsFromDir(dir, onProgress, 0, undefined, true);
 		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 		return sessions;
 	}

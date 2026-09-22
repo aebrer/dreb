@@ -2,17 +2,23 @@
 
 Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with a `type` field. Session entries form a tree structure via `id`/`parentId` fields, enabling in-place branching without creating new files.
 
-## File Location
+## File Locations
+
+The default main-session layout is a nested all-project tree:
 
 ```
 ~/.dreb/agent/sessions/--<path>--/<timestamp>_<uuid>.jsonl
 ```
 
-Where `<path>` is the working directory with `/` replaced by `-`.
+Here `<path>` is the working directory with path separators replaced by `-`. A configured main `sessionDir` instead uses a flat layout, with each `<timestamp>_<uuid>.jsonl` written directly under that directory. CLI selection order is `--session-dir`, merged global/project settings, extension hook, then the default. Dashboard's host-wide inventory uses only the global `sessionDir`, snapshots it at startup, and otherwise scans the default nested tree.
+
+Subagent transcripts are separate from main sessions. New child processes write under the global-only `subagentSessionDir`, or `<agent-dir>/subagent-sessions` when unset. Single and parallel calls use a per-agent child directory; chains keep `chain-*` and `step-N` directories. Restart-time RPC recovery scans the configured root first and the legacy root second when they differ, without migrating files.
+
+Configured roots share path semantics: absolute paths stay absolute, `~` expands from the home directory, and relative paths use the main CLI cwd, Dashboard startup cwd, or AgentSession runtime cwd as applicable. Changing a transcript root does not move existing files or affect credentials/general configuration. See [Settings](settings.md#sessions).
 
 ## Deleting Sessions
 
-Sessions can be removed by deleting their `.jsonl` files under `~/.dreb/agent/sessions/`.
+Sessions can be removed by deleting their `.jsonl` files from the active main-session store.
 
 dreb also supports deleting sessions interactively from `/resume` (select a session and press `Ctrl+D`, then confirm). When available, dreb uses the `trash` CLI to avoid permanent deletion.
 
@@ -375,15 +381,18 @@ for (const line of lines) {
 Key methods for working with sessions programmatically.
 
 ### Static Creation Methods
-- `SessionManager.create(cwd, sessionDir?)` - New session
+- `SessionManager.create(cwd, sessionDir?, options?)` - New session; `options.customSessionInventory: false` keeps an explicitly supplied built-in directory from being treated as a flat custom inventory root
 - `SessionManager.open(path, sessionDir?)` - Open existing session file
 - `SessionManager.continueRecent(cwd, sessionDir?)` - Continue most recent or create new
-- `SessionManager.inMemory(cwd?)` - No file persistence
+- `SessionManager.inMemory(cwd?, customSessionInventoryRoot?)` - No active-session file persistence; the optional flat root remains available to inventory commands
 - `SessionManager.forkFrom(sourcePath, targetCwd, sessionDir?)` - Fork session from another project
 
 ### Static Listing Methods
-- `SessionManager.list(cwd, sessionDir?, onProgress?)` - List sessions for a directory
-- `SessionManager.listAll(onProgress?)` - List all sessions across all projects
+- `SessionManager.list(cwd, sessionDir?, onProgress?)` - List sessions for a project/effective directory
+- `SessionManager.listAllFromDir(dir, onProgress?)` - List a flat custom main-session directory
+- `SessionManager.listAll(onProgress?)` - List the built-in nested store across all projects
+
+`getCustomSessionInventoryRoot()` returns the explicit flat root carried by a custom manager, including an in-memory manager created with `customSessionInventoryRoot`. It returns `undefined` for built-in/default managers and in-memory managers without that argument. RPC uses this distinction so `list_all_sessions` does not accidentally narrow default inventory to one project's directory.
 
 ### Instance Methods - Session Management
 - `newSession(options?)` - Start a new session (options: `{ parentSession?: string, cwd?: string }`)

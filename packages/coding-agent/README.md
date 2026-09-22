@@ -227,7 +227,9 @@ Sessions are stored as JSONL files with a tree structure. Each entry has an `id`
 
 ### Management
 
-Sessions auto-save to `~/.dreb/agent/sessions/` organized by working directory.
+By default, main sessions auto-save under `~/.dreb/agent/sessions/`, organized by working directory. A custom `sessionDir` is a flat main-session store. The CLI resolves `--session-dir`, merged global/project `sessionDir`, then an extension `session_directory` hook; Dashboard intentionally uses only the global `sessionDir` for host-wide inventory and snapshots it at Dashboard startup.
+
+Subagent child transcripts remain separate. The global-only `subagentSessionDir` controls new single, parallel, and chain writes; when configured, restart-time RPC recovery scans that root first and the legacy `~/.dreb/agent/subagent-sessions/` root second. Existing files are not migrated. For both settings, absolute paths remain absolute, `~` expands from the home directory, and relative paths resolve from the relevant CLI, Dashboard-startup, or AgentSession runtime cwd. These settings do not move credentials or other configuration. See [Session settings](docs/settings.md#sessions).
 
 ```bash
 dreb -c                  # Continue most recent session

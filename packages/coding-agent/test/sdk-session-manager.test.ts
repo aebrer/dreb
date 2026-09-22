@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findModel, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getSubagentSessionsDir } from "../src/config.js";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
@@ -56,8 +57,23 @@ describe("createAgentSession session manager defaults", () => {
 
 		expect(sessionDir).toBe(expectedSessionDir);
 		expect(sessionFile?.startsWith(`${expectedSessionDir}/`)).toBe(true);
+		expect(session.sessionManager.getCustomSessionInventoryRoot()).toBeUndefined();
 
 		session.dispose();
+	});
+
+	it("resolves the global subagent root once from the AgentSession runtime cwd", async () => {
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ subagentSessionDir: "./child-logs" }));
+		const model = findModel("anthropic", "sonnet");
+		expect(model).toBeTruthy();
+
+		const { session } = await createAgentSession({ cwd, agentDir, model: model! });
+		try {
+			expect(session.subagentSessionsDir).toBe(join(cwd, "child-logs"));
+			expect(session.subagentSessionDiscoveryRoots).toEqual([join(cwd, "child-logs"), getSubagentSessionsDir()]);
+		} finally {
+			session.dispose();
+		}
 	});
 
 	it("keeps an explicit sessionManager override", async () => {
