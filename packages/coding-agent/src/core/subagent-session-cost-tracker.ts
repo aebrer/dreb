@@ -1,5 +1,5 @@
 import { sumCostFromFile } from "./daily-cost-tracker.js";
-import { type BackgroundAgentInfo, getBackgroundAgents } from "./tools/subagent.js";
+import { discoverSessionFiles, getBackgroundAgents } from "./tools/subagent.js";
 
 /**
  * Tracks the summed cost of all sub-agents spawned from the current parent session.
@@ -66,18 +66,30 @@ export class SubagentSessionCostTracker {
 	}
 
 	/**
-	 * Compute total cost from all background agents that have a session file.
-	 * Uses the exported `sumCostFromFile` which reads JSONL and sums assistant costs.
+	 * Compute total cost from all background agents.
+	 * For chain agents with multiple step-N/ directories, discovers and sums
+	 * all step files (not just the newest one) via `discoverSessionFiles`.
+	 * Falls back to the single `sessionFile` when `sessionDir` is unavailable.
 	 */
 	private static async computeCost(): Promise<number> {
 		try {
-			const agents: readonly Readonly<BackgroundAgentInfo>[] = getBackgroundAgents();
-			const agentsWithFiles = agents.filter(
-				(a): a is Readonly<BackgroundAgentInfo> & { sessionFile: string } => typeof a.sessionFile === "string",
-			);
-			if (agentsWithFiles.length === 0) return 0;
+			const agents = getBackgroundAgents();
+			const filePaths: string[] = [];
 
-			const costs = await Promise.all(agentsWithFiles.map((a) => sumCostFromFile(a.sessionFile)));
+			for (const agent of agents) {
+				if (agent.sessionDir) {
+					// Discover all session files including chain step-N/ subdirectories
+					const files = discoverSessionFiles(agent.sessionDir, agent.agentType);
+					filePaths.push(...files);
+				} else if (agent.sessionFile) {
+					// Fallback: single file when sessionDir is unavailable
+					filePaths.push(agent.sessionFile);
+				}
+			}
+
+			if (filePaths.length === 0) return 0;
+
+			const costs = await Promise.all(filePaths.map((f) => sumCostFromFile(f)));
 			return costs.reduce((sum, c) => sum + c, 0);
 		} catch {
 			// Never crash the app
