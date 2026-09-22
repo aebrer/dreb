@@ -101,7 +101,7 @@ export function makeFakeClient() {
 			{ name: "buddy", description: "Toggle buddy mode", source: "builtin", dashboard: false },
 		]),
 		getGitBranch: vi.fn(async () => "feature/test"),
-		getDailyCost: vi.fn(async () => 1.23),
+		getDailyCost: vi.fn(async () => ({ cost: 1.23, main: 1.0, subagent: 0.23 })),
 		getAvailableModels: vi.fn(async () => [
 			{ provider: "test", id: "m1", name: "Test Model", contextWindow: 200000, reasoning: false },
 		]),

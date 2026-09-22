@@ -143,6 +143,7 @@ export interface SessionStatsDto {
 		total: number;
 	};
 	cost: number;
+	subagentCost?: number;
 	contextUsage?: ContextUsageDto;
 }
 

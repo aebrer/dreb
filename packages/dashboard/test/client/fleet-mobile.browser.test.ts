@@ -91,7 +91,7 @@ function makeFakeRuntimeClient(): FakeRuntimeClient {
 		listBackgroundAgents: async () => [],
 		getPerformanceStats: async () => ({ models: [] }),
 		getGitBranch: async () => null,
-		getDailyCost: async () => 0,
+		getDailyCost: async () => ({ cost: 0, main: 0, subagent: 0 }),
 		getCommands: async () => [],
 		getPendingMessages: async () => ({ steering: [], followUp: [] }),
 	};

@@ -1153,7 +1153,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	app.get("/api/daily-cost", (_req, res) => {
-		withAnyRuntime(res, async (h) => ({ cost: await h.client.getDailyCost() }));
+		withAnyRuntime(res, async (h) => h.client.getDailyCost());
 	});
 
 	app.put("/api/settings", (req, res) => {

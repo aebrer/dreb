@@ -838,16 +838,16 @@ describe("RpcClient dashboard command methods", () => {
 		expect(client.send).toHaveBeenCalledWith({ type: "get_git_branch" });
 	});
 
-	it("getDailyCost sends get_daily_cost and unwraps the cost", async () => {
+	it("getDailyCost sends get_daily_cost and unwraps the cost breakdown", async () => {
 		const client = new RpcClient() as any;
 		client.send = vi.fn().mockResolvedValue({
 			type: "response",
 			command: "get_daily_cost",
 			success: true,
-			data: { cost: 1.23 },
+			data: { cost: 1.23, main: 0.73, subagent: 0.5 },
 		});
 
-		await expect(client.getDailyCost()).resolves.toBe(1.23);
+		await expect(client.getDailyCost()).resolves.toEqual({ cost: 1.23, main: 0.73, subagent: 0.5 });
 		expect(client.send).toHaveBeenCalledWith({ type: "get_daily_cost" });
 	});
 

@@ -447,11 +447,12 @@ export class RpcClient {
 	}
 
 	/**
-	 * Get cached same-day cost across all sessions, primed by the server on first call.
+	 * Get cached same-day cost across all sessions (including subagents), primed by the server on first call.
+	 * Returns breakdown: total, main session cost, and subagent cost.
 	 */
-	async getDailyCost(): Promise<number> {
+	async getDailyCost(): Promise<{ cost: number; main: number; subagent: number }> {
 		const response = await this.send({ type: "get_daily_cost" });
-		return this.getData<{ cost: number }>(response).cost;
+		return this.getData<{ cost: number; main: number; subagent: number }>(response);
 	}
 
 	/**

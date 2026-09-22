@@ -22,7 +22,7 @@ import {
 	validateTrustedContextFolder,
 	validateTrustedContextFolders,
 } from "../../core/context-trust.js";
-import { DailyCostTracker } from "../../core/daily-cost-tracker.js";
+import { type DailyCostBreakdown, DailyCostTracker } from "../../core/daily-cost-tracker.js";
 import {
 	acquireDreamLock,
 	buildDreamPrompt,
@@ -47,6 +47,7 @@ import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
 import { BUILTIN_SLASH_COMMANDS, parseBuiltinSlashCommand } from "../../core/slash-commands.js";
+import { SubagentSessionCostTracker } from "../../core/subagent-session-cost-tracker.js";
 import { TabTitleGenerator } from "../../core/tab-title.js";
 import { validateThinkingLevelForModel } from "../../core/thinking.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
@@ -1810,6 +1811,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	let shutdownRequested = false;
 	let dailyCostTracker: DailyCostTracker | undefined;
 	let dailyCostTrackerPrimed = false;
+	let subagentSessionCostTracker: SubagentSessionCostTracker | undefined;
 
 	// Extension UI context uses the RPC protocol; built by a module-scope
 	// factory so the dialog round trip is unit-testable (see createRpcExtensionUIContext).
@@ -1855,13 +1857,13 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		},
 	});
 
-	const getDailyCost = async (): Promise<number> => {
+	const getDailyCostBreakdown = async (): Promise<DailyCostBreakdown> => {
 		dailyCostTracker ??= new DailyCostTracker();
 		if (!dailyCostTrackerPrimed) {
 			await dailyCostTracker.refresh();
 			dailyCostTrackerPrimed = true;
 		}
-		return dailyCostTracker.getDailyCost();
+		return dailyCostTracker.getDailyCostBreakdown();
 	};
 
 	const cwd = session.cwd;
@@ -2040,7 +2042,12 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "get_daily_cost": {
-				return success(id, "get_daily_cost", { cost: await getDailyCost() });
+				const breakdown = await getDailyCostBreakdown();
+				return success(id, "get_daily_cost", {
+					cost: breakdown.total,
+					main: breakdown.main,
+					subagent: breakdown.subagent,
+				});
 			}
 
 			// =================================================================
@@ -2208,8 +2215,12 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// =================================================================
 
 			case "get_session_stats": {
+				subagentSessionCostTracker ??= new SubagentSessionCostTracker();
 				const stats = session.getSessionStats();
-				return success(id, "get_session_stats", stats);
+				return success(id, "get_session_stats", {
+					...stats,
+					subagentCost: subagentSessionCostTracker.getCost(),
+				});
 			}
 
 			case "get_performance_stats": {
@@ -2434,6 +2445,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		}
 
 		dailyCostTracker?.dispose();
+		subagentSessionCostTracker?.dispose();
 		detachInput();
 		process.stdin.pause();
 		process.exit(0);

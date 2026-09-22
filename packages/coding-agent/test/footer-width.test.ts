@@ -75,6 +75,8 @@ function createFooterData(providerCount: number, dailyCost = 0): ReadonlyFooterD
 		getExtensionStatuses: () => new Map<string, string>(),
 		getAvailableProviderCount: () => providerCount,
 		getDailyCost: () => dailyCost,
+		getDailyCostBreakdown: () => ({ total: dailyCost, main: dailyCost, subagent: 0 }),
+		getSubagentSessionCost: () => 0,
 		onBranchChange: (callback: () => void) => {
 			void callback;
 			return () => {};

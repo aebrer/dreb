@@ -86,7 +86,7 @@ vi.mock("../../src/client/api.js", () => ({
 		// badge test drives a routed session). Stubbed to safe defaults mirroring
 		// screens.test.tsx.
 		branch: vi.fn(async () => ({ branch: null })),
-		dailyCost: vi.fn(async () => ({ cost: 0 })),
+		dailyCost: vi.fn(async () => ({ cost: 0, main: 0, subagent: 0 })),
 		commands: vi.fn(async () => ({ commands: [] })),
 		pending: vi.fn(async () => ({ steering: [], followUp: [] })),
 		dequeue: vi.fn(async () => ({ steering: [], followUp: [] })),

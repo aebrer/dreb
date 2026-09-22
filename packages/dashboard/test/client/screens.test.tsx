@@ -86,7 +86,7 @@ vi.mock("../../src/client/api.js", () => ({
 		branch: vi.fn(async () => ({ branch: null })),
 		forkMessages: vi.fn(async () => ({ messages: [] })),
 		fork: vi.fn(async () => ({ text: "", cancelled: false })),
-		dailyCost: vi.fn(async () => ({ cost: 0.42 })),
+		dailyCost: vi.fn(async () => ({ cost: 0.42, main: 0.42, subagent: 0 })),
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
 		unpair: vi.fn(async () => ({ ok: true })),
@@ -506,7 +506,7 @@ afterEach(() => {
 	vi.mocked(api.dequeue).mockResolvedValue({ steering: [], followUp: [] });
 	vi.mocked(api.forkMessages).mockResolvedValue({ messages: [] });
 	vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: false });
-	vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.42 });
+	vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.42, main: 0.42, subagent: 0 });
 	vi.unstubAllGlobals();
 	Reflect.deleteProperty(window, "matchMedia");
 	vi.mocked(api.places).mockResolvedValue({ places: [{ label: "home", path: "/home/test" }] });
@@ -2158,7 +2158,7 @@ describe("screen smoke tests", () => {
 
 	it("session view renders with a populated transcript and session info bar", async () => {
 		vi.mocked(api.branch).mockResolvedValue({ branch: "feature/info" });
-		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25 });
+		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25, main: 1.0, subagent: 0.25 });
 		vi.mocked(api.performance).mockResolvedValue({
 			models: [
 				performanceSummary({ rolling: { count: 4 }, delta: { baselineCount: 4, recentCount: 4 } }),

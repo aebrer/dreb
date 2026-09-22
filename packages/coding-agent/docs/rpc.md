@@ -333,7 +333,7 @@ Response:
 
 #### get_daily_cost
 
-Get the same-day aggregate cost across all session files. The RPC process scans once on first call so the first response is current, then returns the cached value (refreshed periodically by the tracker).
+Get the same-day aggregate cost across all session files, including sub-agent sessions. The RPC process scans once on first call so the first response is current, then returns the cached value (refreshed periodically by the tracker). Returns a breakdown of main session costs and sub-agent session costs.
 
 ```json
 {"type": "get_daily_cost"}
@@ -345,9 +345,13 @@ Response:
   "type": "response",
   "command": "get_daily_cost",
   "success": true,
-  "data": {"cost": 1.23}
+  "data": {"cost": 1.23, "main": 0.85, "subagent": 0.38}
 }
 ```
+
+- `cost` — total daily cost (main + subagent)
+- `main` — cost from main session files only
+- `subagent` — cost from sub-agent session files only
 
 #### get_messages
 

@@ -116,9 +116,15 @@ export class FooterComponent implements Component {
 		const usingSubscription = state.model ? this.session.modelRegistry.isUsingOAuth(state.model) : false;
 		if (totalCost || usingSubscription) {
 			costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+			// Append sub-agent session cost when there are background agents with costs
+			const subagentCost = this.footerData.getSubagentSessionCost();
+			if (subagentCost > 0) {
+				costStr += ` + $${subagentCost.toFixed(3)} subs`;
+			}
 			// Append daily total when there's cross-session spend
 			const dailyCost = this.footerData.getDailyCost();
-			if (dailyCost > totalCost) {
+			const sessionTotal = totalCost + subagentCost;
+			if (dailyCost > sessionTotal) {
 				costStr += `, today: $${dailyCost.toFixed(2)}`;
 			}
 		}

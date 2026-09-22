@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DailyCostTracker, filenameTimestampToDate, isSameLocalDay } from "../src/core/daily-cost-tracker.js";
+import {
+	DailyCostTracker,
+	filenameTimestampToDate,
+	isSameLocalDay,
+	sumCostFromFile,
+} from "../src/core/daily-cost-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,8 +58,8 @@ function makeSessionJsonl(costs: number[]): string {
  * Create a tracker and wait for the initial async scan to complete.
  * After this, getDailyCost() reflects the scanned value.
  */
-async function createTracker(sessionsDir: string): Promise<DailyCostTracker> {
-	const tracker = new DailyCostTracker(sessionsDir);
+async function createTracker(sessionsDir: string, subagentSessionsDir?: string): Promise<DailyCostTracker> {
+	const tracker = new DailyCostTracker(sessionsDir, subagentSessionsDir);
 	// The constructor kicks off an async scan. refresh() queues another full scan
 	// and awaits it, guaranteeing the cache is populated when it resolves.
 	await tracker.refresh();
@@ -150,15 +155,67 @@ describe("isSameLocalDay", () => {
 });
 
 // ---------------------------------------------------------------------------
+// sumCostFromFile
+// ---------------------------------------------------------------------------
+
+describe("sumCostFromFile", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "dreb-sum-cost-test-"));
+	});
+
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("sums costs from a valid JSONL file", async () => {
+		const filePath = join(tmpDir, "test.jsonl");
+		writeFileSync(filePath, makeSessionJsonl([0.5, 0.25, 1.0]));
+		expect(await sumCostFromFile(filePath)).toBeCloseTo(1.75, 5);
+	});
+
+	it("returns 0 for a non-existent file", async () => {
+		expect(await sumCostFromFile(join(tmpDir, "nonexistent.jsonl"))).toBe(0);
+	});
+
+	it("skips corrupt lines", async () => {
+		const filePath = join(tmpDir, "corrupt.jsonl");
+		const content = [
+			"THIS IS NOT JSON",
+			JSON.stringify({
+				type: "message",
+				id: "m1",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "ok" }],
+					usage: { input: 10, output: 5, cost: { total: 0.42 } },
+				},
+			}),
+		].join("\n");
+		writeFileSync(filePath, content);
+		expect(await sumCostFromFile(filePath)).toBeCloseTo(0.42, 5);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // DailyCostTracker
 // ---------------------------------------------------------------------------
 
 describe("DailyCostTracker", () => {
 	let tmpDir: string;
+	let sessionsDir: string;
+	let subagentSessionsDir: string;
 	let tracker: DailyCostTracker | null;
 
 	beforeEach(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "dreb-cost-test-"));
+		sessionsDir = join(tmpDir, "sessions");
+		subagentSessionsDir = join(tmpDir, "subagent-sessions");
+		mkdirSync(sessionsDir);
+		mkdirSync(subagentSessionsDir);
 		tracker = null;
 	});
 
@@ -168,7 +225,19 @@ describe("DailyCostTracker", () => {
 	});
 
 	function createProjectDir(name: string): string {
-		const dir = join(tmpDir, name);
+		const dir = join(sessionsDir, name);
+		mkdirSync(dir, { recursive: true });
+		return dir;
+	}
+
+	function createSubagentSessionDir(sessionId: string): string {
+		const dir = join(subagentSessionsDir, sessionId);
+		mkdirSync(dir, { recursive: true });
+		return dir;
+	}
+
+	function createSubagentStepDir(sessionId: string, step: number): string {
+		const dir = join(subagentSessionsDir, sessionId, `step-${step}`);
 		mkdirSync(dir, { recursive: true });
 		return dir;
 	}
@@ -190,7 +259,7 @@ describe("DailyCostTracker", () => {
 		// Yesterday's session — should NOT be included
 		writeFileSync(join(projectA, makeSessionFilename(yesterday)), makeSessionJsonl([10.0]));
 
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.75, 5);
 	});
 
@@ -202,15 +271,14 @@ describe("DailyCostTracker", () => {
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
 
 		// Construct without awaiting — cache should be 0
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = new DailyCostTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
 	// Empty sessions dir -------------------------------------------------------
 
 	it("returns 0 for an empty sessions directory", async () => {
-		// tmpDir exists but has no subdirectories
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
@@ -218,7 +286,7 @@ describe("DailyCostTracker", () => {
 
 	it("returns 0 for a non-existent sessions directory", async () => {
 		const nonExistent = join(tmpDir, "does-not-exist");
-		tracker = await createTracker(nonExistent);
+		tracker = await createTracker(nonExistent, join(tmpDir, "also-does-not-exist"));
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
@@ -247,7 +315,7 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.42, 5);
 	});
 
@@ -258,7 +326,7 @@ describe("DailyCostTracker", () => {
 		const now = new Date();
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
 
 		// Add another file
@@ -274,7 +342,7 @@ describe("DailyCostTracker", () => {
 		const now = new Date();
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
 
 		tracker.dispose();
@@ -294,7 +362,7 @@ describe("DailyCostTracker", () => {
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([0, 0, 0]));
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([0.75]));
 
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.75, 5);
 	});
 
@@ -333,7 +401,7 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
@@ -371,7 +439,7 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.1, 5);
 	});
 
@@ -413,7 +481,7 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.33, 5);
 	});
 
@@ -429,7 +497,129 @@ describe("DailyCostTracker", () => {
 		writeFileSync(join(projectDir, "notes.jsonl"), makeSessionJsonl([50.0]));
 		writeFileSync(join(projectDir, "random-name.jsonl"), makeSessionJsonl([50.0]));
 
-		tracker = await createTracker(tmpDir);
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
+	});
+
+	// =========================================================================
+	// Sub-agent session scanning
+	// =========================================================================
+
+	it("scans direct JSONL files in subagent session-id directories", async () => {
+		const now = new Date();
+
+		// Main session cost
+		const projectDir = createProjectDir("--project--");
+		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
+
+		// Subagent session (direct JSONL in session-id dir)
+		const subDir = createSubagentSessionDir("session-abc");
+		writeFileSync(join(subDir, makeSessionFilename(now)), makeSessionJsonl([0.5]));
+
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
+		expect(tracker.getDailyCost()).toBeCloseTo(1.5, 5);
+	});
+
+	it("scans JSONL files in subagent step-N subdirectories (chain agents)", async () => {
+		const now = new Date();
+
+		// Chain agent session with step subdirs
+		const sessionId = "chain-session-123";
+		const step0 = createSubagentStepDir(sessionId, 0);
+		const step1 = createSubagentStepDir(sessionId, 1);
+		writeFileSync(join(step0, makeSessionFilename(now)), makeSessionJsonl([0.3]));
+		writeFileSync(join(step1, makeSessionFilename(now)), makeSessionJsonl([0.7]));
+
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
+		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
+	});
+
+	it("handles mix of direct and step-N subagent sessions", async () => {
+		const now = new Date();
+
+		// Direct subagent session
+		const directDir = createSubagentSessionDir("direct-agent");
+		writeFileSync(join(directDir, makeSessionFilename(now)), makeSessionJsonl([0.2]));
+
+		// Chain subagent session with steps
+		const chainDir = createSubagentSessionDir("chain-agent");
+		const step0 = createSubagentStepDir("chain-agent", 0);
+		writeFileSync(join(step0, makeSessionFilename(now)), makeSessionJsonl([0.4]));
+		// Also a direct file in the chain session dir (mixed layout)
+		writeFileSync(join(chainDir, makeSessionFilename(now)), makeSessionJsonl([0.1]));
+
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
+		expect(tracker.getDailyCost()).toBeCloseTo(0.7, 5);
+	});
+
+	it("excludes yesterday's subagent sessions", async () => {
+		const now = new Date();
+		const yesterday = new Date(now);
+		yesterday.setDate(yesterday.getDate() - 1);
+
+		const subDir = createSubagentSessionDir("old-agent");
+		writeFileSync(join(subDir, makeSessionFilename(yesterday)), makeSessionJsonl([10.0]));
+		writeFileSync(join(subDir, makeSessionFilename(now)), makeSessionJsonl([0.5]));
+
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
+		expect(tracker.getDailyCost()).toBeCloseTo(0.5, 5);
+	});
+
+	// =========================================================================
+	// Daily cost breakdown
+	// =========================================================================
+
+	it("getDailyCostBreakdown() separates main and subagent costs", async () => {
+		const now = new Date();
+
+		// Main session
+		const projectDir = createProjectDir("--project--");
+		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([2.0]));
+
+		// Subagent session
+		const subDir = createSubagentSessionDir("sub-1");
+		writeFileSync(join(subDir, makeSessionFilename(now)), makeSessionJsonl([0.8]));
+
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
+
+		const breakdown = tracker.getDailyCostBreakdown();
+		expect(breakdown.main).toBeCloseTo(2.0, 5);
+		expect(breakdown.subagent).toBeCloseTo(0.8, 5);
+		expect(breakdown.total).toBeCloseTo(2.8, 5);
+		expect(breakdown.total).toBeCloseTo(breakdown.main + breakdown.subagent, 10);
+	});
+
+	it("getDailyCostBreakdown() returns zeros when no sessions exist", async () => {
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
+		const breakdown = tracker.getDailyCostBreakdown();
+		expect(breakdown.main).toBe(0);
+		expect(breakdown.subagent).toBe(0);
+		expect(breakdown.total).toBe(0);
+	});
+
+	it("getDailyCost() equals getDailyCostBreakdown().total", async () => {
+		const now = new Date();
+
+		const projectDir = createProjectDir("--project--");
+		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.5]));
+
+		const subDir = createSubagentSessionDir("sub-2");
+		writeFileSync(join(subDir, makeSessionFilename(now)), makeSessionJsonl([0.3]));
+
+		tracker = await createTracker(sessionsDir, subagentSessionsDir);
+		expect(tracker.getDailyCost()).toBeCloseTo(tracker.getDailyCostBreakdown().total, 10);
+	});
+
+	// Non-existent subagent sessions dir should not break main scanning -------
+
+	it("handles non-existent subagent sessions directory gracefully", async () => {
+		const now = new Date();
+		const projectDir = createProjectDir("--project--");
+		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
+
+		// Use non-existent subagent dir
+		tracker = await createTracker(sessionsDir, join(tmpDir, "nonexistent-subagent-dir"));
+		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
+		expect(tracker.getDailyCostBreakdown().subagent).toBe(0);
 	});
 });

@@ -1217,7 +1217,11 @@ describe("dashboard server — fleet and runtimes", () => {
 		await expect(
 			fetch(`${base}/api/runtimes/${key}/dequeue`, { method: "POST" }).then((r) => r.json()),
 		).resolves.toEqual({ steering: ["queued steer"], followUp: ["queued follow"] });
-		await expect(fetch(`${base}/api/daily-cost`).then((r) => r.json())).resolves.toEqual({ cost: 1.23 });
+		await expect(fetch(`${base}/api/daily-cost`).then((r) => r.json())).resolves.toEqual({
+			cost: 1.23,
+			main: 1,
+			subagent: 0.23,
+		});
 		await expect(fetch(`${base}/api/runtimes/${key}/abort-compaction`, { method: "POST" })).resolves.toMatchObject({
 			status: 200,
 		});

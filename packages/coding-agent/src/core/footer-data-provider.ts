@@ -1,7 +1,8 @@
 import { existsSync, type FSWatcher, watch } from "node:fs";
 import { dirname, join } from "node:path";
-import { DailyCostTracker } from "./daily-cost-tracker.js";
+import { type DailyCostBreakdown, DailyCostTracker } from "./daily-cost-tracker.js";
 import { findGitPaths, type GitPaths, getGitBranch, getGitBranchAsync } from "./git-branch.js";
+import { SubagentSessionCostTracker } from "./subagent-session-cost-tracker.js";
 
 /**
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
@@ -17,6 +18,7 @@ export class FooterDataProvider {
 	private reftableWatcher: FSWatcher | null = null;
 	private branchChangeCallbacks = new Set<() => void>();
 	private dailyCostTracker: DailyCostTracker;
+	private subagentSessionCostTracker: SubagentSessionCostTracker;
 	private availableProviderCount = 0;
 	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 	private refreshInFlight = false;
@@ -27,6 +29,7 @@ export class FooterDataProvider {
 		this.gitPaths = findGitPaths();
 		this.setupGitWatcher();
 		this.dailyCostTracker = new DailyCostTracker();
+		this.subagentSessionCostTracker = new SubagentSessionCostTracker();
 	}
 
 	/** Current git branch, null if not in repo, "detached" if detached HEAD */
@@ -62,14 +65,29 @@ export class FooterDataProvider {
 		this.extensionStatuses.clear();
 	}
 
-	/** Cached daily cost total across all sessions. O(1). */
+	/** Cached daily cost total across all sessions (main + subagent). O(1). */
 	getDailyCost(): number {
 		return this.dailyCostTracker.getDailyCost();
+	}
+
+	/** Cached daily cost breakdown: total, main, and subagent. O(1). */
+	getDailyCostBreakdown(): DailyCostBreakdown {
+		return this.dailyCostTracker.getDailyCostBreakdown();
 	}
 
 	/** Force refresh of the daily cost cache. */
 	async refreshDailyCost(): Promise<void> {
 		await this.dailyCostTracker.refresh();
+	}
+
+	/** Cached sub-agent session cost for the current parent session. O(1). */
+	getSubagentSessionCost(): number {
+		return this.subagentSessionCostTracker.getCost();
+	}
+
+	/** Force refresh of the sub-agent session cost cache. */
+	async refreshSubagentSessionCost(): Promise<void> {
+		await this.subagentSessionCostTracker.refresh();
 	}
 
 	/** Number of unique providers with available models (for footer display) */
@@ -90,6 +108,7 @@ export class FooterDataProvider {
 			this.refreshTimer = null;
 		}
 		this.dailyCostTracker.dispose();
+		this.subagentSessionCostTracker.dispose();
 		if (this.headWatcher) {
 			this.headWatcher.close();
 			this.headWatcher = null;
@@ -184,5 +203,11 @@ export class FooterDataProvider {
 /** Read-only view for extensions - excludes setExtensionStatus, setAvailableProviderCount and dispose */
 export type ReadonlyFooterDataProvider = Pick<
 	FooterDataProvider,
-	"getGitBranch" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange" | "getDailyCost"
+	| "getGitBranch"
+	| "getExtensionStatuses"
+	| "getAvailableProviderCount"
+	| "onBranchChange"
+	| "getDailyCost"
+	| "getDailyCostBreakdown"
+	| "getSubagentSessionCost"
 >;

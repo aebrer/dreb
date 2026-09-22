@@ -214,7 +214,7 @@ export const api = {
 			"/api/server/info",
 		),
 	restartServer: () => request<{ ok: true; restarting: boolean }>("/api/server/restart", { method: "POST" }),
-	dailyCost: () => request<{ cost: number }>("/api/daily-cost"),
+	dailyCost: () => request<{ cost: number; main: number; subagent: number }>("/api/daily-cost"),
 
 	listFiles: (path: string) => request<DirListingDto>(`/api/files?path=${encodeURIComponent(path)}`),
 	trustContextFolder: (path: string) => request<ContextTrustMutationResultDto>("/api/files/trust", json({ path })),
