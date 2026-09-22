@@ -234,6 +234,7 @@ export interface SessionTreeNodeDto {
 export interface RuntimeStatsSummaryDto {
 	tokensTotal: number;
 	cost: number;
+	subagentCost?: number;
 }
 
 /** Current task list (mirrors RpcSessionTask). */

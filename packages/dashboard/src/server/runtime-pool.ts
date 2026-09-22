@@ -770,7 +770,7 @@ export class RuntimePool {
 		let stats: RuntimeStatsSummaryDto | undefined;
 		try {
 			const sessionStats = await handle.client.getSessionStats();
-			stats = { tokensTotal: sessionStats.tokens.total, cost: sessionStats.cost };
+			stats = { tokensTotal: sessionStats.tokens.total, cost: sessionStats.cost, subagentCost: sessionStats.subagentCost };
 			if (sessionStats.contextUsage) {
 				handle.lastState = { ...this.fallbackState(handle), contextUsage: sessionStats.contextUsage };
 				fleetRuntimeEnriched = true;

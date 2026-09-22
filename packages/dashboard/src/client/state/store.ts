@@ -828,7 +828,7 @@ export function createAppStore() {
 				// it may have legitimately decreased after a fork or rewind.
 				messageCount: liveStateRaced ? runtime.state.messageCount : stats.totalMessages,
 			},
-			stats: { tokensTotal: stats.tokens.total, cost: stats.cost },
+			stats: { tokensTotal: stats.tokens.total, cost: stats.cost, subagentCost: stats.subagentCost },
 		};
 	}
 
