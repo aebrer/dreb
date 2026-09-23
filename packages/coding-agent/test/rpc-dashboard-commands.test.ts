@@ -89,9 +89,10 @@ function acceptRpcEventListener(listener: RpcEventListener): RpcEventListener {
 	return listener;
 }
 
-async function dispatchRpcCommand(
+async function dispatchRpcCommands(
 	session: ReturnType<typeof createTestSession>["session"],
-	command: Record<string, unknown>,
+	commands: Array<Record<string, unknown>>,
+	beforeCommand?: (index: number) => void,
 ): Promise<Array<Record<string, unknown>>> {
 	const outputs: Array<Record<string, unknown>> = [];
 	let handleInputLine: ((line: string) => void) | undefined;
@@ -109,8 +110,11 @@ async function dispatchRpcCommand(
 	try {
 		void runRpcMode(session);
 		await vi.waitFor(() => expect(handleInputLine).toBeDefined());
-		handleInputLine!(JSON.stringify(command));
-		await vi.waitFor(() => expect(outputs).toHaveLength(1));
+		for (const [index, command] of commands.entries()) {
+			beforeCommand?.(index);
+			handleInputLine!(JSON.stringify(command));
+			await vi.waitFor(() => expect(outputs.some((output) => output.id === command.id)).toBe(true));
+		}
 		return outputs;
 	} finally {
 		for (const listener of process.stdin.listeners("end")) {
@@ -122,6 +126,13 @@ async function dispatchRpcCommand(
 			}
 		}
 	}
+}
+
+async function dispatchRpcCommand(
+	session: ReturnType<typeof createTestSession>["session"],
+	command: Record<string, unknown>,
+): Promise<Array<Record<string, unknown>>> {
+	return dispatchRpcCommands(session, [command]);
 }
 
 describe("RPC dashboard state/resources DTOs", () => {
@@ -216,6 +227,45 @@ describe("RPC dashboard state/resources DTOs", () => {
 				id: "first-stats",
 				success: true,
 				data: { subagentCost: 0.73 },
+			});
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("refreshes sub-agent cost after a background agent completes", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		let refreshCount = 0;
+		const refresh = vi.spyOn(SubagentSessionCostTracker.prototype, "refresh").mockImplementation(async () => {
+			refreshCount++;
+		});
+		vi.spyOn(SubagentSessionCostTracker.prototype, "getCost").mockImplementation(() => refreshCount);
+
+		try {
+			const outputs = await dispatchRpcCommands(
+				session,
+				[
+					{ id: "before-agent", type: "get_session_stats" },
+					{ id: "after-agent", type: "get_session_stats" },
+				],
+				(index) => {
+					if (index === 1) {
+						(session as unknown as { _emit: (event: Record<string, unknown>) => void })._emit({
+							type: "background_agent_end",
+							agentId: "agent-1",
+							agentType: "Explore",
+							success: true,
+						});
+					}
+				},
+			);
+
+			expect(refresh).toHaveBeenCalledTimes(2);
+			expect(outputs.find((output) => output.id === "before-agent")).toMatchObject({
+				data: { subagentCost: 1 },
+			});
+			expect(outputs.find((output) => output.id === "after-agent")).toMatchObject({
+				data: { subagentCost: 2 },
 			});
 		} finally {
 			cleanup();

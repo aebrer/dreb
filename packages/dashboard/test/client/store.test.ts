@@ -379,6 +379,25 @@ describe("pairing expiry auth status", () => {
 });
 
 describe("app store SSE sync", () => {
+	it("connects with live runtimes before omitted disk inventory finishes loading", async () => {
+		const live = runtimeSnapshot("live-first", false);
+		const inventory = deferred<{ sessions: [] }>();
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [live],
+			diskSessions: [],
+			diskSessionsComplete: false,
+		});
+		vi.mocked(api.sessions).mockReturnValueOnce(inventory.promise);
+
+		const store = await makeStartedStore();
+
+		expect(store.fleet().runtimes).toEqual([live]);
+		expect(connectEvents).toHaveBeenCalledOnce();
+		expect(api.sessions).toHaveBeenCalledOnce();
+		inventory.resolve({ sessions: [] });
+		await flushAsyncWork();
+	});
+
 	it("creates per-key session state lazily and routes events", async () => {
 		const store = await makeStartedStore();
 

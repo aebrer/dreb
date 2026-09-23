@@ -1812,7 +1812,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	let dailyCostTracker: DailyCostTracker | undefined;
 	let dailyCostTrackerPrimed = false;
 	let subagentSessionCostTracker: SubagentSessionCostTracker | undefined;
-	let subagentSessionCostTrackerPrimed = false;
+	let subagentCostGeneration = 0;
+	let refreshedSubagentCostGeneration = -1;
 
 	// Extension UI context uses the RPC protocol; built by a module-scope
 	// factory so the dialog round trip is unit-testable (see createRpcExtensionUIContext).
@@ -1910,6 +1911,10 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 	// Output all agent events as JSON
 	session.subscribe((event) => {
+		if (event.type === "background_agent_end") {
+			// Force the next stats request to await a fresh per-session cost scan.
+			subagentCostGeneration++;
+		}
 		if (tabTitleGenerator && !session.sessionName) {
 			if (event.type === "tool_execution_end") {
 				tabTitleGenerator.onToolEnd({
@@ -2217,9 +2222,10 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 			case "get_session_stats": {
 				subagentSessionCostTracker ??= new SubagentSessionCostTracker();
-				if (!subagentSessionCostTrackerPrimed) {
+				if (refreshedSubagentCostGeneration !== subagentCostGeneration) {
+					const refreshGeneration = subagentCostGeneration;
 					await subagentSessionCostTracker.refresh();
-					subagentSessionCostTrackerPrimed = true;
+					refreshedSubagentCostGeneration = refreshGeneration;
 				}
 				const stats = session.getSessionStats();
 				return success(id, "get_session_stats", {

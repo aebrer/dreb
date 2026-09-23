@@ -173,7 +173,7 @@ beforeAll(async () => {
 		const json = (body: unknown) => route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
 
 		if (path === "/api/auth") return json({ mode: "local", needsPairing: false });
-		if (path === "/api/fleet") return json({ runtimes: fleetRuntimes, diskSessions: [] });
+		if (path === "/api/fleet/live") return json({ runtimes: fleetRuntimes, diskSessions: [] });
 		if (path === "/api/sessions") return json({ sessions: [] });
 		if (path === "/api/daily-cost") return json({ cost: 0 });
 		if (path === "/api/version") return json({ version: "test" });

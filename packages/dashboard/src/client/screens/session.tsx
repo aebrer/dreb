@@ -1743,10 +1743,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	};
 	const costSummary = () => {
 		const sessionCost = stats()?.cost ?? 0;
-		const usingSubscription = runtime()?.state.usingSubscription ?? false;
-		if (!sessionCost && !usingSubscription) return undefined;
-		let text = `$${sessionCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
 		const subagentCost = stats()?.subagentCost ?? 0;
+		const usingSubscription = runtime()?.state.usingSubscription ?? false;
+		if (!sessionCost && !subagentCost && !usingSubscription) return undefined;
+		let text = `$${sessionCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
 		if (subagentCost > 0) text += ` + $${subagentCost.toFixed(3)} subs`;
 		const sessionTotal = sessionCost + subagentCost;
 		const todayBreakdown = dailyCost();

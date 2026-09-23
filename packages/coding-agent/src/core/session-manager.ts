@@ -183,6 +183,9 @@ export interface SessionInfo {
 	allMessagesText: string;
 }
 
+/** Session-list metadata without the full transcript search text. */
+export type SessionMetadata = Omit<SessionInfo, "allMessagesText">;
+
 export type ReadonlySessionManager = Pick<
 	SessionManager,
 	| "getCwd"
@@ -568,72 +571,144 @@ function resolveForDeletion(filePath: string): string {
 	return resolve(filePath);
 }
 
+interface CachedSessionMetadata {
+	mtimeMs: number;
+	size: number;
+	metadata: SessionMetadata | null;
+}
+
+interface InflightSessionMetadata {
+	mtimeMs: number;
+	size: number;
+	promise: Promise<SessionMetadata | null>;
+}
+
+const sessionMetadataCache = new Map<string, CachedSessionMetadata>();
+const sessionMetadataInflight = new Map<string, InflightSessionMetadata>();
+
+function cloneSessionMetadata(metadata: SessionMetadata): SessionMetadata {
+	return {
+		...metadata,
+		created: new Date(metadata.created),
+		modified: new Date(metadata.modified),
+	};
+}
+
+function toSessionMetadata(info: SessionInfo): SessionMetadata {
+	const { allMessagesText: _allMessagesText, ...metadata } = info;
+	return metadata;
+}
+
+async function parseSessionInfo(
+	filePath: string,
+	stats: Awaited<ReturnType<typeof stat>>,
+	includeAllMessagesText: boolean,
+): Promise<SessionInfo | null> {
+	const content = await readFile(filePath, "utf8");
+	const entries: FileEntry[] = [];
+	const lines = content.trim().split("\n");
+
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		try {
+			entries.push(JSON.parse(line) as FileEntry);
+		} catch {
+			// Skip malformed lines
+		}
+	}
+
+	if (entries.length === 0) return null;
+	const header = entries[0];
+	if (header.type !== "session") return null;
+
+	let messageCount = 0;
+	let firstMessage = "";
+	const allMessages: string[] = [];
+	let name: string | undefined;
+
+	for (const entry of entries) {
+		// Extract session name (use latest, including explicit clears)
+		if (entry.type === "session_info") {
+			const infoEntry = entry as SessionInfoEntry;
+			name = infoEntry.name?.trim() || undefined;
+		}
+
+		if (entry.type !== "message") continue;
+		messageCount++;
+
+		const message = (entry as SessionMessageEntry).message;
+		if (!isMessageWithContent(message)) continue;
+		if (message.role !== "user" && message.role !== "assistant") continue;
+
+		const textContent = extractTextContent(message);
+		if (!textContent) continue;
+
+		if (includeAllMessagesText) allMessages.push(textContent);
+		if (!firstMessage && message.role === "user") {
+			firstMessage = textContent;
+		}
+	}
+
+	const cwd = typeof (header as SessionHeader).cwd === "string" ? (header as SessionHeader).cwd : "";
+	const parentSessionPath = (header as SessionHeader).parentSession;
+	const modified = getSessionModifiedDate(entries, header as SessionHeader, stats.mtime);
+	const created = getSessionCreatedDate(header as SessionHeader, stats.mtime);
+
+	return {
+		path: filePath,
+		id: (header as SessionHeader).id,
+		cwd,
+		name,
+		parentSessionPath,
+		created,
+		modified,
+		messageCount,
+		firstMessage: firstMessage || "(no messages)",
+		allMessagesText: allMessages.join(" "),
+	};
+}
+
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 	try {
-		const content = await readFile(filePath, "utf8");
-		const entries: FileEntry[] = [];
-		const lines = content.trim().split("\n");
-
-		for (const line of lines) {
-			if (!line.trim()) continue;
-			try {
-				entries.push(JSON.parse(line) as FileEntry);
-			} catch {
-				// Skip malformed lines
-			}
-		}
-
-		if (entries.length === 0) return null;
-		const header = entries[0];
-		if (header.type !== "session") return null;
-
 		const stats = await stat(filePath);
-		let messageCount = 0;
-		let firstMessage = "";
-		const allMessages: string[] = [];
-		let name: string | undefined;
+		return await parseSessionInfo(filePath, stats, true);
+	} catch {
+		/* Corrupt session file — exclude from listing */
+		return null;
+	}
+}
 
-		for (const entry of entries) {
-			// Extract session name (use latest, including explicit clears)
-			if (entry.type === "session_info") {
-				const infoEntry = entry as SessionInfoEntry;
-				name = infoEntry.name?.trim() || undefined;
-			}
-
-			if (entry.type !== "message") continue;
-			messageCount++;
-
-			const message = (entry as SessionMessageEntry).message;
-			if (!isMessageWithContent(message)) continue;
-			if (message.role !== "user" && message.role !== "assistant") continue;
-
-			const textContent = extractTextContent(message);
-			if (!textContent) continue;
-
-			allMessages.push(textContent);
-			if (!firstMessage && message.role === "user") {
-				firstMessage = textContent;
-			}
+async function buildSessionMetadata(filePath: string): Promise<SessionMetadata | null> {
+	try {
+		const stats = await stat(filePath);
+		const cached = sessionMetadataCache.get(filePath);
+		if (cached?.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+			return cached.metadata ? cloneSessionMetadata(cached.metadata) : null;
 		}
 
-		const cwd = typeof (header as SessionHeader).cwd === "string" ? (header as SessionHeader).cwd : "";
-		const parentSessionPath = (header as SessionHeader).parentSession;
+		const inflight = sessionMetadataInflight.get(filePath);
+		if (inflight?.mtimeMs === stats.mtimeMs && inflight.size === stats.size) {
+			const metadata = await inflight.promise;
+			return metadata ? cloneSessionMetadata(metadata) : null;
+		}
 
-		const modified = getSessionModifiedDate(entries, header as SessionHeader, stats.mtime);
-		const created = getSessionCreatedDate(header as SessionHeader, stats.mtime);
-
-		return {
-			path: filePath,
-			id: (header as SessionHeader).id,
-			cwd,
-			name,
-			parentSessionPath,
-			created,
-			modified,
-			messageCount,
-			firstMessage: firstMessage || "(no messages)",
-			allMessagesText: allMessages.join(" "),
-		};
+		const promise = parseSessionInfo(filePath, stats, false).then((info) => {
+			const metadata = info ? toSessionMetadata(info) : null;
+			sessionMetadataCache.set(filePath, {
+				mtimeMs: stats.mtimeMs,
+				size: stats.size,
+				metadata: metadata ? cloneSessionMetadata(metadata) : null,
+			});
+			return metadata;
+		});
+		const current = { mtimeMs: stats.mtimeMs, size: stats.size, promise };
+		sessionMetadataInflight.set(filePath, current);
+		try {
+			const metadata = await promise;
+			return metadata ? cloneSessionMetadata(metadata) : null;
+		} finally {
+			if (sessionMetadataInflight.get(filePath) === current) sessionMetadataInflight.delete(filePath);
+		}
 	} catch {
 		/* Corrupt session file — exclude from listing */
 		return null;
@@ -641,6 +716,19 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 }
 
 export type SessionListProgress = (loaded: number, total: number) => void;
+
+async function listAllSessionFiles(): Promise<string[]> {
+	const sessionsDir = getSessionsDir();
+	if (!existsSync(sessionsDir)) return [];
+	const entries = await readdir(sessionsDir, { withFileTypes: true });
+	const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => join(sessionsDir, entry.name));
+	const dirFiles = await Promise.all(
+		dirs.map(async (dir) =>
+			(await readdir(dir)).filter((file) => file.endsWith(".jsonl")).map((file) => join(dir, file)),
+		),
+	);
+	return dirFiles.flat();
+}
 
 async function listSessionsFromDir(
 	dir: string,
@@ -1534,47 +1622,46 @@ export class SessionManager {
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
 	static async listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]> {
-		const sessionsDir = getSessionsDir();
-
 		// A missing sessions directory is a legitimate empty state (fresh install), not a
-		// failure — return []. Any actual I/O failure below propagates loudly so callers can
-		// distinguish "no sessions" from "listing failed" (RPC responds success:false; the TUI
-		// selector surfaces "Failed to load sessions"). No silent catch-and-return-[].
-		if (!existsSync(sessionsDir)) {
-			return [];
-		}
-		const entries = await readdir(sessionsDir, { withFileTypes: true });
-		const dirs = entries.filter((e) => e.isDirectory()).map((e) => join(sessionsDir, e.name));
-
-		// Count total files first for accurate progress
-		let totalFiles = 0;
-		const dirFiles: string[][] = [];
-		for (const dir of dirs) {
-			const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-			dirFiles.push(files.map((f) => join(dir, f)));
-			totalFiles += files.length;
-		}
-
-		// Process all files with progress tracking
+		// failure. Actual I/O failures propagate so callers can distinguish "no sessions"
+		// from "listing failed".
+		const allFiles = await listAllSessionFiles();
 		let loaded = 0;
-		const sessions: SessionInfo[] = [];
-		const allFiles = dirFiles.flat();
-
 		const results = await Promise.all(
 			allFiles.map(async (file) => {
 				const info = await buildSessionInfo(file);
 				loaded++;
-				onProgress?.(loaded, totalFiles);
+				onProgress?.(loaded, allFiles.length);
 				return info;
 			}),
 		);
+		const sessions = results.filter((info): info is SessionInfo => info !== null);
+		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		return sessions;
+	}
 
-		for (const info of results) {
-			if (info) {
-				sessions.push(info);
-			}
+	/**
+	 * List lightweight metadata across all project directories.
+	 *
+	 * Results are cached by file mtime and size, so dashboard inventory refreshes
+	 * stat every session but only reread and parse files that changed.
+	 */
+	static async listAllMetadata(onProgress?: SessionListProgress): Promise<SessionMetadata[]> {
+		const allFiles = await listAllSessionFiles();
+		const currentFiles = new Set(allFiles);
+		for (const cachedPath of sessionMetadataCache.keys()) {
+			if (!currentFiles.has(cachedPath)) sessionMetadataCache.delete(cachedPath);
 		}
-
+		let loaded = 0;
+		const results = await Promise.all(
+			allFiles.map(async (file) => {
+				const metadata = await buildSessionMetadata(file);
+				loaded++;
+				onProgress?.(loaded, allFiles.length);
+				return metadata;
+			}),
+		);
+		const sessions = results.filter((metadata): metadata is SessionMetadata => metadata !== null);
 		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 		return sessions;
 	}

@@ -320,7 +320,7 @@ async function main(): Promise<void> {
 		staticDir: existsSync(staticDir) ? staticDir : undefined,
 		serverVersion,
 		onRestart,
-		listAllSessions: () => SessionManager.listAll(),
+		listAllSessions: () => SessionManager.listAllMetadata(),
 		deleteSession: async (path: string) => {
 			const result = await SessionManager.deleteSession(path, {});
 			if (!result.ok) throw new Error(result.error ?? "Unknown deletion error");

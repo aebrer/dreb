@@ -654,16 +654,17 @@ export function createAppStore() {
 		navigate({ screen: "session", key: runtime.key });
 	}
 
-	function refreshFleet(): Promise<void> {
+	function refreshFleet(): Promise<boolean> {
 		const requestGeneration = ++latestFleetRequestGeneration;
 		const mutationAtRequest = fleetMutationGeneration;
 		return api.fleet().then(
 			(next) => {
 				if (requestGeneration !== latestFleetRequestGeneration || mutationAtRequest !== fleetMutationGeneration) {
-					return;
+					return next.diskSessionsComplete !== false;
 				}
 				replaceFleet(next);
 				setFleetError(undefined);
+				return next.diskSessionsComplete !== false;
 			},
 			(err) => {
 				if (requestGeneration === latestFleetRequestGeneration && mutationAtRequest === fleetMutationGeneration) {
@@ -1207,7 +1208,7 @@ export function createAppStore() {
 			navigate({ screen: "pairing" });
 			return;
 		}
-		await refreshFleet().catch(() => {});
+		const diskSessionsComplete = await refreshFleet().catch(() => false);
 		disconnect = connectEvents({
 			onEnvelope: handleEnvelope,
 			onAuthStatus: applyAuthStatus,
@@ -1222,6 +1223,9 @@ export function createAppStore() {
 				void beginResync();
 			},
 		});
+		// Historical inventory can involve thousands of session files. Load it in
+		// the background so live cards and the reconnecting event stream are usable first.
+		if (!diskSessionsComplete) void refreshDiskSessions().catch(() => {});
 	}
 
 	function stop(): void {

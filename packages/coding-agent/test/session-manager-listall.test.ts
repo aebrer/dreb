@@ -2,9 +2,16 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.js";
 import { SessionManager } from "../src/core/session-manager.js";
+
+const readFileSpy = vi.hoisted(() => vi.fn());
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	readFileSpy.mockImplementation(actual.readFile);
+	return { ...actual, readFile: readFileSpy };
+});
 
 // listAll() scans getSessionsDir() = <agentDir>/sessions. We point the agent dir at a temp
 // directory via the ENV_AGENT_DIR override so these tests never touch the real store.
@@ -25,6 +32,7 @@ function writeSession(path: string): void {
 }
 
 afterEach(async () => {
+	readFileSpy.mockClear();
 	if (savedEnv === undefined) delete process.env[ENV_AGENT_DIR];
 	else process.env[ENV_AGENT_DIR] = savedEnv;
 	await Promise.all(tempDirs.splice(0, tempDirs.length).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -40,6 +48,28 @@ describe("SessionManager.listAll", () => {
 		const sessions = await SessionManager.listAll();
 
 		expect(sessions.map((s) => s.path)).toContain(join(projectDir, "one.jsonl"));
+	});
+
+	it("caches lightweight metadata and reparses only changed files", async () => {
+		const agentDir = await createAgentDir();
+		const projectDir = join(agentDir, "sessions", "project-a");
+		const sessionFile = join(projectDir, "one.jsonl");
+		mkdirSync(projectDir, { recursive: true });
+		writeSession(sessionFile);
+
+		await Promise.all([SessionManager.listAllMetadata(), SessionManager.listAllMetadata()]);
+		await SessionManager.listAllMetadata();
+		expect(readFileSpy).toHaveBeenCalledTimes(1);
+
+		writeFileSync(
+			sessionFile,
+			`${JSON.stringify({ type: "session", id: "s", version: 3, cwd: "/tmp", timestamp: new Date().toISOString() })}\n${JSON.stringify({ type: "message", id: "m", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: "changed" } })}\n`,
+			"utf8",
+		);
+		const sessions = await SessionManager.listAllMetadata();
+
+		expect(readFileSpy).toHaveBeenCalledTimes(2);
+		expect(sessions[0]).toMatchObject({ messageCount: 1, firstMessage: "changed" });
 	});
 
 	it("returns an empty list when the sessions directory does not exist yet (fresh install)", async () => {

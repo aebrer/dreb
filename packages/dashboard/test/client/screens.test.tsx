@@ -2222,6 +2222,58 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("/skill:test");
 	});
 
+	it("shows sub-agent cost when the parent session cost is zero", async () => {
+		vi.mocked(api.stats).mockResolvedValue({
+			sessionId: "s1",
+			userMessages: 0,
+			assistantMessages: 0,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 0,
+			tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			cost: 0,
+			subagentCost: 0.75,
+		});
+		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.75, main: 0, subagent: 0.75 });
+		const store = makeStore() as any;
+		const session = populatedSession("zero-parent-cost");
+		const fakeStore = {
+			...store,
+			sessions: { "zero-parent-cost": session },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "zero-parent-cost",
+						cwd: "/home/test/project",
+						state: {
+							sessionId: "s1",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+							usingSubscription: false,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="zero-parent-cost" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("$0.000 + $0.750 subs");
+	});
+
 	it("keeps mounted header details live and refreshes context when compaction ends", async () => {
 		const baseStore = makeStore() as any;
 		const session = createSessionViewState("live");

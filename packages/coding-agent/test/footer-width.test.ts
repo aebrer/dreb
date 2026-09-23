@@ -69,14 +69,14 @@ function createSession(options: {
 	return session as unknown as AgentSession;
 }
 
-function createFooterData(providerCount: number, dailyCost = 0): ReadonlyFooterDataProvider {
+function createFooterData(providerCount: number, dailyCost = 0, subagentCost = 0): ReadonlyFooterDataProvider {
 	const provider = {
 		getGitBranch: () => "main",
 		getExtensionStatuses: () => new Map<string, string>(),
 		getAvailableProviderCount: () => providerCount,
 		getDailyCost: () => dailyCost,
-		getDailyCostBreakdown: () => ({ total: dailyCost, main: dailyCost, subagent: 0 }),
-		getSubagentSessionCost: () => 0,
+		getDailyCostBreakdown: () => ({ total: dailyCost, main: dailyCost - subagentCost, subagent: subagentCost }),
+		getSubagentSessionCost: () => subagentCost,
 		onBranchChange: (callback: () => void) => {
 			void callback;
 			return () => {};
@@ -144,6 +144,15 @@ describe("FooterComponent width handling", () => {
 		const lines = footer.render(width);
 		const rawStats = lines[1];
 		expect(rawStats).not.toContain("today");
+	});
+
+	it("shows sub-agent cost when the parent session cost is zero", () => {
+		const session = createSession({ sessionName: "" });
+		const footer = new FooterComponent(session, createFooterData(1, 0.75, 0.75));
+
+		const lines = footer.render(80);
+
+		expect(lines.join("\n")).toContain("$0.000 + $0.750 subs");
 	});
 
 	it("keeps stats line within width for wide model and provider names", () => {

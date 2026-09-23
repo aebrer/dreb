@@ -9,6 +9,11 @@ export default defineConfig({
 		globals: true,
 		environment: "node",
 		testTimeout: 10000,
+		// Real-browser source fixtures start Chromium and independent Vite servers.
+		// Serialize files so those mobile acceptance paths measure the app instead
+		// of starving each other during transform and browser startup.
+		fileParallelism: false,
+		sequence: { groupOrder: 1 },
 	},
 	resolve: {
 		conditions: ["development", "browser"],

@@ -327,23 +327,29 @@ duplicating it.
 
 ## Fleet transport and freshness
 
-A normal dashboard load makes one authoritative `GET /api/fleet`; the fleet is
-also included in the ordered `/api/resync` response only during exceptional
-recovery. After initial load, global event-derived `fleet_snapshot` SSE frames
-update live runtime cards. The runtime pool emits those frames with a 200 ms
-debounce from its in-memory state, so an update performs neither child RPC calls
-nor a disk inventory scan.
+A normal dashboard load is live-first: `GET /api/fleet/live` returns the live
+runtime cards without scanning historical session logs, the SSE connection opens,
+and `GET /api/sessions` fills the on-disk inventory in the background. This keeps
+live cards and reconnect status responsive even when the host has thousands of
+saved sessions. The combined `GET /api/fleet` remains available for diagnostics,
+and the fleet is included in the ordered `/api/resync` response only during
+exceptional recovery. After initial load, global event-derived `fleet_snapshot`
+SSE frames update live runtime cards. The runtime pool emits those frames with a
+200 ms debounce from its in-memory state, so an update performs neither child RPC
+calls nor a disk inventory scan.
 
 Live runtime state and on-disk session inventory have separate refresh paths.
-Before fleet, inventory, or resync serialization, the server explicitly projects
-each on-disk session to the declared browser DTO, includes server-validated
-historical-CWD availability and its canonical candidate, and bounds its
-first-message preview to 256 Unicode characters. Unavailable historical paths
-remain visible but do not enter operational project-root inventories. Internal
-parent paths and complete searchable transcript text never cross this browser
-boundary. After creating, resuming,
-stopping, or deleting a session, the client narrowly refreshes the disk list
-through `GET /api/sessions` rather than reloading the whole fleet. While the
+The server's lightweight session inventory caches projected metadata by session
+file mtime and size: each refresh stats the files, but rereads and parses only
+new or changed logs. Before fleet, inventory, or resync serialization, the server
+explicitly projects each on-disk session to the declared browser DTO, includes
+server-validated historical-CWD availability and its canonical candidate, and
+bounds its first-message preview to 256 Unicode characters. Unavailable historical
+paths remain visible but do not enter operational project-root inventories.
+Internal parent paths and complete searchable transcript text never cross this
+browser boundary. After creating, resuming, stopping, or deleting a session, the
+client narrowly refreshes the disk list through `GET /api/sessions` rather than
+reloading the whole fleet. While the
 Fleet screen or a session/subagent fleet sidebar is visible, it polls live-runtime
 stats on a shared 30-second cadence. That poll is single-flight, retains a
 card's last good stats if an update fails, and surfaces failures in the visible

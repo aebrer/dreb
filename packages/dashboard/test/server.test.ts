@@ -498,6 +498,17 @@ describe("dashboard server — pairing code", () => {
 });
 
 describe("dashboard server — fleet and runtimes", () => {
+	it("GET /api/fleet/live returns live runtimes without scanning disk sessions", async () => {
+		const listAllSessions = vi.fn(async () => [diskSession("/tmp")]);
+		const { base } = await startServer({ listAllSessions });
+
+		const res = await fetch(`${base}/api/fleet/live`);
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ runtimes: [], diskSessions: [], diskSessionsComplete: false });
+		expect(listAllSessions).not.toHaveBeenCalled();
+	});
+
 	it("GET /api/fleet returns runtimes and disk sessions", async () => {
 		const dir = await createTempProject();
 		const disk = [diskSession(dir, { path: "/s/one.jsonl" })];

@@ -2912,8 +2912,13 @@ export class InteractiveMode {
 				break;
 			}
 
-			case "background_agent_start":
+			case "background_agent_start": {
+				this.updateBackgroundAgentStatus();
+				break;
+			}
+
 			case "background_agent_end": {
+				await this.footerDataProvider.refreshSubagentSessionCost();
 				this.updateBackgroundAgentStatus();
 				break;
 			}

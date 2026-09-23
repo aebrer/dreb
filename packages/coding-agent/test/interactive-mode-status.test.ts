@@ -127,7 +127,11 @@ describe("InteractiveMode working indicator", () => {
 			checkShutdownRequested: vi.fn(async () => {}),
 			showWarning: vi.fn(),
 			buddyController: { handleEvent: vi.fn() },
-			footerDataProvider: { refreshDailyCost: vi.fn(async () => {}) },
+			footerDataProvider: {
+				refreshDailyCost: vi.fn(async () => {}),
+				refreshSubagentSessionCost: vi.fn(async () => {}),
+			},
+			updateBackgroundAgentStatus: vi.fn(),
 		};
 		for (const method of [
 			"defaultInterruptWorkingMessage",
@@ -145,6 +149,15 @@ describe("InteractiveMode working indicator", () => {
 		}
 		return { fakeThis, inlineStatuses };
 	}
+
+	test("background_agent_end refreshes per-session sub-agent cost before updating status", async () => {
+		const { fakeThis } = createWorkingFakeThis();
+
+		await dispatchEvent(fakeThis, { type: "background_agent_end" });
+
+		expect(fakeThis.footerDataProvider.refreshSubagentSessionCost).toHaveBeenCalledOnce();
+		expect(fakeThis.updateBackgroundAgentStatus).toHaveBeenCalledOnce();
+	});
 
 	test("agent_start renders working state through editor inline status, not statusContainer", async () => {
 		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
