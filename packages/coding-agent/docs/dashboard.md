@@ -33,6 +33,12 @@ install instructions (`npm install -g @dreb/dashboard`).
 
 Open `http://127.0.0.1:5343` on the same machine.
 
+## Session inventory roots
+
+Dashboard snapshots main-session storage at startup. Its host-wide inventory reads only the global `sessionDir` from `<agent-dir>/settings.json`; a project `.dreb/settings.json` in the launch directory cannot redirect Fleet, `/api/sessions`, resync, resume, or delete. A configured root is a flat JSONL store. Without one, Dashboard scans the built-in nested all-project tree.
+
+Absolute paths remain absolute, `~` expands from the home directory, and relative paths resolve against Dashboard's startup cwd; an absolute global path is recommended. Restart Dashboard after changing the setting. The separate global-only `subagentSessionDir` controls new child logs in coding-agent runtimes, while restart recovery can also discover matching logs in the legacy root. Neither setting migrates files or relocates credentials or general configuration. See [Session settings](settings.md#sessions).
+
 ## Local vs remote — exactly two modes
 
 **Local-only (default).** The server binds `127.0.0.1` exclusively. Machines

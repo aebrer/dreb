@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { complete, completeSimple, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { getSubagentSessionsDir } from "../src/config.js";
 import type { ExtensionContext } from "../src/core/extensions/types.js";
 import { log } from "../src/core/logger.js";
 import {
@@ -2339,13 +2340,14 @@ describe("subagent tool agentModels wiring (issue 219, finding 4)", () => {
 	 * resolves with the background SubagentResult so tests can await the async
 	 * background lifecycle before asserting on the mocked spawn args.
 	 */
-	function makeTool(getter?: (name: string) => string[] | undefined) {
+	function makeTool(getter?: (name: string) => string[] | undefined, subagentSessionsDir?: string) {
 		const lookupSpy = vi.fn(getter ?? ((name: string) => (name === "feature-dev" ? ["override/model"] : undefined)));
 		let resolveDone: (r: SubagentResult) => void;
 		const done = new Promise<SubagentResult>((res) => {
 			resolveDone = res;
 		});
 		const tool = createSubagentToolDefinition(tmpRoot, {
+			subagentSessionsDir,
 			getAgentModelsForAgent: lookupSpy,
 			onBackgroundComplete: (_id, result) => resolveDone(result),
 			// No modelRegistry / parentProvider: resolution stays registry-less.
@@ -2484,6 +2486,52 @@ describe("subagent tool agentModels wiring (issue 219, finding 4)", () => {
 		expect(step1Args).toContain("override/model");
 		expect(step2Args).toContain("config/explore-model");
 		expect(step2Args).not.toContain("override/model");
+	});
+
+	test("custom subagent root reaches a single child's --session-dir", async () => {
+		mockSpawnSubagentResult({ model: "config/explore-model", output: "ok" });
+		const customRoot = join(tmpRoot, "custom-subagent-root");
+		const { tool, done } = makeTool(() => undefined, customRoot);
+
+		await tool.execute("custom-single", { task: "look around" }, undefined, undefined, {} as ExtensionContext);
+		await done;
+
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+		const sessionDirIndex = spawnArgs.indexOf("--session-dir");
+		expect(sessionDirIndex).toBeGreaterThan(-1);
+		expect(spawnArgs[sessionDirIndex + 1]?.startsWith(customRoot)).toBe(true);
+	});
+
+	test("custom subagent root preserves the chain/step session layout", async () => {
+		mockSpawnSubagentResult({ model: "config/explore-model", output: "step output" });
+		const customRoot = join(tmpRoot, "custom-chain-root");
+		const { tool, done } = makeTool(() => undefined, customRoot);
+
+		await tool.execute(
+			"custom-chain",
+			{ chain: [{ agent: "Explore", task: "step one" }] },
+			undefined,
+			undefined,
+			{} as ExtensionContext,
+		);
+		await done;
+
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+		const sessionDir = spawnArgs[spawnArgs.indexOf("--session-dir") + 1];
+		expect(sessionDir.startsWith(join(customRoot, "chain-"))).toBe(true);
+		expect(sessionDir.endsWith(join("step-1"))).toBe(true);
+	});
+
+	test("the default tool path remains the legacy subagent root", async () => {
+		mockSpawnSubagentResult({ model: "config/explore-model", output: "ok" });
+		const { tool, done } = makeTool(() => undefined);
+
+		await tool.execute("default-root", { task: "look around" }, undefined, undefined, {} as ExtensionContext);
+		await done;
+
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+		const sessionDir = spawnArgs[spawnArgs.indexOf("--session-dir") + 1];
+		expect(sessionDir.startsWith(getSubagentSessionsDir())).toBe(true);
 	});
 });
 

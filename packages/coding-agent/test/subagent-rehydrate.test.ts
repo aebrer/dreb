@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { log } from "../src/core/logger.js";
 import {
 	discoverSessionFile,
 	getBackgroundAgents,
@@ -19,6 +20,43 @@ function writeJsonl(filePath: string, entries: unknown[]): void {
 	writeFileSync(filePath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
 }
 
+function writeChildSession(
+	baseDir: string,
+	name: string,
+	parentSessionFile: string,
+	task: string,
+): { childDir: string; sessionFile: string } {
+	const childDir = join(baseDir, name);
+	mkdirSync(childDir, { recursive: true });
+	const sessionFile = join(childDir, `${name}.jsonl`);
+	writeJsonl(sessionFile, [
+		{
+			type: "session",
+			version: 3,
+			id: name,
+			timestamp: "2026-01-02T03:05:00.000Z",
+			cwd: baseDir,
+			parentSession: parentSessionFile,
+			agentType: "Explore",
+		},
+		{
+			type: "message",
+			id: `${name}-user`,
+			parentId: null,
+			timestamp: "2026-01-02T03:05:01.000Z",
+			message: { role: "user", content: task },
+		},
+		{
+			type: "message",
+			id: `${name}-assistant`,
+			parentId: `${name}-user`,
+			timestamp: "2026-01-02T03:05:02.000Z",
+			message: { role: "assistant", content: [{ type: "text", text: "Done" }], stopReason: "stop" },
+		},
+	]);
+	return { childDir, sessionFile };
+}
+
 describe("rehydrateBackgroundAgentsFromDisk", () => {
 	let tempDir: string;
 	let subagentSessionsBase: string;
@@ -32,6 +70,7 @@ describe("rehydrateBackgroundAgentsFromDisk", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		pruneBackgroundAgents(0);
 		if (existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -156,6 +195,95 @@ describe("rehydrateBackgroundAgentsFromDisk", () => {
 			sessionFile: step1SessionFile,
 			cwd: tempDir,
 		});
+	});
+
+	test("discovers matching sessions from configured and legacy roots in order", () => {
+		const configuredRoot = join(tempDir, "configured-subagents");
+		mkdirSync(configuredRoot, { recursive: true });
+		const configured = writeChildSession(configuredRoot, "configured-child", parentSessionFile, "configured task");
+		const legacy = writeChildSession(subagentSessionsBase, "legacy-child", parentSessionFile, "legacy task");
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, [configuredRoot, subagentSessionsBase])).toBe(2);
+		const matching = getBackgroundAgents().filter(
+			(agent) => agent.sessionFile === configured.sessionFile || agent.sessionFile === legacy.sessionFile,
+		);
+		expect(matching.map((agent) => agent.sessionDir)).toEqual([configured.childDir, legacy.childDir]);
+	});
+
+	test("continues to later roots when the configured root is missing", () => {
+		const legacy = writeChildSession(subagentSessionsBase, "legacy-after-missing", parentSessionFile, "legacy task");
+
+		expect(
+			rehydrateBackgroundAgentsFromDisk(parentSessionFile, [
+				join(tempDir, "missing-configured"),
+				subagentSessionsBase,
+			]),
+		).toBe(1);
+		expect(getBackgroundAgents().some((agent) => agent.sessionFile === legacy.sessionFile)).toBe(true);
+	});
+
+	test("fails loudly instead of returning a normal legacy-only registry when the configured root is invalid", () => {
+		const invalidConfiguredRoot = join(tempDir, "configured-root-is-a-file");
+		writeFileSync(invalidConfiguredRoot, "not a directory\n");
+		const legacy = writeChildSession(
+			subagentSessionsBase,
+			"legacy-hidden-by-error",
+			parentSessionFile,
+			"legacy task",
+		);
+
+		expect(() =>
+			rehydrateBackgroundAgentsFromDisk(parentSessionFile, [invalidConfiguredRoot, subagentSessionsBase]),
+		).toThrow();
+		expect(getBackgroundAgents().some((agent) => agent.sessionFile === legacy.sessionFile)).toBe(false);
+	});
+
+	test("warns and skips an invalid compatibility root after recovering the configured root", () => {
+		const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+		const configuredRoot = join(tempDir, "configured-subagents");
+		mkdirSync(configuredRoot, { recursive: true });
+		const configured = writeChildSession(configuredRoot, "configured-child", parentSessionFile, "configured task");
+		rmSync(subagentSessionsBase, { recursive: true, force: true });
+		writeFileSync(subagentSessionsBase, "not a directory\n");
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, [configuredRoot, subagentSessionsBase])).toBe(1);
+		expect(getBackgroundAgents().some((agent) => agent.sessionFile === configured.sessionFile)).toBe(true);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("skipped compatibility-root recovery"));
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining(subagentSessionsBase));
+	});
+
+	test("warns and skips broken compatibility entries while recovering valid siblings", () => {
+		const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+		const configuredRoot = join(tempDir, "configured-subagents");
+		mkdirSync(configuredRoot, { recursive: true });
+		const brokenChildDir = join(subagentSessionsBase, "broken-child");
+		symlinkSync("broken-child", brokenChildDir, "dir");
+		const legacy = writeChildSession(subagentSessionsBase, "legacy-child", parentSessionFile, "legacy task");
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, [configuredRoot, subagentSessionsBase])).toBe(1);
+		expect(getBackgroundAgents().some((agent) => agent.sessionFile === legacy.sessionFile)).toBe(true);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining(`entry ${brokenChildDir}`));
+	});
+
+	test("propagates operational failures from entries in the primary root", () => {
+		const brokenChildDir = join(subagentSessionsBase, "broken-primary-child");
+		symlinkSync("broken-primary-child", brokenChildDir, "dir");
+
+		expect(() => rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toThrow();
+	});
+
+	test("prefers the configured path spelling and deduplicates symlinked or repeated roots", () => {
+		writeChildSession(subagentSessionsBase, "shared-child", parentSessionFile, "shared task");
+		const configuredAlias = join(tempDir, "configured-alias");
+		symlinkSync(subagentSessionsBase, configuredAlias, "dir");
+
+		expect(
+			rehydrateBackgroundAgentsFromDisk(parentSessionFile, [configuredAlias, subagentSessionsBase, configuredAlias]),
+		).toBe(1);
+		const matching = getBackgroundAgents().filter((agent) => agent.taskSummary === "shared task");
+		expect(matching).toHaveLength(1);
+		expect(matching[0]?.sessionDir).toBe(join(configuredAlias, "shared-child"));
+		expect(matching[0]?.sessionFile).toBe(join(configuredAlias, "shared-child", "shared-child.jsonl"));
 	});
 
 	test("ignores child sessions whose parentSession does not match", () => {

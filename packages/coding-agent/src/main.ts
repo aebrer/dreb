@@ -14,7 +14,14 @@ import { processFileArguments } from "./cli/file-processor.js";
 import { buildInitialMessage } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
 import { selectSession } from "./cli/session-picker.js";
-import { APP_NAME, getAgentDir, getModelsPath, loadProvidersEnv, VERSION } from "./config.js";
+import {
+	APP_NAME,
+	getAgentDir,
+	getModelsPath,
+	loadProvidersEnv,
+	resolveConfiguredDirectory,
+	VERSION,
+} from "./config.js";
 import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { LoadExtensionsResult } from "./core/extensions/index.js";
@@ -419,6 +426,22 @@ async function callSessionDirectoryHook(extensions: LoadExtensionsResult, cwd: s
 	return customSessionDir;
 }
 
+/** Resolve CLI > merged settings > extension-hook session directory precedence. */
+async function resolveEffectiveSessionDirectory(
+	parsed: Args,
+	settingsManager: SettingsManager,
+	extensions: LoadExtensionsResult,
+	cwd: string,
+): Promise<string | undefined> {
+	const cliDir = resolveConfiguredDirectory(parsed.sessionDir, cwd);
+	if (cliDir) return cliDir;
+
+	const settingsDir = resolveConfiguredDirectory(settingsManager.getSessionDir(), cwd);
+	if (settingsDir) return settingsDir;
+
+	return resolveConfiguredDirectory(await callSessionDirectoryHook(extensions, cwd), cwd);
+}
+
 function validateForkFlags(parsed: Args): void {
 	if (!parsed.fork) return;
 
@@ -451,13 +474,12 @@ async function createSessionManager(
 	extensions: LoadExtensionsResult,
 	settingsManager: SettingsManager,
 ): Promise<SessionManager | undefined> {
+	// Inventory keeps the same CLI > settings > extension precedence even when
+	// the active conversation itself is in-memory via --no-session.
+	const effectiveSessionDir = await resolveEffectiveSessionDirectory(parsed, settingsManager, extensions, cwd);
 	if (parsed.noSession) {
-		return SessionManager.inMemory();
+		return SessionManager.inMemory(cwd, effectiveSessionDir);
 	}
-
-	// Priority: CLI flag > settings.json > extension hook
-	const effectiveSessionDir =
-		parsed.sessionDir ?? settingsManager.getSessionDir() ?? (await callSessionDirectoryHook(extensions, cwd));
 
 	if (parsed.fork) {
 		const resolved = await resolveSessionPath(parsed.fork, cwd, effectiveSessionDir);
@@ -869,10 +891,12 @@ export async function main(args: string[]) {
 	// Handle --resume: show session picker
 	if (parsed.resume) {
 		// Compute effective session dir for resume (same logic as createSessionManager)
-		const effectiveSessionDir =
-			parsed.sessionDir ??
-			settingsManager.getSessionDir() ??
-			(await callSessionDirectoryHook(extensionsResult, cwd));
+		const effectiveSessionDir = await resolveEffectiveSessionDirectory(
+			parsed,
+			settingsManager,
+			extensionsResult,
+			cwd,
+		);
 
 		const selectedPath = await selectSession(
 			(onProgress) => SessionManager.list(cwd, effectiveSessionDir, onProgress),

@@ -384,15 +384,27 @@ dreb includes two built-in layers of protection against accidental credential ex
 
 ### Sessions
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `sessionDir` | string | - | Directory where session files are stored. Accepts absolute or relative paths. |
+Main-session and subagent transcripts have separate storage roots:
+
+| Setting | Scope | Default | Description |
+|---------|-------|---------|-------------|
+| `sessionDir` | Global or project | Built-in nested per-project store | Flat directory for main-session JSONL files. |
+| `subagentSessionDir` | Global only | `<agent-dir>/subagent-sessions` | Root containing per-launch subagent directories. Project values are ignored. |
 
 ```json
-{ "sessionDir": ".dreb/sessions" }
+{
+  "sessionDir": "~/dreb/main-sessions",
+  "subagentSessionDir": "~/dreb/subagent-sessions"
+}
 ```
 
-When multiple sources specify a session directory, `--session-dir` CLI flag takes precedence, then `sessionDir` in settings.json, then extension hooks.
+For main CLI sessions, precedence is `--session-dir`, the effective merged settings value (project may override global), the `session_directory` extension hook, then the built-in store. A configured main root is flat: session JSONL files are written directly in that directory. RPC `list_all_sessions` uses that flat root when the active session manager was created with it; otherwise it retains built-in all-project discovery.
+
+Dashboard host-wide inventory is deliberately different: it reads only the global `sessionDir`, never a project override from the directory that launched Dashboard. It snapshots the value at server startup and either lists that flat directory or the built-in nested all-project tree. Restart Dashboard after changing it; an absolute global path is recommended.
+
+`subagentSessionDir` has no CLI flag and project settings cannot override it. Each AgentSession resolves the global value against its runtime cwd and uses it for new single, parallel, and chain child logs. If the configured root differs from the legacy `<agent-dir>/subagent-sessions` location, restart-time RPC rehydration scans the configured root first and the legacy root second, deduplicating canonical paths. This is discovery compatibility only: dreb does not move, copy, or delete old logs.
+
+Both settings accept the same path syntax: absolute paths stay absolute, `~` and `~/...` expand from the user home directory, and relative paths resolve against an explicit runtime base. That base is the main CLI cwd for CLI settings/flags/hooks, Dashboard's startup cwd for its global main inventory, and the AgentSession runtime cwd for `subagentSessionDir`. Empty or whitespace-only values are treated as unset. These roots affect transcripts only; they do not relocate credentials, `settings.json`, or other agent configuration.
 
 ### Model Cycling
 

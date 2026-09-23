@@ -68,10 +68,14 @@ Never write the partially updated guide before all added-model research and fina
 
 ## Step 3: Snapshot and validate local subagent evidence
 
-Before launching any research subagent or doing work that may create child sessions, snapshot the existing `*.jsonl` files under `~/.dreb/agent/subagent-sessions/`. Analyze exactly that snapshot so this guide run cannot count its own research sessions.
+Before launching any research subagent or doing work that may create child sessions, determine the ordered subagent discovery roots and snapshot the existing `*.jsonl` files beneath them. Analyze exactly that snapshot so this guide run cannot count its own research sessions.
 
-- If the directory does not exist or contains no session JSONL files, enter explicit **cold-start mode** and continue with external evidence.
-- If files exist, every snapshotted file is required evidence. Verify each is readable and every non-empty JSONL line parses. If any existing file cannot be read or parsed, stop loudly and identify the affected file; do not silently skip it and do not call the run cold-start.
+1. Read `subagentSessionDir` only from the global `<agent-dir>/settings.json`; ignore any project `.dreb/settings.json` value. The legacy root is `<agent-dir>/subagent-sessions` (normally `~/.dreb/agent/subagent-sessions`, with the normal agent-directory environment override honored).
+2. If the global setting is non-empty, resolve an absolute value as-is, expand `~`/`~/...` from the user home, and resolve a relative value against this AgentSession's current working directory. Use that configured write root first and the legacy root second when they differ. If unset/whitespace, use only the legacy root.
+3. Continue when a root is absent. Canonicalize existing roots and log files with realpath when possible (resolved-path fallback; case-fold on Windows), and deduplicate overlaps/symlinks while preserving configured-root precedence. Do not move, copy, delete, or rewrite session files.
+
+- If all discovery roots are absent or contain no session JSONL files, enter explicit **cold-start mode** and continue with external evidence.
+- If files exist, every deduplicated snapshotted file is required evidence. Verify each is readable and every non-empty JSONL line parses. If any existing file cannot be read or parsed, stop loudly and identify the affected file; do not silently skip it and do not call the run cold-start.
 - Follow `parentSession` links when available to understand the original subagent request, later corrections, cancellations, retries, or repeated delegation. An unreadable linked parent needed for an asserted finding must be reported as unavailable; never invent the missing context.
 
 For each child session, assess more than its exit state:
@@ -96,7 +100,7 @@ The generated guide must never reproduce or closely paraphrase:
 - credentials, tokens, internal URLs, personal data, or secret values;
 - repository/project/customer names, branch names, absolute paths, filenames that identify confidential work, or proprietary terminology.
 
-Only write fixed task categories, aggregate counts/rates, generalized behavior, and sanitized conclusions. Do not include illustrative excerpts. Report the analyzed location generically as `~/.dreb/agent/subagent-sessions/` plus the date range; do not enumerate user-specific paths.
+Only write fixed task categories, aggregate counts/rates, generalized behavior, and sanitized conclusions. Do not include illustrative excerpts. Report analyzed locations generically as `configured subagent root` and/or `legacy subagent root` plus the date range; do not enumerate user-specific paths.
 
 ## Step 4: Research every required canonical provider/model
 
@@ -135,7 +139,8 @@ covered_model_ids:
   - "provider/model-id"
 local_evidence: "available" # or "cold-start"
 analyzed_session_directories:
-  - "~/.dreb/agent/subagent-sessions/"
+  - "configured subagent root" # omit when unset/same as legacy
+  - "legacy subagent root"
 session_date_range:
   start: "YYYY-MM-DD" # null in cold-start mode
   end: "YYYY-MM-DD"   # null in cold-start mode

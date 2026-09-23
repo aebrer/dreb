@@ -698,6 +698,29 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("global-only subagentSessionDir", () => {
+		it("returns undefined when the global setting is unset", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalSubagentSessionDir()).toBeUndefined();
+		});
+
+		it("returns the configured global subagent session root", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ subagentSessionDir: "~/private-subagents" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalSubagentSessionDir()).toBe("~/private-subagents");
+		});
+
+		it("ignores a project override", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ subagentSessionDir: "/global/subagents" }));
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ subagentSessionDir: "/project/subagents" }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalSubagentSessionDir()).toBe("/global/subagents");
+		});
+	});
+
 	describe("agentModels", () => {
 		it("should roundtrip set then getAgentModelsForAgent", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

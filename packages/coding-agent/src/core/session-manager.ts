@@ -15,7 +15,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "fs";
-import { join, resolve } from "path";
+import { dirname, join, resolve, sep } from "path";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
 	type BashExecutionMessage,
@@ -190,6 +190,7 @@ export type ReadonlySessionManager = Pick<
 	SessionManager,
 	| "getCwd"
 	| "getSessionDir"
+	| "getCustomSessionInventoryRoot"
 	| "getSessionId"
 	| "getSessionFile"
 	| "getLeafId"
@@ -668,17 +669,22 @@ async function parseSessionInfo(
 	};
 }
 
-async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
+function isFilesystemError(error: unknown): boolean {
+	return typeof (error as NodeJS.ErrnoException | undefined)?.code === "string";
+}
+
+async function buildSessionInfo(filePath: string, throwOnFilesystemError = false): Promise<SessionInfo | null> {
 	try {
 		const stats = await stat(filePath);
 		return await parseSessionInfo(filePath, stats, true);
-	} catch {
+	} catch (error) {
+		if (throwOnFilesystemError && isFilesystemError(error)) throw error;
 		/* Corrupt session file — exclude from listing */
 		return null;
 	}
 }
 
-async function buildSessionMetadata(filePath: string): Promise<SessionMetadata | null> {
+async function buildSessionMetadata(filePath: string, throwOnFilesystemError = false): Promise<SessionMetadata | null> {
 	try {
 		const stats = await stat(filePath);
 		const cached = sessionMetadataCache.get(filePath);
@@ -709,13 +715,40 @@ async function buildSessionMetadata(filePath: string): Promise<SessionMetadata |
 		} finally {
 			if (sessionMetadataInflight.get(filePath) === current) sessionMetadataInflight.delete(filePath);
 		}
-	} catch {
+	} catch (error) {
+		if (throwOnFilesystemError && isFilesystemError(error)) throw error;
 		/* Corrupt session file — exclude from listing */
 		return null;
 	}
 }
 
 export type SessionListProgress = (loaded: number, total: number) => void;
+
+async function collectSessionMetadata(
+	files: string[],
+	isInScope: (cachedPath: string) => boolean,
+	onProgress?: SessionListProgress,
+	throwOnFilesystemError = false,
+): Promise<SessionMetadata[]> {
+	// Prune cache entries for deleted files, but only within the scanned scope so
+	// default and custom-directory listings don't evict each other's entries.
+	const currentFiles = new Set(files);
+	for (const cachedPath of sessionMetadataCache.keys()) {
+		if (isInScope(cachedPath) && !currentFiles.has(cachedPath)) sessionMetadataCache.delete(cachedPath);
+	}
+	let loaded = 0;
+	const results = await Promise.all(
+		files.map(async (file) => {
+			const metadata = await buildSessionMetadata(file, throwOnFilesystemError);
+			loaded++;
+			onProgress?.(loaded, files.length);
+			return metadata;
+		}),
+	);
+	const sessions = results.filter((metadata): metadata is SessionMetadata => metadata !== null);
+	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	return sessions;
+}
 
 async function listAllSessionFiles(): Promise<string[]> {
 	const sessionsDir = getSessionsDir();
@@ -735,33 +768,40 @@ async function listSessionsFromDir(
 	onProgress?: SessionListProgress,
 	progressOffset = 0,
 	progressTotal?: number,
+	throwOnFilesystemError = false,
 ): Promise<SessionInfo[]> {
 	const sessions: SessionInfo[] = [];
-	if (!existsSync(dir)) {
+	if (!throwOnFilesystemError && !existsSync(dir)) {
 		return sessions;
 	}
 
+	let dirEntries: string[];
 	try {
-		const dirEntries = await readdir(dir);
-		const files = dirEntries.filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f));
-		const total = progressTotal ?? files.length;
+		dirEntries = await readdir(dir);
+	} catch (error) {
+		if (throwOnFilesystemError && (error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") throw error;
+		return sessions;
+	}
 
+	const files = dirEntries.filter((file) => file.endsWith(".jsonl")).map((file) => join(dir, file));
+	const total = progressTotal ?? files.length;
+
+	try {
 		let loaded = 0;
 		const results = await Promise.all(
 			files.map(async (file) => {
-				const info = await buildSessionInfo(file);
+				const info = await buildSessionInfo(file, throwOnFilesystemError);
 				loaded++;
 				onProgress?.(progressOffset + loaded, total);
 				return info;
 			}),
 		);
 		for (const info of results) {
-			if (info) {
-				sessions.push(info);
-			}
+			if (info) sessions.push(info);
 		}
-	} catch {
-		/* Session directory read failed — return partial results */
+	} catch (error) {
+		if (throwOnFilesystemError) throw error;
+		/* Session file read failed — return partial results */
 	}
 
 	return sessions;
@@ -782,6 +822,7 @@ export class SessionManager {
 	private sessionId: string = "";
 	private sessionFile: string | undefined;
 	private sessionDir: string;
+	private customSessionInventoryRoot: string | undefined;
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
@@ -790,9 +831,16 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
 
-	private constructor(cwd: string, sessionDir: string, sessionFile: string | undefined, persist: boolean) {
+	private constructor(
+		cwd: string,
+		sessionDir: string,
+		sessionFile: string | undefined,
+		persist: boolean,
+		customSessionInventoryRoot?: string,
+	) {
 		this.cwd = cwd;
 		this.sessionDir = sessionDir;
+		this.customSessionInventoryRoot = customSessionInventoryRoot;
 		this.persist = persist;
 		if (persist && sessionDir && !existsSync(sessionDir)) {
 			mkdirSync(sessionDir, { recursive: true });
@@ -928,6 +976,14 @@ export class SessionManager {
 
 	getSessionDir(): string {
 		return this.sessionDir;
+	}
+
+	/**
+	 * Flat inventory root selected explicitly for this manager, if any.
+	 * Built-in per-project managers and in-memory managers return undefined.
+	 */
+	getCustomSessionInventoryRoot(): string | undefined {
+		return this.customSessionInventoryRoot;
 	}
 
 	getSessionId(): string {
@@ -1445,9 +1501,11 @@ export class SessionManager {
 	 * @param cwd Working directory (stored in session header)
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.dreb/agent/sessions/<encoded-cwd>/).
 	 */
-	static create(cwd: string, sessionDir?: string): SessionManager {
+	static create(cwd: string, sessionDir?: string, options: { customSessionInventory?: boolean } = {}): SessionManager {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
-		return new SessionManager(cwd, dir, undefined, true);
+		const customInventoryRoot =
+			sessionDir !== undefined && options.customSessionInventory !== false ? sessionDir : undefined;
+		return new SessionManager(cwd, dir, undefined, true, customInventoryRoot);
 	}
 
 	/**
@@ -1462,7 +1520,7 @@ export class SessionManager {
 		const cwd = header?.cwd ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ?? resolve(path, "..");
-		return new SessionManager(cwd, dir, path, true);
+		return new SessionManager(cwd, dir, path, true, sessionDir);
 	}
 
 	/**
@@ -1474,14 +1532,14 @@ export class SessionManager {
 		const dir = sessionDir ?? getDefaultSessionDir(cwd);
 		const mostRecent = findMostRecentSession(dir);
 		if (mostRecent) {
-			return new SessionManager(cwd, dir, mostRecent, true);
+			return new SessionManager(cwd, dir, mostRecent, true, sessionDir);
 		}
-		return new SessionManager(cwd, dir, undefined, true);
+		return new SessionManager(cwd, dir, undefined, true, sessionDir);
 	}
 
-	/** Create an in-memory session (no file persistence) */
-	static inMemory(cwd: string = process.cwd()): SessionManager {
-		return new SessionManager(cwd, "", undefined, false);
+	/** Create an in-memory session (no active-file persistence), optionally retaining a flat inventory root. */
+	static inMemory(cwd: string = process.cwd(), customSessionInventoryRoot?: string): SessionManager {
+		return new SessionManager(cwd, "", undefined, false, customSessionInventoryRoot);
 	}
 
 	/**
@@ -1531,7 +1589,7 @@ export class SessionManager {
 			}
 		}
 
-		return new SessionManager(targetCwd, dir, newSessionFile, true);
+		return new SessionManager(targetCwd, dir, newSessionFile, true, sessionDir);
 	}
 
 	/**
@@ -1618,6 +1676,34 @@ export class SessionManager {
 	}
 
 	/**
+	 * List every session stored directly in one explicit flat directory.
+	 * This is intentionally separate from listAll(), whose default contract scans
+	 * the built-in nested all-project tree.
+	 */
+	static async listAllFromDir(dir: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
+		const sessions = await listSessionsFromDir(dir, onProgress, 0, undefined, true);
+		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		return sessions;
+	}
+
+	/**
+	 * List lightweight metadata for every session stored directly in one explicit flat directory.
+	 * Uses the same mtime/size cache as listAllMetadata(); filesystem errors propagate.
+	 */
+	static async listAllMetadataFromDir(dir: string, onProgress?: SessionListProgress): Promise<SessionMetadata[]> {
+		let dirEntries: string[];
+		try {
+			dirEntries = await readdir(dir);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return [];
+			throw error;
+		}
+		const files = dirEntries.filter((file) => file.endsWith(".jsonl")).map((file) => join(dir, file));
+		const scope = resolve(dir);
+		return collectSessionMetadata(files, (cachedPath) => dirname(resolve(cachedPath)) === scope, onProgress, true);
+	}
+
+	/**
 	 * List all sessions across all project directories.
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
@@ -1648,21 +1734,7 @@ export class SessionManager {
 	 */
 	static async listAllMetadata(onProgress?: SessionListProgress): Promise<SessionMetadata[]> {
 		const allFiles = await listAllSessionFiles();
-		const currentFiles = new Set(allFiles);
-		for (const cachedPath of sessionMetadataCache.keys()) {
-			if (!currentFiles.has(cachedPath)) sessionMetadataCache.delete(cachedPath);
-		}
-		let loaded = 0;
-		const results = await Promise.all(
-			allFiles.map(async (file) => {
-				const metadata = await buildSessionMetadata(file);
-				loaded++;
-				onProgress?.(loaded, allFiles.length);
-				return metadata;
-			}),
-		);
-		const sessions = results.filter((metadata): metadata is SessionMetadata => metadata !== null);
-		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-		return sessions;
+		const scope = resolve(getSessionsDir()) + sep;
+		return collectSessionMetadata(allFiles, (cachedPath) => resolve(cachedPath).startsWith(scope), onProgress);
 	}
 }
