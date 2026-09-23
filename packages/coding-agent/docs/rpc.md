@@ -353,6 +353,8 @@ Response:
 - `main` — cost from main session files only
 - `subagent` — cost from sub-agent session files only
 
+Scans every storage root the session can see: the built-in store, custom `sessionDir` roots, and the configured and legacy `subagentSessionDir` roots. See [settings](settings.md#sessions).
+
 #### get_messages
 
 Get all messages in the conversation.

@@ -43,6 +43,7 @@ import { BuddyManager, checkOllama } from "../../core/buddy/buddy-manager.js";
 import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
 import { BuddyController } from "../../core/buddy/index.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import { dailyCostSourcesForSession } from "../../core/daily-cost-tracker.js";
 import { formatDispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
 import {
 	acquireDreamLock,
@@ -352,7 +353,7 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
-		this.footerDataProvider = new FooterDataProvider();
+		this.footerDataProvider = new FooterDataProvider(dailyCostSourcesForSession(session));
 		this.footer = new FooterComponent(session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(session.autoCompactionEnabled);
 

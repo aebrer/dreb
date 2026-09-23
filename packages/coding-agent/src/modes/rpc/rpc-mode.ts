@@ -22,7 +22,11 @@ import {
 	validateTrustedContextFolder,
 	validateTrustedContextFolders,
 } from "../../core/context-trust.js";
-import { type DailyCostBreakdown, DailyCostTracker } from "../../core/daily-cost-tracker.js";
+import {
+	type DailyCostBreakdown,
+	DailyCostTracker,
+	dailyCostSourcesForSession,
+} from "../../core/daily-cost-tracker.js";
 import {
 	acquireDreamLock,
 	buildDreamPrompt,
@@ -1864,7 +1868,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	});
 
 	const getDailyCostBreakdown = async (): Promise<DailyCostBreakdown> => {
-		dailyCostTracker ??= new DailyCostTracker();
+		dailyCostTracker ??= new DailyCostTracker(dailyCostSourcesForSession(session));
 		if (!dailyCostTrackerPrimed) {
 			await dailyCostTracker.refresh();
 			dailyCostTrackerPrimed = true;
