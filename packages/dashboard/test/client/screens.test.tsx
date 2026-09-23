@@ -6699,7 +6699,7 @@ describe("dashboard client regressions", () => {
 				pendingMessageCount: 0,
 				model: { provider: "github-copilot", id: "claude-fable-5" },
 			},
-			stats: { tokensTotal: 1545, cost: 0.42 },
+			stats: { tokensTotal: 1545, cost: 0.42, subagentCost: 0.17 },
 			backgroundAgents: [],
 			needsAttention: false,
 			createdAt: new Date().toISOString(),
@@ -6734,7 +6734,7 @@ describe("dashboard client regressions", () => {
 		const headers = [...el.querySelectorAll(".group-head h3")].map((node) => node.textContent);
 		expect(headers).toEqual(["/tmp"]);
 		expect(el.textContent).toContain("github-copilot/claude-fable-5");
-		expect(el.textContent).toContain("$0.42");
+		expect(el.textContent).toContain("$0.42 + $0.17 subs");
 		expect(el.textContent).toContain("live fleet name");
 	});
 

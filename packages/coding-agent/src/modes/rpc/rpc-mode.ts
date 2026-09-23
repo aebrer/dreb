@@ -1812,6 +1812,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	let dailyCostTracker: DailyCostTracker | undefined;
 	let dailyCostTrackerPrimed = false;
 	let subagentSessionCostTracker: SubagentSessionCostTracker | undefined;
+	let subagentSessionCostTrackerPrimed = false;
 
 	// Extension UI context uses the RPC protocol; built by a module-scope
 	// factory so the dialog round trip is unit-testable (see createRpcExtensionUIContext).
@@ -2216,6 +2217,10 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 			case "get_session_stats": {
 				subagentSessionCostTracker ??= new SubagentSessionCostTracker();
+				if (!subagentSessionCostTrackerPrimed) {
+					await subagentSessionCostTracker.refresh();
+					subagentSessionCostTrackerPrimed = true;
+				}
 				const stats = session.getSessionStats();
 				return success(id, "get_session_stats", {
 					...stats,

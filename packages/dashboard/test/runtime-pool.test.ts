@@ -67,6 +67,7 @@ export function makeFakeClient() {
 			totalMessages: 2,
 			tokens: { input: 1200, output: 300, cacheRead: 40, cacheWrite: 5, total: 1545 },
 			cost: 0.42,
+			subagentCost: 0.17,
 		})),
 		getPerformanceStats: vi.fn(async () => ({
 			models: [
@@ -993,7 +994,7 @@ describe("RuntimePool", () => {
 		expect(info.cwd).toBe("/tmp");
 		expect(info.needsAttention).toBe(true);
 		expect(info.state.sessionId).toBe("s1");
-		expect(info.stats).toEqual({ tokensTotal: 1545, cost: 0.42 });
+		expect(info.stats).toEqual({ tokensTotal: 1545, cost: 0.42, subagentCost: 0.17 });
 		expect(info.lastAssistantText).toBe("last assistant activity preview");
 	});
 

@@ -8,6 +8,7 @@ import { createExtensionRuntime } from "../src/core/extensions/loader.js";
 import { getGitBranch } from "../src/core/git-branch.js";
 import * as outputGuard from "../src/core/output-guard.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
+import { SubagentSessionCostTracker } from "../src/core/subagent-session-cost-tracker.js";
 import type { TabTitleDeps } from "../src/core/tab-title.js";
 import type {
 	RpcDashboardSnapshot as AggregateRpcDashboardSnapshot,
@@ -193,6 +194,29 @@ describe("RPC dashboard state/resources DTOs", () => {
 
 			expect(isUsingOAuth).toHaveBeenCalledWith(session.model);
 			expect(state.usingSubscription).toBe(true);
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("primes sub-agent cost before the first get_session_stats response", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		let primed = false;
+		const refresh = vi.spyOn(SubagentSessionCostTracker.prototype, "refresh").mockImplementation(async () => {
+			await Promise.resolve();
+			primed = true;
+		});
+		vi.spyOn(SubagentSessionCostTracker.prototype, "getCost").mockImplementation(() => (primed ? 0.73 : 0));
+
+		try {
+			const outputs = await dispatchRpcCommand(session, { id: "first-stats", type: "get_session_stats" });
+
+			expect(refresh).toHaveBeenCalledOnce();
+			expect(outputs[0]).toMatchObject({
+				id: "first-stats",
+				success: true,
+				data: { subagentCost: 0.73 },
+			});
 		} finally {
 			cleanup();
 		}
