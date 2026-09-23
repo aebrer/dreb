@@ -1,10 +1,11 @@
 import { randomUUID } from "crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	DailyCostTracker,
+	dailyCostSourcesForSession,
 	filenameTimestampToDate,
 	isSameLocalDay,
 	sumCostFromFile,
@@ -59,7 +60,10 @@ function makeSessionJsonl(costs: number[]): string {
  * After this, getDailyCost() reflects the scanned value.
  */
 async function createTracker(sessionsDir: string, subagentSessionsDir?: string): Promise<DailyCostTracker> {
-	const tracker = new DailyCostTracker(sessionsDir, subagentSessionsDir);
+	const tracker = new DailyCostTracker({
+		nestedMainRoots: [sessionsDir],
+		subagentRoots: subagentSessionsDir ? [subagentSessionsDir] : [],
+	});
 	// The constructor kicks off an async scan. refresh() queues another full scan
 	// and awaits it, guaranteeing the cache is populated when it resolves.
 	await tracker.refresh();
@@ -271,7 +275,10 @@ describe("DailyCostTracker", () => {
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
 
 		// Construct without awaiting — cache should be 0
-		tracker = new DailyCostTracker(sessionsDir, subagentSessionsDir);
+		tracker = new DailyCostTracker({
+			nestedMainRoots: [sessionsDir],
+			subagentRoots: subagentSessionsDir ? [subagentSessionsDir] : [],
+		});
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
@@ -621,5 +628,103 @@ describe("DailyCostTracker", () => {
 		tracker = await createTracker(sessionsDir, join(tmpDir, "nonexistent-subagent-dir"));
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
 		expect(tracker.getDailyCostBreakdown().subagent).toBe(0);
+	});
+
+	// Custom session storage roots ---------------------------------------------
+
+	it("includes a custom flat main-session root and custom plus legacy subagent roots", async () => {
+		const now = new Date();
+		const projectDir = createProjectDir("--project--");
+		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
+
+		const flatMain = join(tmpDir, "custom-main");
+		mkdirSync(flatMain, { recursive: true });
+		writeFileSync(join(flatMain, makeSessionFilename(now)), makeSessionJsonl([2.0]));
+
+		const customSub = join(tmpDir, "custom-subagents", "sess-1");
+		mkdirSync(join(customSub, "step-1"), { recursive: true });
+		writeFileSync(join(customSub, makeSessionFilename(now)), makeSessionJsonl([0.25]));
+		writeFileSync(join(customSub, "step-1", makeSessionFilename(now)), makeSessionJsonl([0.5]));
+
+		const legacyDir = createSubagentSessionDir("legacy-1");
+		writeFileSync(join(legacyDir, makeSessionFilename(now)), makeSessionJsonl([0.125]));
+
+		tracker = new DailyCostTracker({
+			nestedMainRoots: [sessionsDir],
+			flatMainRoots: [flatMain],
+			subagentRoots: [join(tmpDir, "custom-subagents"), subagentSessionsDir],
+		});
+		await tracker.refresh();
+
+		const breakdown = tracker.getDailyCostBreakdown();
+		expect(breakdown.main).toBeCloseTo(3.0, 5);
+		expect(breakdown.subagent).toBeCloseTo(0.875, 5);
+		expect(breakdown.total).toBeCloseTo(3.875, 5);
+	});
+
+	it("counts files reachable from overlapping or duplicate roots once", async () => {
+		const now = new Date();
+		const projectDir = createProjectDir("--project--");
+		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
+		const subDir = createSubagentSessionDir("sub");
+		writeFileSync(join(subDir, makeSessionFilename(now)), makeSessionJsonl([0.5]));
+
+		tracker = new DailyCostTracker({
+			nestedMainRoots: [sessionsDir, `${sessionsDir}/`],
+			// Flat root that is also a nested project dir, and a subagent root that overlaps a main root
+			flatMainRoots: [projectDir, subDir],
+			subagentRoots: [subagentSessionsDir, subagentSessionsDir],
+		});
+		await tracker.refresh();
+
+		const breakdown = tracker.getDailyCostBreakdown();
+		expect(breakdown.total).toBeCloseTo(1.5, 5);
+		expect(breakdown.main).toBeCloseTo(1.5, 5);
+		expect(breakdown.subagent).toBe(0);
+	});
+
+	it("refresh() picks up sub-agent files in custom roots written after construction", async () => {
+		const now = new Date();
+		const customSubRoot = join(tmpDir, "custom-subagents");
+		tracker = new DailyCostTracker({ nestedMainRoots: [sessionsDir], subagentRoots: [customSubRoot] });
+		await tracker.refresh();
+		expect(tracker.getDailyCost()).toBe(0);
+
+		mkdirSync(join(customSubRoot, "late"), { recursive: true });
+		writeFileSync(join(customSubRoot, "late", makeSessionFilename(now)), makeSessionJsonl([0.75]));
+		await tracker.refresh();
+		expect(tracker.getDailyCostBreakdown().subagent).toBeCloseTo(0.75, 5);
+	});
+});
+
+describe("dailyCostSourcesForSession", () => {
+	it("derives flat main roots from the session, global, and effective sessionDir, and all subagent roots", () => {
+		const sources = dailyCostSourcesForSession({
+			cwd: "/work/project",
+			sessionManager: { getCustomSessionInventoryRoot: () => "/cli/sessions" },
+			settingsManager: {
+				getGlobalSettings: () => ({ sessionDir: "~/global-sessions" }),
+				getSessionDir: () => "./project-sessions",
+			},
+			subagentSessionDiscoveryRoots: ["/custom/subagents", "/legacy/subagents"],
+		});
+
+		expect(sources.flatMainRoots).toEqual([
+			"/cli/sessions",
+			join(homedir(), "global-sessions"),
+			"/work/project/project-sessions",
+		]);
+		expect(sources.subagentRoots).toEqual(["/custom/subagents", "/legacy/subagents"]);
+		expect(sources.nestedMainRoots).toHaveLength(1);
+	});
+
+	it("has no flat main roots for default storage", () => {
+		const sources = dailyCostSourcesForSession({
+			cwd: "/work/project",
+			sessionManager: { getCustomSessionInventoryRoot: () => undefined },
+			settingsManager: { getGlobalSettings: () => ({}), getSessionDir: () => undefined },
+			subagentSessionDiscoveryRoots: ["/legacy/subagents"],
+		});
+		expect(sources.flatMainRoots).toEqual([]);
 	});
 });

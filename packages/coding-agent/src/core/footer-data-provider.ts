@@ -1,6 +1,6 @@
 import { existsSync, type FSWatcher, watch } from "node:fs";
 import { dirname, join } from "node:path";
-import { type DailyCostBreakdown, DailyCostTracker } from "./daily-cost-tracker.js";
+import { type DailyCostBreakdown, type DailyCostSources, DailyCostTracker } from "./daily-cost-tracker.js";
 import { findGitPaths, type GitPaths, getGitBranch, getGitBranchAsync } from "./git-branch.js";
 import { SubagentSessionCostTracker } from "./subagent-session-cost-tracker.js";
 
@@ -25,10 +25,10 @@ export class FooterDataProvider {
 	private refreshPending = false;
 	private disposed = false;
 
-	constructor() {
+	constructor(dailyCostSources?: DailyCostSources) {
 		this.gitPaths = findGitPaths();
 		this.setupGitWatcher();
-		this.dailyCostTracker = new DailyCostTracker();
+		this.dailyCostTracker = new DailyCostTracker(dailyCostSources);
 		this.subagentSessionCostTracker = new SubagentSessionCostTracker();
 	}
 
