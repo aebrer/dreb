@@ -113,7 +113,8 @@ export const api = {
 	devices: () => request<{ devices: PairedDeviceDto[] }>("/api/devices"),
 	unpair: (id: string) => request<{ ok: true }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-	fleet: () => request<FleetDto>("/api/fleet"),
+	// Initial UI load must not wait for the expensive historical-session inventory.
+	fleet: () => request<FleetDto>("/api/fleet/live"),
 	sessions: () => request<SessionInventoryDto>("/api/sessions"),
 	resync: (key?: string, agentId?: string, signal?: AbortSignal) => {
 		const query = new URLSearchParams();
@@ -214,7 +215,7 @@ export const api = {
 			"/api/server/info",
 		),
 	restartServer: () => request<{ ok: true; restarting: boolean }>("/api/server/restart", { method: "POST" }),
-	dailyCost: () => request<{ cost: number }>("/api/daily-cost"),
+	dailyCost: () => request<{ cost: number; main: number; subagent: number }>("/api/daily-cost"),
 
 	listFiles: (path: string) => request<DirListingDto>(`/api/files?path=${encodeURIComponent(path)}`),
 	trustContextFolder: (path: string) => request<ContextTrustMutationResultDto>("/api/files/trust", json({ path })),

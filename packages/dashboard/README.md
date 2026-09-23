@@ -214,19 +214,24 @@ remain terminal without duplicate status entries.
 
 ## Fleet transport and freshness
 
-A normal dashboard load makes one authoritative `GET /api/fleet`; exceptional
-recovery includes the fleet in its ordered `/api/resync` snapshot. After that,
-live runtime cards are updated by global, event-derived `fleet_snapshot` SSE
-frames, debounced by 200 ms. Those frames are built from the pool's in-memory
-runtime state, so they do not trigger child RPC calls or a disk inventory scan.
+A normal dashboard load is live-first: `GET /api/fleet/live` returns runtime
+cards without scanning historical logs, the SSE connection opens, and
+`GET /api/sessions` fills the on-disk inventory in the background. The combined
+`GET /api/fleet` remains available for diagnostics; exceptional recovery includes
+the fleet in its ordered `/api/resync` snapshot. After that, live runtime cards
+are updated by global, event-derived `fleet_snapshot` SSE frames, debounced by
+200 ms. Those frames are built from the pool's in-memory runtime state, so they
+do not trigger child RPC calls or a disk inventory scan.
 
-Disk inventory is separate from live-runtime state. Before fleet, inventory, or
-resync serialization, the server projects each on-disk session to the declared
-browser DTO, reports whether its historical CWD resolves to a directory (plus
-the canonical candidate when it does), and bounds its first-message preview to
-256 Unicode characters. Missing historical paths remain display metadata but are
-not used as memory/project roots or recent runtime choices. Internal parent paths
-and complete searchable transcript text never cross this boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
+Disk inventory is separate from live-runtime state. Its lightweight metadata is
+cached by session-file mtime and size, so refreshes stat every log but reread and
+parse only new or changed files. Before fleet, inventory, or resync serialization,
+the server projects each on-disk session to the declared browser DTO, reports
+whether its historical CWD resolves to a directory (plus the canonical candidate
+when it does), and bounds its first-message preview to 256 Unicode characters.
+Missing historical paths remain display metadata but are not used as memory/project
+roots or recent runtime choices. Internal parent paths and complete searchable
+transcript text never cross this boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
 create, resume, stop, or delete, rather than reloading the whole fleet. While the
 Fleet screen or a session/subagent fleet sidebar is visible, it refreshes
 per-runtime stats on a shared 30-second cadence; the refresh is

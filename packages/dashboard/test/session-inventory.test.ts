@@ -35,24 +35,24 @@ describe("Dashboard main-session inventory selection", () => {
 		);
 	});
 
-	it("routes a custom startup snapshot through flat listing and defaults through nested listAll", async () => {
+	it("routes a custom startup snapshot through flat listing and defaults through nested listAllMetadata", async () => {
 		const customSessions = [{ path: "/custom/one.jsonl" }];
 		const defaultSessions = [{ path: "/default/project/one.jsonl" }];
 		const inventory = {
-			listAll: vi.fn(async () => defaultSessions),
-			listAllFromDir: vi.fn(async () => customSessions),
+			listAllMetadata: vi.fn(async () => defaultSessions),
+			listAllMetadataFromDir: vi.fn(async () => customSessions),
 		};
 
 		const customLister = createDashboardSessionLister("/custom", inventory);
 		await expect(customLister()).resolves.toEqual(customSessions);
-		expect(inventory.listAllFromDir).toHaveBeenCalledWith("/custom");
-		expect(inventory.listAll).not.toHaveBeenCalled();
+		expect(inventory.listAllMetadataFromDir).toHaveBeenCalledWith("/custom");
+		expect(inventory.listAllMetadata).not.toHaveBeenCalled();
 
-		inventory.listAll.mockClear();
-		inventory.listAllFromDir.mockClear();
+		inventory.listAllMetadata.mockClear();
+		inventory.listAllMetadataFromDir.mockClear();
 		const defaultLister = createDashboardSessionLister(undefined, inventory);
 		await expect(defaultLister()).resolves.toEqual(defaultSessions);
-		expect(inventory.listAll).toHaveBeenCalledOnce();
-		expect(inventory.listAllFromDir).not.toHaveBeenCalled();
+		expect(inventory.listAllMetadata).toHaveBeenCalledOnce();
+		expect(inventory.listAllMetadataFromDir).not.toHaveBeenCalled();
 	});
 });

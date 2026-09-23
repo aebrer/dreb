@@ -46,8 +46,8 @@ export function resolveDashboardSessionInventoryRoot(
 }
 
 interface DashboardSessionInventory<T> {
-	listAll(): Promise<T[]>;
-	listAllFromDir(dir: string): Promise<T[]>;
+	listAllMetadata(): Promise<T[]>;
+	listAllMetadataFromDir(dir: string): Promise<T[]>;
 }
 
 /** Build the startup-snapshotted inventory reader used by the Dashboard server. */
@@ -55,7 +55,9 @@ export function createDashboardSessionLister<T>(
 	customDir: string | undefined,
 	inventory: DashboardSessionInventory<T>,
 ): () => Promise<T[]> {
-	return customDir !== undefined ? () => inventory.listAllFromDir(customDir) : () => inventory.listAll();
+	return customDir !== undefined
+		? () => inventory.listAllMetadataFromDir(customDir)
+		: () => inventory.listAllMetadata();
 }
 
 interface CliArgs {

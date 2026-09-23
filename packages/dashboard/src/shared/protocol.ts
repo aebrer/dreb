@@ -143,6 +143,7 @@ export interface SessionStatsDto {
 		total: number;
 	};
 	cost: number;
+	subagentCost?: number;
 	contextUsage?: ContextUsageDto;
 }
 
@@ -233,6 +234,7 @@ export interface SessionTreeNodeDto {
 export interface RuntimeStatsSummaryDto {
 	tokensTotal: number;
 	cost: number;
+	subagentCost?: number;
 }
 
 /** Current task list (mirrors RpcSessionTask). */
@@ -324,6 +326,8 @@ export interface FleetSnapshotEventDto {
 export interface FleetDto {
 	runtimes: RuntimeInfoDto[];
 	diskSessions: SessionInfoDto[];
+	/** False when this response intentionally omits historical inventory for fast live-first startup. */
+	diskSessionsComplete?: boolean;
 }
 
 /** A single question inside an `ask` extension-UI request (mirrors RpcAskQuestion). */

@@ -286,7 +286,13 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_dashboard_snapshot"; success: true; data: RpcDashboardSnapshot }
 	| { id?: string; type: "response"; command: "get_resources"; success: true; data: RpcResources }
 	| { id?: string; type: "response"; command: "get_git_branch"; success: true; data: { branch: string | null } }
-	| { id?: string; type: "response"; command: "get_daily_cost"; success: true; data: { cost: number } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_daily_cost";
+			success: true;
+			data: { cost: number; main: number; subagent: number };
+	  }
 
 	// Model
 	| {

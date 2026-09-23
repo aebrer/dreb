@@ -298,6 +298,7 @@ export interface SessionStats {
 		total: number;
 	};
 	cost: number;
+	subagentCost?: number;
 	contextUsage?: ContextUsage;
 }
 

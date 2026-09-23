@@ -1,9 +1,9 @@
 /**
  * Mobile acceptance coverage for the SSE fleet snapshot path.
  *
- * This runs the source client through a programmatic Vite middleware server,
- * backed by the real dashboard HTTP/SSE server and RuntimePool. It deliberately
- * does not use the checked-in dashboard dist output.
+ * This builds the source client into an isolated production bundle, then serves
+ * it through the real dashboard HTTP/SSE server and RuntimePool. The checked-in
+ * dashboard dist output is never used.
  */
 
 import { EventEmitter } from "node:events";
@@ -14,7 +14,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RpcClient } from "@dreb/coding-agent/rpc";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
-import { createServer as createViteServer, type ViteDevServer } from "vite";
+import { build as buildVite } from "vite";
+import solid from "vite-plugin-solid";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DashboardAuth } from "../../src/server/auth.js";
 import { RuntimePool } from "../../src/server/runtime-pool.js";
@@ -91,7 +92,7 @@ function makeFakeRuntimeClient(): FakeRuntimeClient {
 		listBackgroundAgents: async () => [],
 		getPerformanceStats: async () => ({ models: [] }),
 		getGitBranch: async () => null,
-		getDailyCost: async () => 0,
+		getDailyCost: async () => ({ cost: 0, main: 0, subagent: 0 }),
 		getCommands: async () => [],
 		getPendingMessages: async () => ({ steering: [], followUp: [] }),
 	};
@@ -104,16 +105,20 @@ function makeFakeRuntimeClient(): FakeRuntimeClient {
 	};
 }
 
-let vite: ViteDevServer | undefined;
-let viteCacheDir: string | undefined;
+let clientBuildDir: string | undefined;
 let httpServer: Server | undefined;
 let pool: RuntimePool | undefined;
 let sessionClient: FakeRuntimeClient;
 let baseUrl: string;
 let runtimeKey: string;
 let fleetSnapshots = 0;
+let resolveDiskSessions: ((sessions: []) => void) | undefined;
+let diskSessions: Promise<[]>;
 
 beforeAll(async () => {
+	diskSessions = new Promise<[]>((resolve) => {
+		resolveDiskSessions = resolve;
+	});
 	sessionClient = makeFakeRuntimeClient();
 	let clientFactoryCalls = 0;
 	pool = new RuntimePool({
@@ -132,30 +137,23 @@ beforeAll(async () => {
 	const handle = await pool.create("/tmp/dashboard-mobile-acceptance");
 	runtimeKey = handle.key;
 
-	viteCacheDir = await mkdtemp(join(tmpdir(), "dreb-fleet-vite-"));
-	vite = await createViteServer({
-		configFile: fileURLToPath(new URL("../../vite.config.ts", import.meta.url)),
-		// Parallel browser fixtures use different Vite configs. Never share their
-		// optimized-dependency cache or invalidate an in-flight throttled import.
-		cacheDir: viteCacheDir,
-		// Keep the Solid plugin's includes and prebundle the transcript dependencies
-		// (highlight.js is CommonJS). Discovery can invalidate imports after navigation,
-		// but HMR is disabled, so the browser cannot recover via an automatic reload.
-		optimizeDeps: { noDiscovery: true, include: ["dompurify", "highlight.js/lib/common", "marked"] },
-		appType: "spa",
+	clientBuildDir = await mkdtemp(join(tmpdir(), "dreb-fleet-client-"));
+	await buildVite({
+		configFile: false,
+		plugins: [solid()],
+		root: fileURLToPath(new URL("../../src/client", import.meta.url)),
+		base: "./",
 		logLevel: "error",
-		server: { hmr: false, middlewareMode: true },
+		build: { outDir: clientBuildDir, emptyOutDir: true },
 	});
 	const app = createDashboardServer({
 		auth: new DashboardAuth(),
 		pool,
-		listAllSessions: async () => [],
+		staticDir: clientBuildDir,
+		listAllSessions: () => diskSessions,
 		deleteSession: async () => ({ method: "trash" }),
 		logger: () => {},
 	});
-	// Vite is mounted after the dashboard API so browser traffic reaches the real
-	// HTTP/SSE implementation while client modules are compiled from source.
-	app.use(vite.middlewares);
 	httpServer = await new Promise<Server>((resolve) => {
 		const server = app.listen(0, "127.0.0.1", () => resolve(server));
 	});
@@ -166,10 +164,10 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+	resolveDiskSessions?.([]);
 	await pool?.stopAll();
 	if (httpServer?.listening) await new Promise<void>((resolve) => httpServer?.close(() => resolve()));
-	await vite?.close();
-	if (viteCacheDir) await rm(viteCacheDir, { recursive: true, force: true });
+	if (clientBuildDir) await rm(clientBuildDir, { recursive: true, force: true });
 }, 60_000);
 
 describe("mobile fleet SSE snapshots in a throttled real browser", () => {
@@ -216,11 +214,16 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 			try {
 				await card.waitFor({ state: "visible", timeout: 60_000 });
 			} catch (cause) {
-				throw new Error(`Fleet card did not load. Browser errors: ${JSON.stringify(startupErrors)}`, { cause });
+				throw new Error(
+					`Fleet card did not load. Browser errors: ${JSON.stringify(startupErrors)}. API requests: ${JSON.stringify(requests)}`,
+					{ cause },
+				);
 			}
 			expect(await card.textContent()).toContain("mobile acceptance session");
+			expect(requests.filter((request) => request.url === "/api/fleet/live")).toHaveLength(1);
+			expect(requests.filter((request) => request.url === "/api/sessions")).toHaveLength(1);
+			resolveDiskSessions?.([]);
 			await page.locator(".connection-indicator .chip-idle").waitFor({ state: "visible", timeout: 30_000 });
-			expect(requests.filter((request) => request.url === "/api/fleet")).toHaveLength(1);
 			await card.locator(".chip-idle").waitFor({ state: "visible" });
 
 			const fleetSnapshotsBeforeLifecycle = fleetSnapshots;
@@ -232,7 +235,7 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 			await card.locator(".chip-running").waitFor({ state: "visible", timeout: 2_000 });
 			expect(Date.now() - lifecycleStartedAt).toBeLessThanOrEqual(2_000);
 			expect(fleetSnapshots).toBeGreaterThan(fleetSnapshotsBeforeLifecycle);
-			expect(requests.filter((request) => request.url === "/api/fleet")).toHaveLength(1);
+			expect(requests.filter((request) => request.url === "/api/fleet/live")).toHaveLength(1);
 
 			const requestCountBeforeOpen = requests.length;
 			const hydratePath = `/api/runtimes/${runtimeKey}/hydrate`;

@@ -379,6 +379,25 @@ describe("pairing expiry auth status", () => {
 });
 
 describe("app store SSE sync", () => {
+	it("connects with live runtimes before omitted disk inventory finishes loading", async () => {
+		const live = runtimeSnapshot("live-first", false);
+		const inventory = deferred<{ sessions: [] }>();
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [live],
+			diskSessions: [],
+			diskSessionsComplete: false,
+		});
+		vi.mocked(api.sessions).mockReturnValueOnce(inventory.promise);
+
+		const store = await makeStartedStore();
+
+		expect(store.fleet().runtimes).toEqual([live]);
+		expect(connectEvents).toHaveBeenCalledOnce();
+		expect(api.sessions).toHaveBeenCalledOnce();
+		inventory.resolve({ sessions: [] });
+		await flushAsyncWork();
+	});
+
 	it("creates per-key session state lazily and routes events", async () => {
 		const store = await makeStartedStore();
 
@@ -2331,7 +2350,7 @@ describe("fleet snapshot and inventory store foundation", () => {
 		return runtime;
 	}
 
-	function stats(totalMessages: number, tokensTotal: number, cost: number) {
+	function stats(totalMessages: number, tokensTotal: number, cost: number, subagentCost?: number) {
 		return {
 			sessionId: "s",
 			userMessages: 1,
@@ -2341,6 +2360,7 @@ describe("fleet snapshot and inventory store foundation", () => {
 			totalMessages,
 			tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: tokensTotal },
 			cost,
+			subagentCost,
 			contextUsage: { tokens: tokensTotal, contextWindow: 100_000, percent: 10 },
 		};
 	}
@@ -2710,7 +2730,7 @@ describe("fleet snapshot and inventory store foundation", () => {
 		});
 		const store = await makeStartedStore();
 		vi.mocked(api.stats)
-			.mockResolvedValueOnce(stats(5, 50, 0.5))
+			.mockResolvedValueOnce(stats(5, 50, 0.5, 0.25))
 			.mockRejectedValueOnce(new Error("b stats unavailable"));
 
 		await store.refreshFleetStats();
@@ -2718,7 +2738,7 @@ describe("fleet snapshot and inventory store foundation", () => {
 		expect(api.stats).toHaveBeenCalledWith("a", expect.any(AbortSignal));
 		expect(api.stats).toHaveBeenCalledWith("b", expect.any(AbortSignal));
 		expect(store.fleet().runtimes[0]).toMatchObject({
-			stats: { tokensTotal: 50, cost: 0.5 },
+			stats: { tokensTotal: 50, cost: 0.5, subagentCost: 0.25 },
 			state: { messageCount: 5, contextUsage: { tokens: 50 } },
 		});
 		expect(store.fleet().runtimes[1]).not.toHaveProperty("stats");

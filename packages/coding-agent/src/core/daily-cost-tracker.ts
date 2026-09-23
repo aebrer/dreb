@@ -1,7 +1,7 @@
-import { existsSync } from "fs";
+import { type Dirent, existsSync } from "fs";
 import { readdir, readFile } from "fs/promises";
 import { join } from "path";
-import { getSessionsDir } from "../config.js";
+import { getSessionsDir, getSubagentSessionsDir } from "../config.js";
 
 /**
  * Parse a session filename timestamp back to a Date.
@@ -30,35 +30,83 @@ export function isSameLocalDay(date: Date, today: Date): boolean {
 }
 
 /**
+ * Sum `usage.cost.total` from all assistant messages in a JSONL session file.
+ * Works identically for both main sessions and subagent sessions.
+ */
+export async function sumCostFromFile(filePath: string): Promise<number> {
+	try {
+		const content = await readFile(filePath, "utf8");
+		let total = 0;
+
+		for (const line of content.split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const entry = JSON.parse(line);
+				if (entry.type === "message" && entry.message?.role === "assistant") {
+					total += entry.message.usage?.cost?.total ?? 0;
+				}
+			} catch {
+				// Skip malformed lines
+			}
+		}
+
+		return total;
+	} catch {
+		/* File unreadable — treat as zero cost */
+		return 0;
+	}
+}
+
+/** Breakdown of daily costs between main sessions and subagent sessions. */
+export interface DailyCostBreakdown {
+	total: number;
+	main: number;
+	subagent: number;
+}
+
+/**
  * Tracks aggregate cost across all sessions for the current calendar day.
- * Scans session files filtered by filename timestamp, caches result for O(1) footer access.
+ * Scans both main session files and subagent session files, caches result for O(1) footer access.
  * Refreshes periodically (60s) and on-demand via refresh().
  */
 export class DailyCostTracker {
 	private static readonly REFRESH_INTERVAL_MS = 60_000;
 
-	private cachedCost = 0;
+	private cachedMain = 0;
+	private cachedSubagent = 0;
 	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 	private disposed = false;
 	private sessionsDir: string;
+	private subagentSessionsDir: string;
 
-	constructor(sessionsDir?: string) {
+	constructor(sessionsDir?: string, subagentSessionsDir?: string) {
 		this.sessionsDir = sessionsDir ?? getSessionsDir();
+		this.subagentSessionsDir = subagentSessionsDir ?? getSubagentSessionsDir();
 		// Kick off initial async scan — getDailyCost() returns 0 until it completes
 		void this.initialScan();
 	}
 
-	/** Get cached daily cost total. O(1). */
+	/** Get cached daily cost total (main + subagent). O(1). */
 	getDailyCost(): number {
-		return this.cachedCost;
+		return this.cachedMain + this.cachedSubagent;
+	}
+
+	/** Get cached daily cost breakdown: total, main, and subagent. O(1). */
+	getDailyCostBreakdown(): DailyCostBreakdown {
+		return {
+			total: this.cachedMain + this.cachedSubagent,
+			main: this.cachedMain,
+			subagent: this.cachedSubagent,
+		};
 	}
 
 	/** Force an async refresh of the daily cost. */
 	async refresh(): Promise<void> {
 		if (!this.disposed) {
-			const cost = await this.scanDailyCost();
+			const [main, subagent] = await Promise.all([this.scanMainSessions(), this.scanSubagentSessions()]);
 			if (!this.disposed) {
-				this.cachedCost = cost;
+				this.cachedMain = main;
+				this.cachedSubagent = subagent;
 			}
 		}
 	}
@@ -73,9 +121,10 @@ export class DailyCostTracker {
 	}
 
 	private async initialScan(): Promise<void> {
-		const cost = await this.scanDailyCost();
+		const [main, subagent] = await Promise.all([this.scanMainSessions(), this.scanSubagentSessions()]);
 		if (!this.disposed) {
-			this.cachedCost = cost;
+			this.cachedMain = main;
+			this.cachedSubagent = subagent;
 			this.scheduleNextRefresh();
 		}
 	}
@@ -85,9 +134,10 @@ export class DailyCostTracker {
 		this.refreshTimer = setTimeout(async () => {
 			this.refreshTimer = null;
 			if (this.disposed) return;
-			const cost = await this.scanDailyCost();
+			const [main, subagent] = await Promise.all([this.scanMainSessions(), this.scanSubagentSessions()]);
 			if (!this.disposed) {
-				this.cachedCost = cost;
+				this.cachedMain = main;
+				this.cachedSubagent = subagent;
 				this.scheduleNextRefresh();
 			}
 		}, DailyCostTracker.REFRESH_INTERVAL_MS);
@@ -97,7 +147,11 @@ export class DailyCostTracker {
 		}
 	}
 
-	private async scanDailyCost(): Promise<number> {
+	/**
+	 * Scan main sessions directory.
+	 * Structure: sessionsDir / projectDir / TIMESTAMP_UUID.jsonl
+	 */
+	private async scanMainSessions(): Promise<number> {
 		try {
 			if (!existsSync(this.sessionsDir)) return 0;
 
@@ -109,29 +163,48 @@ export class DailyCostTracker {
 				if (!dirEntry.isDirectory()) continue;
 
 				const projectDir = join(this.sessionsDir, dirEntry.name);
-				let files: string[];
+				total += await this.scanJsonlFilesInDir(projectDir, now);
+			}
+
+			return total;
+		} catch {
+			// Never crash the app
+			return 0;
+		}
+	}
+
+	/**
+	 * Scan subagent sessions directory.
+	 * Structure: subagentSessionsDir / sessionId / TIMESTAMP_UUID.jsonl
+	 *            subagentSessionsDir / sessionId / step-N / TIMESTAMP_UUID.jsonl
+	 */
+	private async scanSubagentSessions(): Promise<number> {
+		try {
+			if (!existsSync(this.subagentSessionsDir)) return 0;
+
+			const now = new Date();
+			let total = 0;
+			const sessionIdDirs = await readdir(this.subagentSessionsDir, { withFileTypes: true });
+
+			for (const dirEntry of sessionIdDirs) {
+				if (!dirEntry.isDirectory()) continue;
+
+				const sessionIdDir = join(this.subagentSessionsDir, dirEntry.name);
+
+				// Scan direct JSONL files in the session-id directory
+				total += await this.scanJsonlFilesInDir(sessionIdDir, now);
+
+				// Scan step-N subdirectories for chain agents
+				let subEntries: Dirent[];
 				try {
-					files = (await readdir(projectDir)).filter((f) => f.endsWith(".jsonl"));
+					subEntries = await readdir(sessionIdDir, { withFileTypes: true });
 				} catch {
-					/* Directory unreadable — skip this session dir */
 					continue;
 				}
-
-				for (const filename of files) {
-					// Extract timestamp part: everything before the UUID
-					// Filename: 2026-04-09T18-49-11-406Z_33137d5d-d1e4-4a0e-baca-ebd08ab0e2e0.jsonl
-					const underscoreIdx = filename.indexOf("_", 20);
-					if (underscoreIdx === -1) continue;
-
-					const timestampPart = filename.slice(0, underscoreIdx);
-					const fileDate = filenameTimestampToDate(timestampPart);
-					if (!fileDate) continue;
-
-					// Skip sessions not from today (compares local calendar day)
-					if (!isSameLocalDay(fileDate, now)) continue;
-
-					// Read and parse the JSONL file
-					total += await this.sumCostFromFile(join(projectDir, filename));
+				for (const subEntry of subEntries) {
+					if (!subEntry.isDirectory()) continue;
+					const stepDir = join(sessionIdDir, subEntry.name);
+					total += await this.scanJsonlFilesInDir(stepDir, now);
 				}
 			}
 
@@ -142,27 +215,36 @@ export class DailyCostTracker {
 		}
 	}
 
-	private async sumCostFromFile(filePath: string): Promise<number> {
+	/**
+	 * Scan a directory for today's JSONL session files and sum their costs.
+	 */
+	private async scanJsonlFilesInDir(dirPath: string, now: Date): Promise<number> {
+		let files: string[];
 		try {
-			const content = await readFile(filePath, "utf8");
-			let total = 0;
-
-			for (const line of content.split("\n")) {
-				if (!line.trim()) continue;
-				try {
-					const entry = JSON.parse(line);
-					if (entry.type === "message" && entry.message?.role === "assistant") {
-						total += entry.message.usage?.cost?.total ?? 0;
-					}
-				} catch {
-					// Skip malformed lines
-				}
-			}
-
-			return total;
+			files = (await readdir(dirPath)).filter((f) => f.endsWith(".jsonl"));
 		} catch {
-			/* File unreadable — treat as zero cost */
+			/* Directory unreadable — skip */
 			return 0;
 		}
+
+		let total = 0;
+		for (const filename of files) {
+			// Extract timestamp part: everything before the UUID
+			// Filename: 2026-04-09T18-49-11-406Z_33137d5d-d1e4-4a0e-baca-ebd08ab0e2e0.jsonl
+			const underscoreIdx = filename.indexOf("_", 20);
+			if (underscoreIdx === -1) continue;
+
+			const timestampPart = filename.slice(0, underscoreIdx);
+			const fileDate = filenameTimestampToDate(timestampPart);
+			if (!fileDate) continue;
+
+			// Skip sessions not from today (compares local calendar day)
+			if (!isSameLocalDay(fileDate, now)) continue;
+
+			// Read and parse the JSONL file
+			total += await sumCostFromFile(join(dirPath, filename));
+		}
+
+		return total;
 	}
 }

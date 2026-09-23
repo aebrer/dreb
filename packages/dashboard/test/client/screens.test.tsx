@@ -86,7 +86,7 @@ vi.mock("../../src/client/api.js", () => ({
 		branch: vi.fn(async () => ({ branch: null })),
 		forkMessages: vi.fn(async () => ({ messages: [] })),
 		fork: vi.fn(async () => ({ text: "", cancelled: false })),
-		dailyCost: vi.fn(async () => ({ cost: 0.42 })),
+		dailyCost: vi.fn(async () => ({ cost: 0.42, main: 0.42, subagent: 0 })),
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
 		unpair: vi.fn(async () => ({ ok: true })),
@@ -506,7 +506,7 @@ afterEach(() => {
 	vi.mocked(api.dequeue).mockResolvedValue({ steering: [], followUp: [] });
 	vi.mocked(api.forkMessages).mockResolvedValue({ messages: [] });
 	vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: false });
-	vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.42 });
+	vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.42, main: 0.42, subagent: 0 });
 	vi.unstubAllGlobals();
 	Reflect.deleteProperty(window, "matchMedia");
 	vi.mocked(api.places).mockResolvedValue({ places: [{ label: "home", path: "/home/test" }] });
@@ -2158,7 +2158,7 @@ describe("screen smoke tests", () => {
 
 	it("session view renders with a populated transcript and session info bar", async () => {
 		vi.mocked(api.branch).mockResolvedValue({ branch: "feature/info" });
-		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25 });
+		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25, main: 1.0, subagent: 0.25 });
 		vi.mocked(api.performance).mockResolvedValue({
 			models: [
 				performanceSummary({ rolling: { count: 4 }, delta: { baselineCount: 4, recentCount: 4 } }),
@@ -2220,6 +2220,58 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("scan things");
 		// Suggest-next chip
 		expect(el.textContent).toContain("/skill:test");
+	});
+
+	it("shows sub-agent cost when the parent session cost is zero", async () => {
+		vi.mocked(api.stats).mockResolvedValue({
+			sessionId: "s1",
+			userMessages: 0,
+			assistantMessages: 0,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 0,
+			tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			cost: 0,
+			subagentCost: 0.75,
+		});
+		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.75, main: 0, subagent: 0.75 });
+		const store = makeStore() as any;
+		const session = populatedSession("zero-parent-cost");
+		const fakeStore = {
+			...store,
+			sessions: { "zero-parent-cost": session },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "zero-parent-cost",
+						cwd: "/home/test/project",
+						state: {
+							sessionId: "s1",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+							usingSubscription: false,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="zero-parent-cost" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("$0.000 + $0.750 subs");
 	});
 
 	it("keeps mounted header details live and refreshes context when compaction ends", async () => {
@@ -6699,7 +6751,7 @@ describe("dashboard client regressions", () => {
 				pendingMessageCount: 0,
 				model: { provider: "github-copilot", id: "claude-fable-5" },
 			},
-			stats: { tokensTotal: 1545, cost: 0.42 },
+			stats: { tokensTotal: 1545, cost: 0.42, subagentCost: 0.17 },
 			backgroundAgents: [],
 			needsAttention: false,
 			createdAt: new Date().toISOString(),
@@ -6734,7 +6786,7 @@ describe("dashboard client regressions", () => {
 		const headers = [...el.querySelectorAll(".group-head h3")].map((node) => node.textContent);
 		expect(headers).toEqual(["/tmp"]);
 		expect(el.textContent).toContain("github-copilot/claude-fable-5");
-		expect(el.textContent).toContain("$0.42");
+		expect(el.textContent).toContain("$0.42 + $0.17 subs");
 		expect(el.textContent).toContain("live fleet name");
 	});
 

@@ -591,9 +591,15 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			.catch((err) => handleMemoryError(res, err));
 	});
 
+	const getLiveFleet = async (): Promise<FleetDto> => ({
+		runtimes: await Promise.all(pool.list().map((handle) => pool.describe(handle))),
+		diskSessions: [],
+		diskSessionsComplete: false,
+	});
+
 	const getFleet = async (): Promise<FleetDto> => {
-		const runtimes = await Promise.all(pool.list().map((h) => pool.describe(h)));
-		return { runtimes, diskSessions: await listDiskSessions() };
+		const [live, diskSessions] = await Promise.all([getLiveFleet(), listDiskSessions()]);
+		return { runtimes: live.runtimes, diskSessions };
 	};
 
 	/** Map the one-RPC parent snapshot consistently for recovery and drill-in hydration. */
@@ -604,6 +610,12 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		backgroundAgents: snapshot.snapshot.backgroundAgents,
 		pendingExtensionUiRequests: snapshot.snapshot.pendingExtensionUiRequests ?? [],
 		barrierSeq: snapshot.barrierSeq,
+	});
+
+	app.get("/api/fleet/live", (_req, res) => {
+		getLiveFleet()
+			.then((fleet) => res.json(fleet))
+			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
 	});
 
 	app.get("/api/fleet", (_req, res) => {
@@ -1153,7 +1165,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	app.get("/api/daily-cost", (_req, res) => {
-		withAnyRuntime(res, async (h) => ({ cost: await h.client.getDailyCost() }));
+		withAnyRuntime(res, async (h) => h.client.getDailyCost());
 	});
 
 	app.put("/api/settings", (req, res) => {

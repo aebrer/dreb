@@ -499,6 +499,17 @@ describe("dashboard server — pairing code", () => {
 });
 
 describe("dashboard server — fleet and runtimes", () => {
+	it("GET /api/fleet/live returns live runtimes without scanning disk sessions", async () => {
+		const listAllSessions = vi.fn(async () => [diskSession("/tmp")]);
+		const { base } = await startServer({ listAllSessions });
+
+		const res = await fetch(`${base}/api/fleet/live`);
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ runtimes: [], diskSessions: [], diskSessionsComplete: false });
+		expect(listAllSessions).not.toHaveBeenCalled();
+	});
+
 	it("GET /api/fleet returns runtimes and disk sessions", async () => {
 		const dir = await createTempProject();
 		const disk = [diskSession(dir, { path: "/s/one.jsonl" })];
@@ -534,8 +545,8 @@ describe("dashboard server — fleet and runtimes", () => {
 			futureInternalField: "must not cross the wire",
 		};
 		const sessionInventory = {
-			listAll: vi.fn(async () => []),
-			listAllFromDir: vi.fn(async () => [internalSession]),
+			listAllMetadata: vi.fn(async () => []),
+			listAllMetadataFromDir: vi.fn(async () => [internalSession]),
 		};
 		const listAllSessions = createDashboardSessionLister("/custom/main-sessions", sessionInventory);
 		const { base } = await startServer({ listAllSessions });
@@ -580,9 +591,9 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("private complete searchable transcript");
 		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("private-parent");
 		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("futureInternalField");
-		expect(sessionInventory.listAllFromDir).toHaveBeenCalledTimes(3);
-		expect(sessionInventory.listAllFromDir).toHaveBeenCalledWith("/custom/main-sessions");
-		expect(sessionInventory.listAll).not.toHaveBeenCalled();
+		expect(sessionInventory.listAllMetadataFromDir).toHaveBeenCalledTimes(3);
+		expect(sessionInventory.listAllMetadataFromDir).toHaveBeenCalledWith("/custom/main-sessions");
+		expect(sessionInventory.listAllMetadata).not.toHaveBeenCalled();
 	});
 
 	it("preserves session previews below and at the character limit", async () => {
@@ -1226,7 +1237,11 @@ describe("dashboard server — fleet and runtimes", () => {
 		await expect(
 			fetch(`${base}/api/runtimes/${key}/dequeue`, { method: "POST" }).then((r) => r.json()),
 		).resolves.toEqual({ steering: ["queued steer"], followUp: ["queued follow"] });
-		await expect(fetch(`${base}/api/daily-cost`).then((r) => r.json())).resolves.toEqual({ cost: 1.23 });
+		await expect(fetch(`${base}/api/daily-cost`).then((r) => r.json())).resolves.toEqual({
+			cost: 1.23,
+			main: 1,
+			subagent: 0.23,
+		});
 		await expect(fetch(`${base}/api/runtimes/${key}/abort-compaction`, { method: "POST" })).resolves.toMatchObject({
 			status: 200,
 		});

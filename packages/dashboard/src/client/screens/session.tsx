@@ -896,7 +896,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [stats, setStats] = createSignal<SessionStatsDto>();
 	const [performance, setPerformance] = createSignal<PerformanceStatsDto>();
 	const [branch, setBranch] = createSignal<string | null>();
-	const [dailyCost, setDailyCost] = createSignal<number>();
+	const [dailyCost, setDailyCost] = createSignal<{ cost: number; main: number; subagent: number }>();
 	const [commands, setCommands] = createSignal<CommandDto[]>([]);
 	const [commandMenuClosed, setCommandMenuClosed] = createSignal(false);
 	const [commandSelection, setCommandSelection] = createSignal(0);
@@ -983,7 +983,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		if (statsResult.status === "fulfilled") setStats(statsResult.value);
 		if (performanceResult.status === "fulfilled") setPerformance(performanceResult.value);
 		if (branchResult.status === "fulfilled") setBranch(branchResult.value.branch);
-		if (dailyCostResult?.[0]?.status === "fulfilled") setDailyCost(dailyCostResult[0].value.cost);
+		if (dailyCostResult?.[0]?.status === "fulfilled") setDailyCost(dailyCostResult[0].value);
 		const rejected = [statsResult, performanceResult, branchResult, ...(dailyCostResult ?? [])].find(
 			(result) => result.status === "rejected",
 		);
@@ -1743,11 +1743,15 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	};
 	const costSummary = () => {
 		const sessionCost = stats()?.cost ?? 0;
+		const subagentCost = stats()?.subagentCost ?? 0;
 		const usingSubscription = runtime()?.state.usingSubscription ?? false;
-		if (!sessionCost && !usingSubscription) return undefined;
+		if (!sessionCost && !subagentCost && !usingSubscription) return undefined;
 		let text = `$${sessionCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
-		const today = dailyCost();
-		if (today !== undefined && today > sessionCost) text += `, today: $${today.toFixed(2)}`;
+		if (subagentCost > 0) text += ` + $${subagentCost.toFixed(3)} subs`;
+		const sessionTotal = sessionCost + subagentCost;
+		const todayBreakdown = dailyCost();
+		if (todayBreakdown !== undefined && todayBreakdown.cost > sessionTotal)
+			text += `, today: $${todayBreakdown.cost.toFixed(2)}`;
 		return text;
 	};
 	const contextSummary = () => {

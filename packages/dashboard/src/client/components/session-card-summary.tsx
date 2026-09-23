@@ -107,7 +107,10 @@ export function SessionCardSummary(props: { store: AppStore; runtime: RuntimeInf
 					<span>·</span>
 				</Show>
 				<Show when={props.runtime.stats}>
-					<span>${props.runtime.stats!.cost.toFixed(2)}</span>
+					<span>
+						${props.runtime.stats!.cost.toFixed(2)}
+						{props.runtime.stats!.subagentCost ? ` + $${props.runtime.stats!.subagentCost.toFixed(2)} subs` : ""}
+					</span>
 					<span>·</span>
 				</Show>
 				<span>{props.runtime.state.messageCount} msgs</span>
