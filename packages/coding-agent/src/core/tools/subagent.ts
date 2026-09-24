@@ -1672,6 +1672,8 @@ export interface BackgroundAgentInfo {
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
 const backgroundAbortControllers = new Map<string, AbortController>();
 const backgroundControlClients = new Map<string, RpcClient>();
+/** Private to parent-model calls; RPC/Dashboard steering retains its existing process-wide access. */
+const backgroundParentOwners = new Map<string, string>();
 
 const REHYDRATED_AGENT_ID_PREFIX = "rehydrated-";
 const HEADER_READ_CHUNK_BYTES = 8192;
@@ -2070,6 +2072,7 @@ export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
 			backgroundAgentRegistry.delete(id);
 			backgroundAbortControllers.delete(id);
 			backgroundControlClients.delete(id);
+			backgroundParentOwners.delete(id);
 		}
 	}
 }
@@ -2166,6 +2169,18 @@ const taskItemSchema = Type.Object({
 });
 
 const subagentSchema = Type.Object({
+	steer: Type.Optional(
+		Type.Object(
+			{
+				agentId: Type.String({
+					minLength: 1,
+					description: "ID returned when this parent launched the child or chain",
+				}),
+				message: Type.String({ minLength: 1, description: "Nonempty text to send unchanged to the live child" }),
+			},
+			{ description: "Message an already-running child owned by this parent; does not launch an agent" },
+		),
+	),
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.Optional(Type.String({ description: "Task prompt (single mode)", minLength: 1 })),
 	model: Type.Optional(
@@ -2215,7 +2230,7 @@ export type SubagentToolInput = Static<typeof subagentSchema>;
 
 export interface SubagentToolDetails {
 	truncation?: TruncationResult;
-	mode: "single" | "parallel" | "chain";
+	mode: "single" | "parallel" | "chain" | "steer";
 	agentCount: number;
 }
 
@@ -2226,6 +2241,10 @@ function formatSubagentCall(
 ): string {
 	const invalidArg = invalidArgText(theme);
 
+	if (args?.steer) {
+		const id = str(args.steer.agentId);
+		return `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", "steer")} ${id ? theme.fg("toolOutput", id) : argsComplete ? invalidArg : theme.fg("muted", "…")}`;
+	}
 	if (args?.tasks) {
 		// Show agent type(s) in the parallel label
 		const agentCounts = new Map<string, number>();
@@ -2335,6 +2354,10 @@ export function createSubagentToolDefinition(
 	const getParentModel = options?.parentModel ?? (() => undefined);
 	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
 	const getParentSessionId = options?.parentSessionId ?? (() => undefined);
+	// Standalone tool definitions without a parent session UUID get a private owner token.
+	// AgentSession provides its stable UUID, so ownership persists when tools are rebuilt on /reload.
+	const standaloneOwner = generateAgentId();
+	const getParentOwner = () => getParentSessionId() || standaloneOwner;
 	const getSingleModelMode = options?.singleModelMode ?? (() => false);
 	const modelRegistry = options?.modelRegistry;
 	const getAgentModelsForAgent = options?.getAgentModelsForAgent;
@@ -2374,6 +2397,7 @@ export function createSubagentToolDefinition(
 			"(Explore for concrete evidence gathering, Sandbox for isolated /tmp-only analysis). " +
 			`Supports \`task\` for a single task, \`tasks\` for parallel execution in one call (up to 8, max ${maxConcurrentSubagents} concurrent), ` +
 			"and `chain` for a sequential pipeline with {previous} substitution. " +
+			"Use `steer: { agentId, message }` instead of a launch mode to message your own running child (or active chain step) without starting a new one. " +
 			"All subagents run in background — returns immediately, notifies on completion.",
 		promptSnippet: "Run role-matched work in independent child agents",
 		promptGuidelines: [
@@ -2386,6 +2410,7 @@ export function createSubagentToolDefinition(
 			builtInAgentsLine,
 			'Use the `tasks` array to run multiple independent, role-matched tasks in a single `subagent` call (parallel mode), not separate calls. Typical mach6-review batch: `{ "tasks": [{ "agent": "code-reviewer", "task": "Review code changes" }, { "agent": "error-auditor", "task": "Audit runtime failures" }, { "agent": "test-reviewer", "task": "Review test coverage" }, { "agent": "completeness-checker", "task": "Check issue completeness" }] }`',
 			"Use chain mode for role-matched steps when each step depends on the previous step's output (reference with {previous})",
+			'To send new instructions to a running child, call `subagent` with only `steer: { agentId: "<ID from launch>", message: "<text>" }`. This queues unchanged text for that child (or the active chain step), does not spawn or end your turn, and fails if it is not yours, finished, queued, or between steps. It is distinct from user-driven Dashboard steering.',
 			"All subagents run in background — the tool returns immediately and you are notified when each agent completes.",
 			"Subagents have their own context window — provide enough context in the task prompt",
 			"Each agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, end your current turn with no tool calls (as if you were asking the user a question and waiting for their reply). This emits `agent_end` and lets the framework deliver the completion as a new message that resumes your turn automatically. Do not call `sleep` or any other waiting action, and do not launch filler work.",
@@ -2398,29 +2423,73 @@ export function createSubagentToolDefinition(
 		parameters: subagentSchema,
 
 		async execute(_toolCallId, params: SubagentToolInput, _signal, _onUpdate) {
-			const agents = discoverAgentTypes(cwd);
-
-			// Determine mode
-			const modeCount = (params.task ? 1 : 0) + (params.tasks ? 1 : 0) + (params.chain ? 1 : 0);
-			if (modeCount === 0) {
-				return {
-					content: [
-						{ type: "text", text: "Error: provide one of `task` (single), `tasks` (parallel), or `chain`." },
-					],
-					details: undefined,
-				};
-			}
-			if (modeCount > 1) {
+			// Validate before discovery, spawning or acquiring a concurrency slot.
+			const modeCount =
+				Number(params.task !== undefined) +
+				Number(params.tasks !== undefined) +
+				Number(params.chain !== undefined) +
+				Number(params.steer !== undefined);
+			if (modeCount !== 1) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: "Error: modes are mutually exclusive — provide only one of `task`, `tasks`, or `chain`.",
+							text:
+								modeCount === 0
+									? "Error: provide one of `task`, `tasks`, `chain`, or `steer`."
+									: "Error: modes are mutually exclusive — provide only one of `task`, `tasks`, `chain`, or `steer`.",
 						},
 					],
 					details: undefined,
 				};
 			}
+			if (params.steer !== undefined) {
+				const { agentId, message } = params.steer;
+				if (typeof agentId !== "string" || !agentId.trim() || typeof message !== "string" || !message.trim()) {
+					return {
+						content: [{ type: "text", text: "Error: steering requires a nonempty agentId and message." }],
+						details: undefined,
+					};
+				}
+				if (params.agent !== undefined || params.model !== undefined || params.thinking !== undefined) {
+					return {
+						content: [{ type: "text", text: "Error: steering cannot include launch options." }],
+						details: undefined,
+					};
+				}
+				if (backgroundParentOwners.get(agentId) !== getParentOwner()) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: background agent "${agentId}" was not launched by this parent session.`,
+							},
+						],
+						details: undefined,
+					};
+				}
+				try {
+					await steerBackgroundAgent(agentId, message);
+					return {
+						content: [{ type: "text", text: `Message queued for background agent ${agentId}.` }],
+						details: { mode: "steer", agentCount: 0 },
+					};
+				} catch (err) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: could not steer background agent "${agentId}": ${err instanceof Error ? err.message : String(err)}`,
+							},
+						],
+						details: undefined,
+					};
+				}
+			}
+			if (params.task !== undefined && !params.task.trim()) {
+				return { content: [{ type: "text", text: "Error: task must not be empty." }], details: undefined };
+			}
+			const agents = discoverAgentTypes(cwd);
 
 			// All subagents run in background mode — return immediately, notify on completion
 			{
@@ -2468,6 +2537,7 @@ export function createSubagentToolDefinition(
 						cwd: agentCwd,
 					});
 					backgroundAbortControllers.set(agentId, bgAbort);
+					backgroundParentOwners.set(agentId, getParentOwner());
 					onBackgroundStart?.(agentId, agentName, taskSummary, sessionDir);
 
 					// Relay child JSONL events tagged with this agent's ID. Guarded so a

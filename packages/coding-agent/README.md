@@ -396,7 +396,13 @@ Task tracking is prompt-driven: the system prompt includes guidelines for when t
 
 ## Subagents
 
-The optional `subagent` tool runs focused, role-matched work in independent child agent processes. Each subagent runs in its own process with its own context window, and notifies the parent when complete. In the dashboard, a live child's transcript view can accept the user's own steering messages directly; repeated messages use that child's configured one-at-a-time or all-at-once steering queue. Completed and rehydrated transcripts remain read-only.
+The optional `subagent` tool runs focused, role-matched work in independent child agent processes. Each subagent runs in its own process with its own context window, and notifies the parent when complete. After launch, the **parent model** can message one of its own running children through the same live steering queue, without spawning a new child or ending its turn:
+
+```json
+{"steer":{"agentId":"<ID returned by a single, parallel, or chain launch>","message":"Please also check the edge case"}}
+```
+
+The text is forwarded unchanged to the selected child; a chain ID addresses only the currently controllable step. Unknown, queued, between-step, completed, and other parent sessions' child IDs fail clearly. This parent-model operation is distinct from **user-driven Dashboard steering**: in the dashboard, a live child's transcript view can accept the user's own steering messages directly; repeated messages use that child's configured one-at-a-time or all-at-once steering queue. Completed and rehydrated transcripts remain read-only.
 
 When `agent` is omitted, dreb selects the default `Explore` agent. Explore retrieves concrete, bounded evidence: files, symbols, documentation, call sites, exact snippets, tests for a named behavior, and explicitly named data flows. The primary agent must synthesize that evidence and owns root-cause diagnosis, ambiguous-requirement interpretation, architecture/design decisions, implementation recommendations, planning, and final conclusions.
 
