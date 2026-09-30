@@ -73,6 +73,14 @@ describe("live provider API opt-in", () => {
 		expect(offenders).toEqual([]);
 	});
 
+	it("context-overflow tests require the expensive opt-in", () => {
+		const file = join(repoRoot, "packages/ai/test/context-overflow.test.ts");
+		const offenders = gateConditions(stripComments(readFileSync(file, "utf8")))
+			.filter((condition) => CREDENTIAL.test(condition) && !/isExpensiveLiveApiEnabled\(/.test(condition))
+			.map((condition) => condition.trim().replace(/\s+/g, " "));
+		expect(offenders).toEqual([]);
+	});
+
 	it("no test references the removed skip-style live API flag", () => {
 		// Built from parts so this file does not match itself.
 		const removedFlag = ["DREB", "SKIP", "LIVE", "API"].join("_");

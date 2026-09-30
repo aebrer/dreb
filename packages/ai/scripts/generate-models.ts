@@ -4,6 +4,7 @@ import { writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Api, KnownProvider, Model } from "../src/types.js";
+import { deriveCodexModels } from "./codex-models.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -927,54 +928,8 @@ async function generateModels() {
 	}
 
 	// OpenAI Codex (ChatGPT OAuth) models
-	// models.dev does not track the Codex surface (chatgpt.com backend-api + ChatGPT OAuth),
-	// so we derive it from the OpenAI Platform catalog: every frontier GPT model (5.5+, plus
-	// the gpt-daybreak-* previews) is mirrored onto openai-codex. This keeps Codex in sync
-	// with new OpenAI releases automatically. Availability of a given model on Codex depends
-	// on the user's ChatGPT plan/workspace (enterprise workspaces enable models later), so we
-	// do not filter by what one account can reach.
-	// Excluded: -pro / -mini / -nano / -chat* / -codex* variants (not Codex-surface models),
-	// and bare family ids (e.g. gpt-5.6) when named variants (sol/terra/luna) exist.
-	// Context: all Codex models use 272k, matching Codex CLI's default context_window and Pi.
-	// The models support ~1M, but prompts above 272k input are billed at 2x input / 1.5x output.
-	// Users can raise it per model via modelOverrides in models.json.
-	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-	const CODEX_CONTEXT = 272000;
-	const CODEX_MAX_TOKENS = 128000;
-	// Older models still served on Codex that fall outside the derivation rule.
-	const CODEX_EXTRA_IDS = ["gpt-5.4-mini"];
-	const CODEX_EXCLUDED_SUFFIX = /-(pro|mini|nano|chat|codex|spark|realtime|audio|search)(-|$)/;
-	const isCodexFrontier = (id: string): boolean => {
-		if (CODEX_EXTRA_IDS.includes(id)) return true;
-		if (/^gpt-daybreak-[a-z]+-latest$/.test(id)) return true;
-		const m = /^gpt-(\d+)(?:\.(\d+))?(-[a-z]+)?$/.exec(id);
-		if (!m || CODEX_EXCLUDED_SUFFIX.test(id)) return false;
-		const version = Number(m[1]) + Number(m[2] ?? 0) / 10;
-		return version >= 5.5;
-	};
-	const openaiIds = new Set(allModels.filter((m) => m.provider === "openai").map((m) => m.id));
-	const hasNamedVariants = (id: string): boolean =>
-		[...openaiIds].some((other) => other.startsWith(`${id}-`) && !CODEX_EXCLUDED_SUFFIX.test(other));
-	const codexModels: Model<"openai-codex-responses">[] = allModels
-		.filter((m) => m.provider === "openai" && isCodexFrontier(m.id))
-		.filter((m) => !(/^gpt-\d+(\.\d+)?$/.test(m.id) && hasNamedVariants(m.id)))
-		.map((m) => ({
-			id: m.id,
-			name: m.name,
-			api: "openai-codex-responses" as const,
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"] as ("text" | "image")[],
-			cost: { ...m.cost },
-			contextWindow: Math.min(m.contextWindow, CODEX_CONTEXT),
-			maxTokens: Math.min(m.maxTokens, CODEX_MAX_TOKENS),
-		}));
-	for (const id of [...CODEX_EXTRA_IDS, "gpt-5.5", "gpt-5.6-luna", "gpt-6-astra"]) {
-		if (!codexModels.some((m) => m.id === id)) {
-			throw new Error(`openai-codex derivation lost expected model ${id} — OpenAI catalog changed?`);
-		}
-	}
+	// Codex surface is derived from the OpenAI catalog — see scripts/codex-models.ts.
+	const codexModels = deriveCodexModels(allModels);
 	allModels.push(...codexModels);
 
 	// Add missing Grok models
@@ -1558,4 +1513,7 @@ export const MODELS = {
 }
 
 // Run the generator
-generateModels().catch(console.error);
+generateModels().catch((error) => {
+	console.error(error);
+	process.exitCode = 1;
+});

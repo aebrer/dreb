@@ -1,24 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { CODEX_EXPECTED_IDS } from "../scripts/codex-models.js";
 import { MODELS } from "../src/models.generated.js";
 import type { Model } from "../src/types.js";
 
 describe("openai-codex generated registry", () => {
 	const providerModels = MODELS["openai-codex"];
 
-	it("mirrors frontier OpenAI models onto the codex surface", () => {
-		expect(Object.keys(providerModels).sort()).toEqual([
-			"gpt-5.4-mini",
-			"gpt-5.5",
-			"gpt-5.6-luna",
-			"gpt-5.6-sol",
-			"gpt-5.6-terra",
-			"gpt-6-astra",
-			"gpt-6-luna",
-			"gpt-6-sol",
-			"gpt-6.1-sol",
-			"gpt-daybreak-blue-latest",
-			"gpt-daybreak-red-latest",
-		]);
+	it("includes every expected codex model (new catalog entries may extend the list)", () => {
+		expect(Object.keys(providerModels)).toEqual(expect.arrayContaining([...CODEX_EXPECTED_IDS]));
 	});
 
 	it("excludes non-codex OpenAI variants and bare family aliases", () => {
