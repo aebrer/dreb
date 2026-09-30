@@ -50,7 +50,8 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.jso
 
 - Requires ChatGPT Plus or Pro subscription
 - Personal use only; for production, use the OpenAI Platform API
-- Built-in models are `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (default), and `gpt-6-astra`. The Codex catalog is maintained separately from the OpenAI Platform API catalog.
+- The Codex catalog is derived automatically from the OpenAI Platform catalog at build time: frontier GPT models (GPT-5.5 and newer, named variants such as Sol/Terra/Luna/Astra, and `gpt-daybreak-*` previews) are mirrored onto `openai-codex`, plus `gpt-5.4-mini`. `-pro`, `-mini`, `-nano`, `-chat` and `-codex` variants are excluded. Default is `gpt-5.6-luna`. Every Codex model uses a 272k context window, matching Codex CLI's default: the models support ~1M, but prompts above 272k input are billed at 2x. To use a larger window, override `contextWindow` for the model via `modelOverrides` in `models.json`.
+- Which models actually work depends on your ChatGPT plan/workspace — enterprise workspaces often enable new models later. An unavailable model fails with "model is not supported when using Codex with a ChatGPT account".
 - Astra supports text/image input, a conservative 272K configured context window, and up to 128K output tokens. Codex `minimal` effort is clamped to `low`; `xhigh` and `max` are sent unchanged.
 
 ### Kimi For Coding

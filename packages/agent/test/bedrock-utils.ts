@@ -2,6 +2,8 @@
  * Utility functions for Amazon Bedrock tests
  */
 
+import { isLiveApiEnabled } from "./live-api.js";
+
 /**
  * Check if any valid AWS credentials are configured for Bedrock.
  * Returns true if any of the following are set:
@@ -15,5 +17,5 @@ export function hasBedrockCredentials(env: NodeJS.ProcessEnv = process.env): boo
 
 /** Check whether the explicitly enabled extensive Bedrock suite may make live calls. */
 export function shouldRunBedrockExtensiveTests(env: NodeJS.ProcessEnv = process.env): boolean {
-	return env.DREB_SKIP_LIVE_API !== "1" && !!env.BEDROCK_EXTENSIVE_MODEL_TEST && hasBedrockCredentials(env);
+	return isLiveApiEnabled(env) && !!env.BEDROCK_EXTENSIVE_MODEL_TEST && hasBedrockCredentials(env);
 }

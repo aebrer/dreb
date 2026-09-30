@@ -10,6 +10,7 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import { getGitHubCopilotBaseUrl, getOAuthApiKey } from "../src/utils/oauth/index.js";
 import type { OAuthCredentials, OAuthProvider } from "../src/utils/oauth/types.js";
+import { isLiveApiEnabled } from "./live-api.js";
 
 /**
  * Override a github-copilot model's `baseUrl` with the API endpoint derived
@@ -77,7 +78,7 @@ function saveAuthStorage(storage: AuthStorage): void {
  * For google-gemini-cli and google-antigravity, returns JSON-encoded { token, projectId }
  */
 export async function resolveApiKey(provider: string): Promise<string | undefined> {
-	if (process.env.DREB_SKIP_LIVE_API === "1") return undefined;
+	if (!isLiveApiEnabled()) return undefined;
 
 	const storage = loadAuthStorage();
 	const entry = storage[provider];

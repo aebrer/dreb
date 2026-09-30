@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
+import { isLiveApiEnabled } from "./live-api.js";
 
 interface AnthropicThinkingPayload {
 	thinking?: { type: string; budget_tokens?: number };
@@ -115,16 +116,13 @@ describe("Anthropic thinking disable payload", () => {
 	});
 });
 
-describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
-	"Anthropic thinking disable E2E",
-	() => {
-		it("disables thinking for Claude reasoning models", { retry: 2, timeout: 30000 }, async () => {
-			const result = await runWithoutReasoning(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
+describe.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E", () => {
+	it("disables thinking for Claude reasoning models", { retry: 2, timeout: 30000 }, async () => {
+		const result = await runWithoutReasoning(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
 
-			expect(result.thinkingEventCount).toBe(0);
-			expect(result.thinkingCharCount).toBe(0);
-			expect(result.contentTypes).not.toContain("thinking");
-			expect(countPongs(result.text)).toBeGreaterThanOrEqual(35);
-		});
-	},
-);
+		expect(result.thinkingEventCount).toBe(0);
+		expect(result.thinkingCharCount).toBe(0);
+		expect(result.contentTypes).not.toContain("thinking");
+		expect(countPongs(result.text)).toBeGreaterThanOrEqual(35);
+	});
+});

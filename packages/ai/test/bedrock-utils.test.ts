@@ -5,13 +5,16 @@ describe("shouldRunBedrockExtensiveTests", () => {
 	const enabledEnvironment: NodeJS.ProcessEnv = {
 		AWS_PROFILE: "test-profile",
 		BEDROCK_EXTENSIVE_MODEL_TEST: "1",
+		DREB_LIVE_API: "1",
 	};
 
-	it("disables live model calls when DREB_SKIP_LIVE_API is set", () => {
-		expect(shouldRunBedrockExtensiveTests({ ...enabledEnvironment, DREB_SKIP_LIVE_API: "1" })).toBe(false);
+	it("disables live model calls unless DREB_LIVE_API=1", () => {
+		const { DREB_LIVE_API: _, ...withoutOptIn } = enabledEnvironment;
+		expect(shouldRunBedrockExtensiveTests(withoutOptIn)).toBe(false);
+		expect(shouldRunBedrockExtensiveTests({ ...enabledEnvironment, DREB_LIVE_API: "0" })).toBe(false);
 	});
 
-	it("preserves explicitly enabled live model calls when the guard is unset", () => {
+	it("runs explicitly enabled live model calls when opted in", () => {
 		expect(shouldRunBedrockExtensiveTests(enabledEnvironment)).toBe(true);
 	});
 });

@@ -2,33 +2,31 @@ import { describe, expect, it } from "vitest";
 import { MODELS } from "../src/models.generated.js";
 import { complete } from "../src/stream.js";
 import type { Model } from "../src/types.js";
+import { isLiveApiEnabled } from "./live-api.js";
 
-describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENCODE_API_KEY)(
-	"OpenCode Models Smoke Test",
-	() => {
-		const providers = [
-			{ key: "opencode", label: "OpenCode Zen" },
-			{ key: "opencode-go", label: "OpenCode Go" },
-		] as const;
+describe.skipIf(!isLiveApiEnabled() || !process.env.OPENCODE_API_KEY)("OpenCode Models Smoke Test", () => {
+	const providers = [
+		{ key: "opencode", label: "OpenCode Zen" },
+		{ key: "opencode-go", label: "OpenCode Go" },
+	] as const;
 
-		providers.forEach(({ key, label }) => {
-			const providerModels = Object.values(MODELS[key]);
-			providerModels.forEach((model) => {
-				it(`${label}: ${model.id}`, async () => {
-					// A stable ID for the whole live smoke conversation, mirroring how
-					// AgentSession passes one persisted UUID per conversation (issue 500).
-					const response = await complete(
-						model as Model<any>,
-						{
-							messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
-						},
-						{ sessionId: "dreb-zen-live-smoke-test" },
-					);
+	providers.forEach(({ key, label }) => {
+		const providerModels = Object.values(MODELS[key]);
+		providerModels.forEach((model) => {
+			it(`${label}: ${model.id}`, async () => {
+				// A stable ID for the whole live smoke conversation, mirroring how
+				// AgentSession passes one persisted UUID per conversation (issue 500).
+				const response = await complete(
+					model as Model<any>,
+					{
+						messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
+					},
+					{ sessionId: "dreb-zen-live-smoke-test" },
+				);
 
-					expect(response.content).toBeTruthy();
-					expect(response.stopReason).toBe("stop");
-				}, 60000);
-			});
+				expect(response.content).toBeTruthy();
+				expect(response.stopReason).toBe("stop");
+			}, 60000);
 		});
-	},
-);
+	});
+});

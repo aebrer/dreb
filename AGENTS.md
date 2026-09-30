@@ -95,9 +95,11 @@ The initial startup scan still walks upward from the main or subagent launch cwd
 ## Testing
 
 ```bash
-npm test          # Run all workspace tests
+npm test          # Run all workspace tests (offline: live provider tests skip)
 npx vitest --run packages/coding-agent/test/some.test.ts  # Single file
 ```
+
+**Live provider tests are opt-in and cost real money/quota.** They only run with `DREB_LIVE_API=1` (context-overflow tests also need `DREB_LIVE_API_EXPENSIVE=1`). Never enable them without explicit approval, and scope them to a single file/provider. New live tests must gate on `isLiveApiEnabled()` from the package's `test/live-api.ts` — see `packages/coding-agent/docs/development.md`.
 
 Linting:
 

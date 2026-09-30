@@ -25,7 +25,7 @@ vi.mock("../src/utils/oauth/index.js", () => ({
 
 import { resolveApiKey } from "./oauth.js";
 
-const originalSkipLiveApi = process.env.DREB_SKIP_LIVE_API;
+const originalLiveApi = process.env.DREB_LIVE_API;
 
 describe("test OAuth credential resolution", () => {
 	beforeEach(() => {
@@ -34,15 +34,15 @@ describe("test OAuth credential resolution", () => {
 	});
 
 	afterEach(() => {
-		if (originalSkipLiveApi === undefined) {
-			delete process.env.DREB_SKIP_LIVE_API;
+		if (originalLiveApi === undefined) {
+			delete process.env.DREB_LIVE_API;
 		} else {
-			process.env.DREB_SKIP_LIVE_API = originalSkipLiveApi;
+			process.env.DREB_LIVE_API = originalLiveApi;
 		}
 	});
 
-	it("does not read, refresh, or write credentials when live APIs are disabled", async () => {
-		process.env.DREB_SKIP_LIVE_API = "1";
+	it("does not read, refresh, or write credentials unless live APIs are opted in", async () => {
+		delete process.env.DREB_LIVE_API;
 
 		await expect(resolveApiKey("openai-codex")).resolves.toBeUndefined();
 		expect(mocks.existsSync).not.toHaveBeenCalled();
@@ -53,8 +53,8 @@ describe("test OAuth credential resolution", () => {
 		expect(mocks.chmodSync).not.toHaveBeenCalled();
 	});
 
-	it("still refreshes and saves OAuth credentials when the guard is unset", async () => {
-		delete process.env.DREB_SKIP_LIVE_API;
+	it("refreshes and saves OAuth credentials when DREB_LIVE_API=1", async () => {
+		process.env.DREB_LIVE_API = "1";
 		mocks.readFileSync.mockReturnValue(
 			JSON.stringify({
 				"openai-codex": {

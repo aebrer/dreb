@@ -15,6 +15,7 @@ import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-u
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
 import { ZAI_GLM_5_EXTENDED } from "./fixtures/zai-models.js";
+import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -354,36 +355,33 @@ async function multiTurn<TApi extends Api>(model: Model<TApi>, options?: StreamO
 }
 
 describe("Generate E2E Tests", () => {
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GEMINI_API_KEY)(
-		"Gemini Provider (gemini-2.5-flash)",
-		() => {
-			const llm = getModel("google", "gemini-2.5-flash");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.GEMINI_API_KEY)("Gemini Provider (gemini-2.5-flash)", () => {
+		const llm = getModel("google", "gemini-2.5-flash");
 
-			it("should complete basic text generation", { retry: 3 }, async () => {
-				await basicTextGeneration(llm);
-			});
+		it("should complete basic text generation", { retry: 3 }, async () => {
+			await basicTextGeneration(llm);
+		});
 
-			it("should handle tool calling", { retry: 3 }, async () => {
-				await handleToolCall(llm);
-			});
+		it("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm);
+		});
 
-			it("should handle streaming", { retry: 3 }, async () => {
-				await handleStreaming(llm);
-			});
+		it("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm);
+		});
 
-			it("should handle thinking", { retry: 3 }, async () => {
-				await handleThinking(llm, { thinking: { enabled: true, budgetTokens: 1024 } });
-			});
+		it("should handle thinking", { retry: 3 }, async () => {
+			await handleThinking(llm, { thinking: { enabled: true, budgetTokens: 1024 } });
+		});
 
-			it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
-				await multiTurn(llm, { thinking: { enabled: true, budgetTokens: 2048 } });
-			});
+		it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
+			await multiTurn(llm, { thinking: { enabled: true, budgetTokens: 2048 } });
+		});
 
-			it("should handle image input", { retry: 3 }, async () => {
-				await handleImage(llm);
-			});
-		},
-	);
+		it("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm);
+		});
+	});
 
 	describe("Google Vertex Provider (gemini-3-flash-preview)", () => {
 		const vertexProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
@@ -393,7 +391,7 @@ describe("Generate E2E Tests", () => {
 		const vertexOptions = { project: vertexProject, location: vertexLocation } as const;
 		const llm = getModel("google-vertex", "gemini-3-flash-preview");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
+		it.skipIf(!isLiveApiEnabled() || !isVertexConfigured)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -401,7 +399,7 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !vertexApiKey)(
+		it.skipIf(!isLiveApiEnabled() || !vertexApiKey)(
 			"should complete basic text generation with Vertex API key",
 			{ retry: 3 },
 			async () => {
@@ -409,35 +407,23 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, vertexOptions);
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !isVertexConfigured)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, vertexOptions);
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
-			"should handle thinking",
-			{ retry: 3 },
-			async () => {
-				const { ThinkingLevel } = await import("@google/genai");
-				await handleThinking(llm, {
-					...vertexOptions,
-					thinking: { enabled: true, budgetTokens: 1024, level: ThinkingLevel.LOW },
-				});
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !isVertexConfigured)("should handle thinking", { retry: 3 }, async () => {
+			const { ThinkingLevel } = await import("@google/genai");
+			await handleThinking(llm, {
+				...vertexOptions,
+				thinking: { enabled: true, budgetTokens: 1024, level: ThinkingLevel.LOW },
+			});
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, vertexOptions);
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !isVertexConfigured)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, vertexOptions);
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
+		it.skipIf(!isLiveApiEnabled() || !isVertexConfigured)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -449,16 +435,12 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, vertexOptions);
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !isVertexConfigured)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, vertexOptions);
+		});
 	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)(
 		"OpenAI Completions Provider (gpt-4o-mini)",
 		() => {
 			const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini");
@@ -486,38 +468,35 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
-		"OpenAI Responses Provider (gpt-5-mini)",
-		() => {
-			const llm = getModel("openai", "gpt-5-mini");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("OpenAI Responses Provider (gpt-5-mini)", () => {
+		const llm = getModel("openai", "gpt-5-mini");
 
-			it("should complete basic text generation", { retry: 3 }, async () => {
-				await basicTextGeneration(llm);
-			});
+		it("should complete basic text generation", { retry: 3 }, async () => {
+			await basicTextGeneration(llm);
+		});
 
-			it("should handle tool calling", { retry: 3 }, async () => {
-				await handleToolCall(llm);
-			});
+		it("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm);
+		});
 
-			it("should handle streaming", { retry: 3 }, async () => {
-				await handleStreaming(llm);
-			});
+		it("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm);
+		});
 
-			it("should handle thinking", { retry: 2 }, async () => {
-				await handleThinking(llm, { reasoningEffort: "high" });
-			});
+		it("should handle thinking", { retry: 2 }, async () => {
+			await handleThinking(llm, { reasoningEffort: "high" });
+		});
 
-			it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
-				await multiTurn(llm, { reasoningEffort: "high" });
-			});
+		it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
+			await multiTurn(llm, { reasoningEffort: "high" });
+		});
 
-			it("should handle image input", { retry: 3 }, async () => {
-				await handleImage(llm);
-			});
-		},
-	);
+		it("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)(
 		"Anthropic Provider (claude-haiku-4-5)",
 		() => {
 			const model = findModel("anthropic", "haiku")!;
@@ -540,7 +519,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAzureOpenAICredentials())(
+	describe.skipIf(!isLiveApiEnabled() || !hasAzureOpenAICredentials())(
 		"Azure OpenAI Responses Provider (gpt-4o-mini)",
 		() => {
 			const llm = getModel("azure-openai-responses", "gpt-4o-mini");
@@ -565,7 +544,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.XAI_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.XAI_API_KEY)(
 		"xAI Provider (grok-code-fast-1 via OpenAI Completions)",
 		() => {
 			const llm = getModel("xai", "grok-code-fast-1");
@@ -592,7 +571,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GROQ_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.GROQ_API_KEY)(
 		"Groq Provider (gpt-oss-20b via OpenAI Completions)",
 		() => {
 			const llm = getModel("groq", "openai/gpt-oss-20b");
@@ -619,7 +598,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.CEREBRAS_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.CEREBRAS_API_KEY)(
 		"Cerebras Provider (gpt-oss-120b via OpenAI Completions)",
 		() => {
 			const llm = getModel("cerebras", "gpt-oss-120b");
@@ -646,7 +625,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.HF_TOKEN)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.HF_TOKEN)(
 		"Hugging Face Provider (Kimi-K2.5 via OpenAI Completions)",
 		() => {
 			const llm = getModel("huggingface", "moonshotai/Kimi-K2.5");
@@ -673,7 +652,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENROUTER_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENROUTER_API_KEY)(
 		"OpenRouter Provider (glm-5 via OpenAI Completions)",
 		() => {
 			const llm = getModel("openrouter", "z-ai/glm-5");
@@ -704,7 +683,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.AI_GATEWAY_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.AI_GATEWAY_API_KEY)(
 		"Vercel AI Gateway Provider (google/gemini-2.5-flash via Anthropic Messages)",
 		() => {
 			const llm = getModel("vercel-ai-gateway", "google/gemini-2.5-flash");
@@ -731,7 +710,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.AI_GATEWAY_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.AI_GATEWAY_API_KEY)(
 		"Vercel AI Gateway Provider (anthropic/claude-opus-4.5 via Anthropic Messages)",
 		() => {
 			const llm = getModel("vercel-ai-gateway", "anthropic/claude-opus-4.5");
@@ -758,7 +737,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.AI_GATEWAY_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.AI_GATEWAY_API_KEY)(
 		"Vercel AI Gateway Provider (openai/gpt-5.1-codex-max via Anthropic Messages)",
 		() => {
 			const llm = getModel("vercel-ai-gateway", "openai/gpt-5.1-codex-max");
@@ -785,7 +764,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ZAI_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.ZAI_API_KEY)(
 		"zAI Provider (glm-5 via OpenAI Completions)",
 		() => {
 			const llm = ZAI_GLM_5_EXTENDED;
@@ -816,7 +795,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.MISTRAL_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)(
 		"Mistral Provider (devstral-medium-latest)",
 		() => {
 			const llm = getModel("mistral", "devstral-medium-latest");
@@ -844,7 +823,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.MISTRAL_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)(
 		"Mistral Provider (pixtral-12b with image support)",
 		() => {
 			const llm = getModel("mistral", "pixtral-12b");
@@ -867,7 +846,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.MINIMAX_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MINIMAX_API_KEY)(
 		"MiniMax Provider (MiniMax-M2.7 via Anthropic Messages)",
 		() => {
 			const llm = getModel("minimax", "MiniMax-M2.7");
@@ -894,7 +873,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.KIMI_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.KIMI_API_KEY)(
 		"Kimi For Coding Provider (kimi-k2-thinking via Anthropic Messages)",
 		() => {
 			const llm = getModel("kimi-coding", "kimi-k2-thinking");
@@ -929,7 +908,7 @@ describe("Generate E2E Tests", () => {
 	describe("GitHub Copilot Provider (gpt-5.4 via OpenAI Completions)", () => {
 		const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -937,23 +916,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, { apiKey: githubCopilotToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, { apiKey: githubCopilotToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, { apiKey: githubCopilotToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, { apiKey: githubCopilotToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should handle thinking",
 			{ retry: 2, timeout: 60000 },
 			async () => {
@@ -961,7 +932,7 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3, timeout: 60000 },
 			async () => {
@@ -969,19 +940,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, { apiKey: githubCopilotToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, { apiKey: githubCopilotToken });
+		});
 	});
 
 	describe("GitHub Copilot Provider (reasoning Claude via Anthropic Messages)", () => {
 		const llm = applyCopilotBaseUrl(getCopilotTestModel("anthropic-messages"), githubCopilotToken);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -989,23 +956,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, { apiKey: githubCopilotToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, { apiKey: githubCopilotToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, { apiKey: githubCopilotToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, { apiKey: githubCopilotToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should handle thinking",
 			{ retry: 2, timeout: 60000 },
 			async () => {
@@ -1018,7 +977,7 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3, timeout: 60000 },
 			async () => {
@@ -1026,19 +985,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, { apiKey: githubCopilotToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, { apiKey: githubCopilotToken });
+		});
 	});
 
 	describe("Google Gemini CLI Provider (gemini-2.5-flash)", () => {
 		const llm = getModel("google-gemini-cli", "gemini-2.5-flash");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -1046,31 +1001,19 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, { apiKey: geminiCliToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, { apiKey: geminiCliToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, { apiKey: geminiCliToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, { apiKey: geminiCliToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
-			"should handle thinking",
-			{ retry: 3 },
-			async () => {
-				await handleThinking(llm, { apiKey: geminiCliToken, thinking: { enabled: true, budgetTokens: 1024 } });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)("should handle thinking", { retry: 3 }, async () => {
+			await handleThinking(llm, { apiKey: geminiCliToken, thinking: { enabled: true, budgetTokens: 1024 } });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -1078,19 +1021,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, { apiKey: geminiCliToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, { apiKey: geminiCliToken });
+		});
 	});
 
 	describe("Google Gemini CLI Provider (gemini-3-flash-preview with thinkingLevel)", () => {
 		const llm = getModel("google-gemini-cli", "gemini-3-flash-preview");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)(
 			"should handle thinking with thinkingLevel",
 			{ retry: 3 },
 			async () => {
@@ -1098,7 +1037,7 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -1110,7 +1049,7 @@ describe("Generate E2E Tests", () => {
 	describe("Google Antigravity Provider (gemini-3.1-pro-high)", () => {
 		const llm = getModel("google-antigravity", "gemini-3.1-pro-high");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -1118,23 +1057,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, { apiKey: antigravityToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, { apiKey: antigravityToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, { apiKey: antigravityToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, { apiKey: antigravityToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"should handle thinking with thinkingLevel",
 			{ retry: 3 },
 			async () => {
@@ -1146,7 +1077,7 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -1154,19 +1085,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, { apiKey: antigravityToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, { apiKey: antigravityToken });
+		});
 	});
 
 	describe("Google Antigravity Provider (gemini-3.1-pro-high with thinkingLevel)", () => {
 		const llm = getModel("google-antigravity", "gemini-3.1-pro-high");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"should handle thinking with thinkingLevel HIGH",
 			{ retry: 3 },
 			async () => {
@@ -1182,7 +1109,7 @@ describe("Generate E2E Tests", () => {
 	describe("Google Antigravity Provider (claude-sonnet-4-5)", () => {
 		const llm = getModel("google-antigravity", "claude-sonnet-4-5");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -1190,36 +1117,24 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, { apiKey: antigravityToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, { apiKey: antigravityToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, { apiKey: antigravityToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, { apiKey: antigravityToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
-			"should handle thinking",
-			{ retry: 3 },
-			async () => {
-				// claude-sonnet-4-5 has reasoning: false, use claude-sonnet-4-5-thinking
-				const thinkingModel = getModel("google-antigravity", "claude-sonnet-4-5-thinking");
-				await handleThinking(thinkingModel, {
-					apiKey: antigravityToken,
-					thinking: { enabled: true, budgetTokens: 4096 },
-				});
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)("should handle thinking", { retry: 3 }, async () => {
+			// claude-sonnet-4-5 has reasoning: false, use claude-sonnet-4-5-thinking
+			const thinkingModel = getModel("google-antigravity", "claude-sonnet-4-5-thinking");
+			await handleThinking(thinkingModel, {
+				apiKey: antigravityToken,
+				thinking: { enabled: true, budgetTokens: 4096 },
+			});
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -1231,19 +1146,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, { apiKey: antigravityToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, { apiKey: antigravityToken });
+		});
 	});
 
 	describe("OpenAI Codex Provider (gpt-5.6-luna)", () => {
 		const llm = getModel("openai-codex", "gpt-5.6-luna");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -1251,31 +1162,19 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, { apiKey: openaiCodexToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, { apiKey: openaiCodexToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, { apiKey: openaiCodexToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, { apiKey: openaiCodexToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle thinking",
-			{ retry: 3 },
-			async () => {
-				await handleThinking(llm, { apiKey: openaiCodexToken, reasoningEffort: "high" });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle thinking", { retry: 3 }, async () => {
+			await handleThinking(llm, { apiKey: openaiCodexToken, reasoningEffort: "high" });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -1283,19 +1182,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, { apiKey: openaiCodexToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, { apiKey: openaiCodexToken });
+		});
 	});
 
 	describe("OpenAI Codex Provider (gpt-5.6-luna)", () => {
 		const llm = getModel("openai-codex", "gpt-5.6-luna");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -1303,23 +1198,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, { apiKey: openaiCodexToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, { apiKey: openaiCodexToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, { apiKey: openaiCodexToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, { apiKey: openaiCodexToken });
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should handle thinking with reasoningEffort high",
 			{ retry: 3 },
 			async () => {
@@ -1327,7 +1214,7 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -1335,20 +1222,16 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, { apiKey: openaiCodexToken });
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, { apiKey: openaiCodexToken });
+		});
 	});
 
 	describe("OpenAI Codex Provider (gpt-5.6-luna via WebSocket)", () => {
 		const llm = getModel("openai-codex", "gpt-5.6-luna");
 		const wsOptions = { apiKey: openaiCodexToken, transport: "websocket" as const };
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should complete basic text generation",
 			{ retry: 3 },
 			async () => {
@@ -1356,23 +1239,15 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle tool calling",
-			{ retry: 3 },
-			async () => {
-				await handleToolCall(llm, wsOptions);
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(llm, wsOptions);
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle streaming",
-			{ retry: 3 },
-			async () => {
-				await handleStreaming(llm, wsOptions);
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(llm, wsOptions);
+		});
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should handle thinking with reasoningEffort high",
 			{ retry: 3 },
 			async () => {
@@ -1380,7 +1255,7 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should handle multi-turn with thinking and tools",
 			{ retry: 3 },
 			async () => {
@@ -1388,16 +1263,12 @@ describe("Generate E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"should handle image input",
-			{ retry: 3 },
-			async () => {
-				await handleImage(llm, wsOptions);
-			},
-		);
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)("should handle image input", { retry: 3 }, async () => {
+			await handleImage(llm, wsOptions);
+		});
 	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasBedrockCredentials())(
+	describe.skipIf(!isLiveApiEnabled() || !hasBedrockCredentials())(
 		"Amazon Bedrock Provider (claude-sonnet-4-5)",
 		() => {
 			const llm = getModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-5-20250929-v1:0");
@@ -1428,7 +1299,7 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasBedrockCredentials())(
+	describe.skipIf(!isLiveApiEnabled() || !hasBedrockCredentials())(
 		"Amazon Bedrock Provider (claude-opus-4-6 interleaved thinking)",
 		() => {
 			const llm = getModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");

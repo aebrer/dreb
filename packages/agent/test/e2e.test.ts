@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ZAI_GLM_47_FLASH } from "../../ai/test/fixtures/zai-models.js";
 import { Agent } from "../src/index.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { isLiveApiEnabled } from "./live-api.js";
 import { calculateTool } from "./utils/calculate.js";
 
 delete process.env.ANTHROPIC_OAUTH_TOKEN;
@@ -161,61 +162,55 @@ async function multiTurnConversation(model: Model<any>) {
 }
 
 describe("Agent E2E Tests", () => {
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GEMINI_API_KEY)(
-		"Google Provider (gemini-2.5-flash)",
-		() => {
-			const model = getModel("google", "gemini-2.5-flash");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.GEMINI_API_KEY)("Google Provider (gemini-2.5-flash)", () => {
+		const model = getModel("google", "gemini-2.5-flash");
 
-			it("should handle basic text prompt", async () => {
-				await basicPrompt(model);
-			});
+		it("should handle basic text prompt", async () => {
+			await basicPrompt(model);
+		});
 
-			it("should execute tools correctly", async () => {
-				await toolExecution(model);
-			});
+		it("should execute tools correctly", async () => {
+			await toolExecution(model);
+		});
 
-			it("should handle abort during execution", async () => {
-				await abortExecution(model);
-			});
+		it("should handle abort during execution", async () => {
+			await abortExecution(model);
+		});
 
-			it("should emit state updates during streaming", async () => {
-				await stateUpdates(model);
-			});
+		it("should emit state updates during streaming", async () => {
+			await stateUpdates(model);
+		});
 
-			it("should maintain context across multiple turns", async () => {
-				await multiTurnConversation(model);
-			});
-		},
-	);
+		it("should maintain context across multiple turns", async () => {
+			await multiTurnConversation(model);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
-		"OpenAI Provider (gpt-4o-mini)",
-		() => {
-			const model = getModel("openai", "gpt-4o-mini");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("OpenAI Provider (gpt-4o-mini)", () => {
+		const model = getModel("openai", "gpt-4o-mini");
 
-			it("should handle basic text prompt", async () => {
-				await basicPrompt(model);
-			});
+		it("should handle basic text prompt", async () => {
+			await basicPrompt(model);
+		});
 
-			it("should execute tools correctly", async () => {
-				await toolExecution(model);
-			});
+		it("should execute tools correctly", async () => {
+			await toolExecution(model);
+		});
 
-			it("should handle abort during execution", async () => {
-				await abortExecution(model);
-			});
+		it("should handle abort during execution", async () => {
+			await abortExecution(model);
+		});
 
-			it("should emit state updates during streaming", async () => {
-				await stateUpdates(model);
-			});
+		it("should emit state updates during streaming", async () => {
+			await stateUpdates(model);
+		});
 
-			it("should maintain context across multiple turns", async () => {
-				await multiTurnConversation(model);
-			});
-		},
-	);
+		it("should maintain context across multiple turns", async () => {
+			await multiTurnConversation(model);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)(
 		"Anthropic Provider (claude-haiku-4-5)",
 		() => {
 			const model = findModel("anthropic", "haiku")!;
@@ -242,59 +237,53 @@ describe("Agent E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.XAI_API_KEY)(
-		"xAI Provider (grok-4.3)",
-		() => {
-			const model = getModel("xai", "grok-4.3");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.XAI_API_KEY)("xAI Provider (grok-4.3)", () => {
+		const model = getModel("xai", "grok-4.3");
 
-			it("should handle basic text prompt", async () => {
-				await basicPrompt(model);
-			});
+		it("should handle basic text prompt", async () => {
+			await basicPrompt(model);
+		});
 
-			it("should execute tools correctly", async () => {
-				await toolExecution(model);
-			});
+		it("should execute tools correctly", async () => {
+			await toolExecution(model);
+		});
 
-			it("should handle abort during execution", async () => {
-				await abortExecution(model);
-			});
+		it("should handle abort during execution", async () => {
+			await abortExecution(model);
+		});
 
-			it("should emit state updates during streaming", async () => {
-				await stateUpdates(model);
-			});
+		it("should emit state updates during streaming", async () => {
+			await stateUpdates(model);
+		});
 
-			it("should maintain context across multiple turns", async () => {
-				await multiTurnConversation(model);
-			});
-		},
-	);
+		it("should maintain context across multiple turns", async () => {
+			await multiTurnConversation(model);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GROQ_API_KEY)(
-		"Groq Provider (openai/gpt-oss-20b)",
-		() => {
-			const model = getModel("groq", "openai/gpt-oss-20b");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.GROQ_API_KEY)("Groq Provider (openai/gpt-oss-20b)", () => {
+		const model = getModel("groq", "openai/gpt-oss-20b");
 
-			it("should handle basic text prompt", async () => {
-				await basicPrompt(model);
-			});
+		it("should handle basic text prompt", async () => {
+			await basicPrompt(model);
+		});
 
-			it("should execute tools correctly", async () => {
-				await toolExecution(model);
-			});
+		it("should execute tools correctly", async () => {
+			await toolExecution(model);
+		});
 
-			it("should handle abort during execution", async () => {
-				await abortExecution(model);
-			});
+		it("should handle abort during execution", async () => {
+			await abortExecution(model);
+		});
 
-			it("should emit state updates during streaming", async () => {
-				await stateUpdates(model);
-			});
+		it("should emit state updates during streaming", async () => {
+			await stateUpdates(model);
+		});
 
-			it("should maintain context across multiple turns", async () => {
-				await multiTurnConversation(model);
-			});
-		},
-	);
+		it("should maintain context across multiple turns", async () => {
+			await multiTurnConversation(model);
+		});
+	});
 
 	/*describe.skipIf(!process.env.CEREBRAS_API_KEY)("Cerebras Provider (gpt-oss-120b)", () => {
 		const model = getModel("cerebras", "gpt-oss-120b");
@@ -320,34 +309,31 @@ describe("Agent E2E Tests", () => {
 		});
 	});*/
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ZAI_API_KEY)(
-		"zAI Provider (glm-4.7-flash)",
-		() => {
-			const model = ZAI_GLM_47_FLASH;
+	describe.skipIf(!isLiveApiEnabled() || !process.env.ZAI_API_KEY)("zAI Provider (glm-4.7-flash)", () => {
+		const model = ZAI_GLM_47_FLASH;
 
-			it("should handle basic text prompt", async () => {
-				await basicPrompt(model);
-			});
+		it("should handle basic text prompt", async () => {
+			await basicPrompt(model);
+		});
 
-			it("should execute tools correctly", async () => {
-				await toolExecution(model);
-			});
+		it("should execute tools correctly", async () => {
+			await toolExecution(model);
+		});
 
-			it("should handle abort during execution", async () => {
-				await abortExecution(model);
-			});
+		it("should handle abort during execution", async () => {
+			await abortExecution(model);
+		});
 
-			it("should emit state updates during streaming", async () => {
-				await stateUpdates(model);
-			});
+		it("should emit state updates during streaming", async () => {
+			await stateUpdates(model);
+		});
 
-			it("should maintain context across multiple turns", async () => {
-				await multiTurnConversation(model);
-			});
-		},
-	);
+		it("should maintain context across multiple turns", async () => {
+			await multiTurnConversation(model);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasBedrockCredentials())(
+	describe.skipIf(!isLiveApiEnabled() || !hasBedrockCredentials())(
 		"Amazon Bedrock Provider (claude-sonnet-4-5)",
 		() => {
 			const model = getModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-5-20250929-v1:0");
@@ -419,121 +405,115 @@ describe("Agent.continue()", () => {
 		});
 	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
-		"continue from user message",
-		() => {
-			const model = getModel("openai", "gpt-5.4");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("continue from user message", () => {
+		const model = getModel("openai", "gpt-5.4");
 
-			it("should continue and get response when last message is user", async () => {
-				const agent = new Agent({
-					initialState: {
-						systemPrompt: "You are a helpful assistant. Follow instructions exactly.",
-						model,
-						thinkingLevel: "off",
-						tools: [],
-					},
-				});
-
-				// Manually add a user message without calling prompt()
-				const userMessage: UserMessage = {
-					role: "user",
-					content: [{ type: "text", text: "Say exactly: HELLO WORLD" }],
-					timestamp: Date.now(),
-				};
-				agent.replaceMessages([userMessage]);
-
-				// Continue from the user message
-				await agent.continue();
-
-				expect(agent.state.isStreaming).toBe(false);
-				expect(agent.state.messages.length).toBe(2);
-				expect(agent.state.messages[0].role).toBe("user");
-				expect(agent.state.messages[1].role).toBe("assistant");
-
-				const assistantMsg = agent.state.messages[1] as AssistantMessage;
-				const textContent = assistantMsg.content.find((c) => c.type === "text");
-				expect(textContent).toBeDefined();
-				if (textContent?.type === "text") {
-					expect(textContent.text.toUpperCase()).toContain("HELLO WORLD");
-				}
+		it("should continue and get response when last message is user", async () => {
+			const agent = new Agent({
+				initialState: {
+					systemPrompt: "You are a helpful assistant. Follow instructions exactly.",
+					model,
+					thinkingLevel: "off",
+					tools: [],
+				},
 			});
-		},
-	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
-		"continue from tool result",
-		() => {
-			const model = getModel("openai", "gpt-5.4");
+			// Manually add a user message without calling prompt()
+			const userMessage: UserMessage = {
+				role: "user",
+				content: [{ type: "text", text: "Say exactly: HELLO WORLD" }],
+				timestamp: Date.now(),
+			};
+			agent.replaceMessages([userMessage]);
 
-			it("should continue and process tool results", async () => {
-				const agent = new Agent({
-					initialState: {
-						systemPrompt:
-							"You are a helpful assistant. After getting a calculation result, state the answer clearly.",
-						model,
-						thinkingLevel: "off",
-						tools: [calculateTool],
-					},
-				});
+			// Continue from the user message
+			await agent.continue();
 
-				// Set up a conversation state as if tool was just executed
-				const userMessage: UserMessage = {
-					role: "user",
-					content: [{ type: "text", text: "What is 5 + 3?" }],
-					timestamp: Date.now(),
-				};
+			expect(agent.state.isStreaming).toBe(false);
+			expect(agent.state.messages.length).toBe(2);
+			expect(agent.state.messages[0].role).toBe("user");
+			expect(agent.state.messages[1].role).toBe("assistant");
 
-				const assistantMessage: AssistantMessage = {
-					role: "assistant",
-					content: [
-						{ type: "text", text: "Let me calculate that." },
-						{ type: "toolCall", id: "calc-1", name: "calculate", arguments: { expression: "5 + 3" } },
-					],
-					api: "anthropic-messages",
-					provider: "anthropic",
-					model: "claude-haiku-4-5",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-					stopReason: "toolUse",
-					timestamp: Date.now(),
-				};
+			const assistantMsg = agent.state.messages[1] as AssistantMessage;
+			const textContent = assistantMsg.content.find((c) => c.type === "text");
+			expect(textContent).toBeDefined();
+			if (textContent?.type === "text") {
+				expect(textContent.text.toUpperCase()).toContain("HELLO WORLD");
+			}
+		});
+	});
 
-				const toolResult: ToolResultMessage = {
-					role: "toolResult",
-					toolCallId: "calc-1",
-					toolName: "calculate",
-					content: [{ type: "text", text: "5 + 3 = 8" }],
-					isError: false,
-					timestamp: Date.now(),
-				};
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("continue from tool result", () => {
+		const model = getModel("openai", "gpt-5.4");
 
-				agent.replaceMessages([userMessage, assistantMessage, toolResult]);
-
-				// Continue from the tool result
-				await agent.continue();
-
-				expect(agent.state.isStreaming).toBe(false);
-				// Should have added an assistant response
-				expect(agent.state.messages.length).toBeGreaterThanOrEqual(4);
-
-				const lastMessage = agent.state.messages[agent.state.messages.length - 1];
-				expect(lastMessage.role).toBe("assistant");
-
-				if (lastMessage.role === "assistant") {
-					const textContent = lastMessage.content
-						.filter((c) => c.type === "text")
-						.map((c) => (c as { type: "text"; text: string }).text)
-						.join(" ");
-					// Should mention 8 in the response
-					expect(textContent).toMatch(/8/);
-				}
+		it("should continue and process tool results", async () => {
+			const agent = new Agent({
+				initialState: {
+					systemPrompt:
+						"You are a helpful assistant. After getting a calculation result, state the answer clearly.",
+					model,
+					thinkingLevel: "off",
+					tools: [calculateTool],
+				},
 			});
-		},
-	);
+
+			// Set up a conversation state as if tool was just executed
+			const userMessage: UserMessage = {
+				role: "user",
+				content: [{ type: "text", text: "What is 5 + 3?" }],
+				timestamp: Date.now(),
+			};
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "Let me calculate that." },
+					{ type: "toolCall", id: "calc-1", name: "calculate", arguments: { expression: "5 + 3" } },
+				],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-haiku-4-5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			};
+
+			const toolResult: ToolResultMessage = {
+				role: "toolResult",
+				toolCallId: "calc-1",
+				toolName: "calculate",
+				content: [{ type: "text", text: "5 + 3 = 8" }],
+				isError: false,
+				timestamp: Date.now(),
+			};
+
+			agent.replaceMessages([userMessage, assistantMessage, toolResult]);
+
+			// Continue from the tool result
+			await agent.continue();
+
+			expect(agent.state.isStreaming).toBe(false);
+			// Should have added an assistant response
+			expect(agent.state.messages.length).toBeGreaterThanOrEqual(4);
+
+			const lastMessage = agent.state.messages[agent.state.messages.length - 1];
+			expect(lastMessage.role).toBe("assistant");
+
+			if (lastMessage.role === "assistant") {
+				const textContent = lastMessage.content
+					.filter((c) => c.type === "text")
+					.map((c) => (c as { type: "text"; text: string }).text)
+					.join(" ");
+				// Should mention 8 in the response
+				expect(textContent).toMatch(/8/);
+			}
+		});
+	});
 });

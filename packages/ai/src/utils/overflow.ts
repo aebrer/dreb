@@ -16,7 +16,8 @@ import type { AssistantMessage } from "../types.js";
  * - OpenRouter: "This endpoint's maximum context length is X tokens. However, you requested about Y tokens"
  * - llama.cpp: "the request exceeds the available context size, try increasing it"
  * - LM Studio: "tokens to keep from the initial prompt is greater than the context length"
- * - GitHub Copilot: "prompt token count of X exceeds the limit of Y"
+ * - GitHub Copilot: "prompt token count of X exceeds the limit of Y", or an HTTP
+ *   "413 Request Entity Too Large" when the request body is rejected before tokenization
  * - MiniMax: "invalid params, context window exceeds limit"
  * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
  * - Cerebras: Returns "400/413 status code (no body)" - handled separately below
@@ -52,6 +53,7 @@ const OVERFLOW_PATTERNS = [
 	/reduce the length of the messages/i, // Groq
 	/maximum context length is \d+ tokens/i, // OpenRouter (all backends)
 	/exceeds the limit of \d+/i, // GitHub Copilot
+	/^413\b.*request entity too large/i, // GitHub Copilot (body rejected before token check)
 	/exceeds the available context size/i, // llama.cpp server
 	/greater than the context length/i, // LM Studio
 	/context window exceeds limit/i, // MiniMax

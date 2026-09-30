@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findModel, getModel } from "../src/models.js";
 import { stream } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
+import { isLiveApiEnabled } from "./live-api.js";
 
 describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 	const originalEnv = process.env.DREB_CACHE_RETENTION;
@@ -24,7 +25,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 	};
 
 	describe("Anthropic Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+		it.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)(
 			"should use default cache TTL (no ttl field) when DREB_CACHE_RETENTION is not set",
 			async () => {
 				const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
@@ -48,7 +49,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+		it.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)(
 			"should use 1h cache TTL when DREB_CACHE_RETENTION=long",
 			async () => {
 				process.env.DREB_CACHE_RETENTION = "long";
@@ -198,7 +199,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 	});
 
 	describe("OpenAI Responses Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
+		it.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)(
 			"should not set prompt_cache_retention when DREB_CACHE_RETENTION is not set",
 			async () => {
 				const model = getModel("openai", "gpt-4o-mini");
@@ -220,7 +221,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
+		it.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)(
 			"should set prompt_cache_retention to 24h when DREB_CACHE_RETENTION=long",
 			async () => {
 				process.env.DREB_CACHE_RETENTION = "long";

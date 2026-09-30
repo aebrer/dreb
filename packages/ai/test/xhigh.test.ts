@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.js";
 import { stream } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
+import { isLiveApiEnabled } from "./live-api.js";
 
 function makeContext(): Context {
 	return {
@@ -15,7 +16,7 @@ function makeContext(): Context {
 	};
 }
 
-describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)("xhigh reasoning", () => {
+describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("xhigh reasoning", () => {
 	describe("codex-max (supports xhigh)", () => {
 		// Note: codex models only support the responses API, not chat completions
 		it("should work with openai-responses", async () => {

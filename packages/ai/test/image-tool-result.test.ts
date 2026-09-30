@@ -11,6 +11,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -210,22 +211,19 @@ async function handleToolWithTextAndImageResult<TApi extends Api>(
 }
 
 describe("Tool Results with Images", () => {
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GEMINI_API_KEY)(
-		"Google Provider (gemini-2.5-flash)",
-		() => {
-			const llm = getModel("google", "gemini-2.5-flash");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.GEMINI_API_KEY)("Google Provider (gemini-2.5-flash)", () => {
+		const llm = getModel("google", "gemini-2.5-flash");
 
-			it("should handle tool result with only image", { retry: 3, timeout: 30000 }, async () => {
-				await handleToolWithImageResult(llm);
-			});
+		it("should handle tool result with only image", { retry: 3, timeout: 30000 }, async () => {
+			await handleToolWithImageResult(llm);
+		});
 
-			it("should handle tool result with text and image", { retry: 3, timeout: 30000 }, async () => {
-				await handleToolWithTextAndImageResult(llm);
-			});
-		},
-	);
+		it("should handle tool result with text and image", { retry: 3, timeout: 30000 }, async () => {
+			await handleToolWithTextAndImageResult(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)(
 		"OpenAI Completions Provider (gpt-4o-mini)",
 		() => {
 			const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini");
@@ -245,22 +243,19 @@ describe("Tool Results with Images", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
-		"OpenAI Responses Provider (gpt-5-mini)",
-		() => {
-			const llm = getModel("openai", "gpt-5-mini");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("OpenAI Responses Provider (gpt-5-mini)", () => {
+		const llm = getModel("openai", "gpt-5-mini");
 
-			it("should handle tool result with only image", { retry: 3, timeout: 30000 }, async () => {
-				await handleToolWithImageResult(llm);
-			});
+		it("should handle tool result with only image", { retry: 3, timeout: 30000 }, async () => {
+			await handleToolWithImageResult(llm);
+		});
 
-			it("should handle tool result with text and image", { retry: 3, timeout: 30000 }, async () => {
-				await handleToolWithTextAndImageResult(llm);
-			});
-		},
-	);
+		it("should handle tool result with text and image", { retry: 3, timeout: 30000 }, async () => {
+			await handleToolWithTextAndImageResult(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAzureOpenAICredentials())(
+	describe.skipIf(!isLiveApiEnabled() || !hasAzureOpenAICredentials())(
 		"Azure OpenAI Responses Provider (gpt-4o-mini)",
 		() => {
 			const llm = getModel("azure-openai-responses", "gpt-4o-mini");
@@ -277,7 +272,7 @@ describe("Tool Results with Images", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)(
 		"Anthropic Provider (claude-haiku-4-5)",
 		() => {
 			const model = findModel("anthropic", "haiku")!;
@@ -292,37 +287,31 @@ describe("Tool Results with Images", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.MISTRAL_API_KEY)(
-		"Mistral Provider (pixtral-12b)",
-		() => {
-			const llm = getModel("mistral", "pixtral-12b");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider (pixtral-12b)", () => {
+		const llm = getModel("mistral", "pixtral-12b");
 
-			it("should handle tool result with only image", { retry: 5, timeout: 30000 }, async () => {
-				await handleToolWithImageResult(llm);
-			});
+		it("should handle tool result with only image", { retry: 5, timeout: 30000 }, async () => {
+			await handleToolWithImageResult(llm);
+		});
 
-			it("should handle tool result with text and image", { retry: 5, timeout: 30000 }, async () => {
-				await handleToolWithTextAndImageResult(llm);
-			});
-		},
-	);
+		it("should handle tool result with text and image", { retry: 5, timeout: 30000 }, async () => {
+			await handleToolWithTextAndImageResult(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.KIMI_API_KEY)(
-		"Kimi For Coding Provider (k2p5)",
-		() => {
-			const llm = getModel("kimi-coding", "k2p5");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.KIMI_API_KEY)("Kimi For Coding Provider (k2p5)", () => {
+		const llm = getModel("kimi-coding", "k2p5");
 
-			it("should handle tool result with only image", { retry: 3, timeout: 30000 }, async () => {
-				await handleToolWithImageResult(llm);
-			});
+		it("should handle tool result with only image", { retry: 3, timeout: 30000 }, async () => {
+			await handleToolWithImageResult(llm);
+		});
 
-			it("should handle tool result with text and image", { retry: 3, timeout: 30000 }, async () => {
-				await handleToolWithTextAndImageResult(llm);
-			});
-		},
-	);
+		it("should handle tool result with text and image", { retry: 3, timeout: 30000 }, async () => {
+			await handleToolWithTextAndImageResult(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.AI_GATEWAY_API_KEY)(
+	describe.skipIf(!isLiveApiEnabled() || !process.env.AI_GATEWAY_API_KEY)(
 		"Vercel AI Gateway Provider (google/gemini-2.5-flash)",
 		() => {
 			const llm = getModel("vercel-ai-gateway", "google/gemini-2.5-flash");
@@ -337,7 +326,7 @@ describe("Tool Results with Images", () => {
 		},
 	);
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasBedrockCredentials())(
+	describe.skipIf(!isLiveApiEnabled() || !hasBedrockCredentials())(
 		"Amazon Bedrock Provider (claude-sonnet-4-5)",
 		() => {
 			const llm = getModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-5-20250929-v1:0");
@@ -357,7 +346,7 @@ describe("Tool Results with Images", () => {
 	// =========================================================================
 
 	describe("GitHub Copilot Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"OpenAI completions - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -366,7 +355,7 @@ describe("Tool Results with Images", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"OpenAI completions - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -375,7 +364,7 @@ describe("Tool Results with Images", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"Anthropic Messages - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -384,7 +373,7 @@ describe("Tool Results with Images", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"Anthropic Messages - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -395,7 +384,7 @@ describe("Tool Results with Images", () => {
 	});
 
 	describe("Google Gemini CLI Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)(
 			"gemini-2.5-flash - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -404,7 +393,7 @@ describe("Tool Results with Images", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)(
 			"gemini-2.5-flash - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -415,7 +404,7 @@ describe("Tool Results with Images", () => {
 	});
 
 	describe("Google Antigravity Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"gemini-3-flash - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -424,7 +413,7 @@ describe("Tool Results with Images", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"gemini-3-flash - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -456,7 +445,7 @@ describe("Tool Results with Images", () => {
 	});
 
 	describe("OpenAI Codex Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"gpt-5.6-luna - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -465,7 +454,7 @@ describe("Tool Results with Images", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"gpt-5.6-luna - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {

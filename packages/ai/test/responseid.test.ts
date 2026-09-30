@@ -4,6 +4,7 @@ import { complete } from "../src/stream.js";
 import type { Api, Context, Model, StreamOptions } from "../src/types.js";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
@@ -30,7 +31,7 @@ async function expectResponseId<TApi extends Api>(model: Model<TApi>, options: S
 }
 
 describe("responseId E2E Tests", () => {
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GEMINI_API_KEY)("Google Provider", () => {
+	describe.skipIf(!isLiveApiEnabled() || !process.env.GEMINI_API_KEY)("Google Provider", () => {
 		const llm = getModel("google", "gemini-2.5-flash");
 
 		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
@@ -46,7 +47,7 @@ describe("responseId E2E Tests", () => {
 		const vertexOptions = { project: vertexProject, location: vertexLocation } as const;
 		const llm = getModel("google-vertex", "gemini-3-flash-preview");
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
+		it.skipIf(!isLiveApiEnabled() || !isVertexConfigured)(
 			"should expose responseId with ADC",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -54,7 +55,7 @@ describe("responseId E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !vertexApiKey)(
+		it.skipIf(!isLiveApiEnabled() || !vertexApiKey)(
 			"should expose responseId with API key",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -63,58 +64,46 @@ describe("responseId E2E Tests", () => {
 		);
 	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
-		"OpenAI Completions Provider",
-		() => {
-			const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini");
-			void _compat;
-			const llm: Model<"openai-completions"> = {
-				...baseModel,
-				api: "openai-completions",
-			};
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("OpenAI Completions Provider", () => {
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini");
+		void _compat;
+		const llm: Model<"openai-completions"> = {
+			...baseModel,
+			api: "openai-completions",
+		};
 
-			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-				await expectResponseId(llm);
-			});
-		},
-	);
+		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+			await expectResponseId(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
-		"OpenAI Responses Provider",
-		() => {
-			const llm = getModel("openai", "gpt-5-mini");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.OPENAI_API_KEY)("OpenAI Responses Provider", () => {
+		const llm = getModel("openai", "gpt-5-mini");
 
-			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-				await expectResponseId(llm);
-			});
-		},
-	);
+		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+			await expectResponseId(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
-		"Anthropic Provider",
-		() => {
-			const llm = findModel("anthropic", "sonnet")!;
+	describe.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)("Anthropic Provider", () => {
+		const llm = findModel("anthropic", "sonnet")!;
 
-			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-				await expectResponseId(llm);
-			});
-		},
-	);
+		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+			await expectResponseId(llm);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAzureOpenAICredentials())(
-		"Azure OpenAI Responses Provider",
-		() => {
-			const llm = getModel("azure-openai-responses", "gpt-4o-mini");
-			const azureDeploymentName = resolveAzureDeploymentName(llm.id);
-			const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
+	describe.skipIf(!isLiveApiEnabled() || !hasAzureOpenAICredentials())("Azure OpenAI Responses Provider", () => {
+		const llm = getModel("azure-openai-responses", "gpt-4o-mini");
+		const azureDeploymentName = resolveAzureDeploymentName(llm.id);
+		const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
 
-			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-				await expectResponseId(llm, azureOptions);
-			});
-		},
-	);
+		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+			await expectResponseId(llm, azureOptions);
+		});
+	});
 
-	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
 		const llm = getModel("mistral", "devstral-medium-latest");
 
 		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
@@ -123,7 +112,7 @@ describe("responseId E2E Tests", () => {
 	});
 
 	describe("GitHub Copilot Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"OpenAI path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -132,7 +121,7 @@ describe("responseId E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"Anthropic path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -143,7 +132,7 @@ describe("responseId E2E Tests", () => {
 	});
 
 	describe("Google Gemini CLI Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		it.skipIf(!isLiveApiEnabled() || !geminiCliToken)(
 			"should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -154,7 +143,7 @@ describe("responseId E2E Tests", () => {
 	});
 
 	describe("Google Antigravity Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"Gemini path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -163,7 +152,7 @@ describe("responseId E2E Tests", () => {
 			},
 		);
 
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		it.skipIf(!isLiveApiEnabled() || !antigravityToken)(
 			"Claude path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -174,7 +163,7 @@ describe("responseId E2E Tests", () => {
 	});
 
 	describe("OpenAI Codex Provider", () => {
-		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+		it.skipIf(!isLiveApiEnabled() || !openaiCodexToken)(
 			"should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {

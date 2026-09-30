@@ -80,7 +80,7 @@ Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `
 
 ### Provider and model routing
 
-GPT-6 Astra is available through ChatGPT/Codex and GitHub Copilot, with `xhigh` and native `max` thinking support. Codex defaults to GPT-5.6 Luna; removed saved defaults produce a visible warning and prefer the same provider's available default before considering other providers. See [provider setup and model-selection behavior](packages/coding-agent/docs/providers.md#model-selection-and-removed-models).
+GPT-6 models (Astra, Sol, Luna, 6.1 Sol) are available through ChatGPT/Codex and GitHub Copilot, with `xhigh` and native `max` thinking support. The Codex model list is derived automatically from OpenAI's catalog, so new models appear without a manual update (availability depends on your ChatGPT plan/workspace). Codex defaults to GPT-5.6 Luna; removed saved defaults produce a visible warning and prefer the same provider's available default before considering other providers. See [provider setup and model-selection behavior](packages/coding-agent/docs/providers.md#model-selection-and-removed-models).
 
 dreb supports both subscription and API-key providers, with model metadata updated in releases. Current provider docs cover subscriptions such as Codex, GitHub Copilot, Gemini CLI, Antigravity, and Kimi; API-key providers such as Anthropic, OpenAI, Azure OpenAI, Google Gemini/Vertex, Amazon Bedrock, Mistral, Groq, Cerebras, xAI, OpenRouter, Vercel AI Gateway, ZAI, OpenCode, Hugging Face, Kimi, and MiniMax; plus custom local/proxy providers.
 

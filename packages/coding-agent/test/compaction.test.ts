@@ -24,6 +24,7 @@ import {
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
 } from "../src/core/session-manager.js";
+import { isLiveApiEnabled } from "./live-api.js";
 
 // ============================================================================
 // Test fixtures
@@ -404,60 +405,61 @@ describe("Large session fixture", () => {
 // LLM integration tests (skipped without API key)
 // ============================================================================
 
-describe.skipIf(
-	process.env.DREB_SKIP_LIVE_API === "1" || (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN),
-)("LLM summarization", () => {
-	const apiKey = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY!;
+describe.skipIf(!isLiveApiEnabled() || (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN))(
+	"LLM summarization",
+	() => {
+		const apiKey = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY!;
 
-	it("should generate a compaction result for the large session", async () => {
-		const entries = loadLargeSessionEntries();
-		const model = findModel("anthropic", "sonnet")!;
+		it("should generate a compaction result for the large session", async () => {
+			const entries = loadLargeSessionEntries();
+			const model = findModel("anthropic", "sonnet")!;
 
-		const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
-		expect(preparation).toBeDefined();
+			const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
+			expect(preparation).toBeDefined();
 
-		const compactionResult = await compact(preparation!, model, apiKey);
+			const compactionResult = await compact(preparation!, model, apiKey);
 
-		expect(compactionResult.summary.length).toBeGreaterThan(100);
-		expect(compactionResult.firstKeptEntryId).toBeTruthy();
-		expect(compactionResult.tokensBefore).toBeGreaterThan(0);
+			expect(compactionResult.summary.length).toBeGreaterThan(100);
+			expect(compactionResult.firstKeptEntryId).toBeTruthy();
+			expect(compactionResult.tokensBefore).toBeGreaterThan(0);
 
-		console.log("Summary length:", compactionResult.summary.length);
-		console.log("First kept entry ID:", compactionResult.firstKeptEntryId);
-		console.log("Tokens before:", compactionResult.tokensBefore);
-		console.log("\n--- SUMMARY ---\n");
-		console.log(compactionResult.summary);
-	}, 60000);
+			console.log("Summary length:", compactionResult.summary.length);
+			console.log("First kept entry ID:", compactionResult.firstKeptEntryId);
+			console.log("Tokens before:", compactionResult.tokensBefore);
+			console.log("\n--- SUMMARY ---\n");
+			console.log(compactionResult.summary);
+		}, 60000);
 
-	it("should produce valid session after compaction", async () => {
-		const entries = loadLargeSessionEntries();
-		const loaded = buildSessionContext(entries);
-		const model = findModel("anthropic", "sonnet")!;
+		it("should produce valid session after compaction", async () => {
+			const entries = loadLargeSessionEntries();
+			const loaded = buildSessionContext(entries);
+			const model = findModel("anthropic", "sonnet")!;
 
-		const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
-		expect(preparation).toBeDefined();
+			const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
+			expect(preparation).toBeDefined();
 
-		const compactionResult = await compact(preparation!, model, apiKey);
+			const compactionResult = await compact(preparation!, model, apiKey);
 
-		// Simulate appending compaction to entries by creating a proper entry
-		const lastEntry = entries[entries.length - 1];
-		const parentId = lastEntry.id;
-		const compactionEntry: CompactionEntry = {
-			type: "compaction",
-			id: "compaction-test-id",
-			parentId,
-			timestamp: new Date().toISOString(),
-			...compactionResult,
-		};
-		const newEntries = [...entries, compactionEntry];
-		const reloaded = buildSessionContext(newEntries);
+			// Simulate appending compaction to entries by creating a proper entry
+			const lastEntry = entries[entries.length - 1];
+			const parentId = lastEntry.id;
+			const compactionEntry: CompactionEntry = {
+				type: "compaction",
+				id: "compaction-test-id",
+				parentId,
+				timestamp: new Date().toISOString(),
+				...compactionResult,
+			};
+			const newEntries = [...entries, compactionEntry];
+			const reloaded = buildSessionContext(newEntries);
 
-		// Should have summary + kept messages
-		expect(reloaded.messages.length).toBeLessThan(loaded.messages.length);
-		expect(reloaded.messages[0].role).toBe("compactionSummary");
-		expect((reloaded.messages[0] as any).summary).toContain(compactionResult.summary);
+			// Should have summary + kept messages
+			expect(reloaded.messages.length).toBeLessThan(loaded.messages.length);
+			expect(reloaded.messages[0].role).toBe("compactionSummary");
+			expect((reloaded.messages[0] as any).summary).toContain(compactionResult.summary);
 
-		console.log("Original messages:", loaded.messages.length);
-		console.log("After compaction:", reloaded.messages.length);
-	}, 60000);
-});
+			console.log("Original messages:", loaded.messages.length);
+			console.log("After compaction:", reloaded.messages.length);
+		}, 60000);
+	},
+);

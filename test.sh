@@ -15,27 +15,28 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR \
 # Skip local LLM tests (ollama, lmstudio) — no local server expected in CI/hooks
 export DREB_NO_LOCAL_LLM=1
 
-# Provider E2E tests run for any provider with a configured API key.
-# Tests for unconfigured providers are skipped automatically.
-
-# When --no-live-api is passed, set DREB_SKIP_LIVE_API=1 so every live-API
-# test block (gated on provider credentials via skipIf) auto-skips regardless
-# of which keys are present in the environment. The guard is checked directly
-# in each test's skipIf condition, so no env-var list needs maintenance here.
-SKIP_LIVE_API=false
+# Live provider API tests are OPT-IN. They make real, billed requests using API keys
+# and subscription OAuth logins (~/.dreb/agent/auth.json), so by default every
+# live-API test block skips. Pass --live-api to set DREB_LIVE_API=1 and run them.
+# The largest requests (context-overflow tests that send more than a full context
+# window) additionally need DREB_LIVE_API_EXPENSIVE=1 in the environment.
+LIVE_API=false
 for arg in "$@"; do
-    if [ "$arg" = "--no-live-api" ]; then
-        SKIP_LIVE_API=true
-    fi
+    case "$arg" in
+        --live-api) LIVE_API=true ;;
+        *) echo "Unknown argument: $arg (supported: --live-api)" >&2; exit 2 ;;
+    esac
 done
 
 LOG_FILE="/tmp/dreb-test-$(date +%s).log"
 
-if [ "$SKIP_LIVE_API" = true ]; then
-    echo "Running tests (live API tests skipped via DREB_SKIP_LIVE_API=1)..."
-    export DREB_SKIP_LIVE_API=1
+# Never inherit an opt-in from the calling shell unless --live-api was passed.
+if [ "$LIVE_API" = true ]; then
+    echo "Running tests (LIVE provider API tests enabled via DREB_LIVE_API=1 — this spends real quota)..."
+    export DREB_LIVE_API=1
 else
-    echo "Running tests..."
+    echo "Running tests (live provider API tests skipped; pass --live-api to enable)..."
+    unset DREB_LIVE_API DREB_LIVE_API_EXPENSIVE
 fi
 
 # NO_COLOR prevents vitest/chalk from emitting ANSI codes when CI=true forces

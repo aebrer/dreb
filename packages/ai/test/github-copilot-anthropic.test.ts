@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getModel } from "../src/models.js";
 import type { Context } from "../src/types.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
 
@@ -88,7 +89,9 @@ describe("Copilot Claude via Anthropic Messages", () => {
 
 	it("includes interleaved-thinking beta when reasoning is enabled", async () => {
 		const { streamAnthropic } = await import("../src/providers/anthropic.js");
-		const s = streamAnthropic(model, context, {
+		// Adaptive-thinking models (e.g. Opus 4.8) skip the beta; use a pre-adaptive model.
+		const legacyModel = getModel("github-copilot", "claude-haiku-4.5");
+		const s = streamAnthropic(legacyModel, context, {
 			apiKey: "tid_copilot_session_test_token",
 			interleavedThinking: true,
 		});

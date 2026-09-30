@@ -29,6 +29,7 @@ import { getModel } from "../src/models.js";
 import { completeSimple, getEnvApiKey } from "../src/stream.js";
 import type { Api, AssistantMessage, Message, Model, Tool, ToolResultMessage } from "../src/types.js";
 import { hasAzureOpenAICredentials } from "./azure-utils.js";
+import { isLiveApiEnabled } from "./live-api.js";
 import { resolveApiKey } from "./oauth.js";
 
 // Simple tool for testing
@@ -285,7 +286,7 @@ async function generateContext(
 	};
 }
 
-describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnyApiKey())("Cross-Provider Handoff", () => {
+describe.skipIf(!isLiveApiEnabled() || !hasAnyApiKey())("Cross-Provider Handoff", () => {
 	let contexts: Record<string, CachedContext>;
 	let availablePairs: ProviderModelPair[];
 
@@ -325,18 +326,15 @@ describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnyApiKey())("Cros
 		console.log(`\n=== ${availablePairs.length}/${PROVIDER_MODEL_PAIRS.length} contexts available ===\n`);
 	}, 300000);
 
-	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnyApiKey())(
-		"should have at least 2 fixtures to test handoffs",
-		() => {
-			if (Object.keys(contexts).length < 2) {
-				console.log("Not enough fixtures for handoff test, skipping");
-				return;
-			}
-			expect(Object.keys(contexts).length).toBeGreaterThanOrEqual(2);
-		},
-	);
+	it.skipIf(!isLiveApiEnabled() || !hasAnyApiKey())("should have at least 2 fixtures to test handoffs", () => {
+		if (Object.keys(contexts).length < 2) {
+			console.log("Not enough fixtures for handoff test, skipping");
+			return;
+		}
+		expect(Object.keys(contexts).length).toBeGreaterThanOrEqual(2);
+	});
 
-	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnyApiKey())(
+	it.skipIf(!isLiveApiEnabled() || !hasAnyApiKey())(
 		"should handle cross-provider handoffs for each target",
 		async () => {
 			const contextLabels = Object.keys(contexts);

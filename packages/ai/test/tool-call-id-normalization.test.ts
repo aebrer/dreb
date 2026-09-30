@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.js";
 import { completeSimple, getEnvApiKey } from "../src/stream.js";
 import type { AssistantMessage, Message, Tool, ToolResultMessage } from "../src/types.js";
+import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 // Resolve API keys
@@ -43,7 +44,7 @@ const echoTool: Tool<typeof echoToolSchema> = {
  * Both should succeed without "call_id too long" errors.
  */
 describe("Tool Call ID Normalization - Live Handoff", () => {
-	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !copilotToken || !openrouterKey)(
+	it.skipIf(!isLiveApiEnabled() || !copilotToken || !openrouterKey)(
 		"github-copilot -> openrouter should normalize pipe-separated IDs",
 		async () => {
 			const copilotModel = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.3-codex"), copilotToken);
@@ -113,7 +114,7 @@ describe("Tool Call ID Normalization - Live Handoff", () => {
 		60000,
 	);
 
-	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !copilotToken || !codexToken)(
+	it.skipIf(!isLiveApiEnabled() || !copilotToken || !codexToken)(
 		"github-copilot -> openai-codex should normalize pipe-separated IDs",
 		async () => {
 			const copilotModel = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.3-codex"), copilotToken);
@@ -237,7 +238,7 @@ describe("Tool Call ID Normalization - Prefilled Context", () => {
 		return [userMessage, assistantMessage, toolResult, followUpUser];
 	}
 
-	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openrouterKey)(
+	it.skipIf(!isLiveApiEnabled() || !openrouterKey)(
 		"openrouter should handle prefilled context with long pipe-separated IDs",
 		async () => {
 			const model = getModel("openrouter", "openai/gpt-5.3-codex");
@@ -263,7 +264,7 @@ describe("Tool Call ID Normalization - Prefilled Context", () => {
 		30000,
 	);
 
-	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !codexToken)(
+	it.skipIf(!isLiveApiEnabled() || !codexToken)(
 		"openai-codex should handle prefilled context with long pipe-separated IDs",
 		async () => {
 			const model = getModel("openai-codex", "gpt-5.6-luna");

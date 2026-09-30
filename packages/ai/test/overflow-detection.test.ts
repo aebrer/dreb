@@ -148,3 +148,13 @@ describe("context-filled length exhaustion detection", () => {
 		expect(isContextOverflow(createErrorMessage({ errorMessage: "529 overloaded" }), 100)).toBe(false);
 	});
 });
+
+describe("GitHub Copilot overflow errors", () => {
+	it("classifies a 413 Request Entity Too Large as context overflow", () => {
+		expect(isContextOverflow(createErrorMessage({ errorMessage: "413 Request Entity Too Large\n" }))).toBe(true);
+	});
+
+	it("does not classify unrelated 4xx errors as overflow", () => {
+		expect(isContextOverflow(createErrorMessage({ errorMessage: "403 Forbidden" }))).toBe(false);
+	});
+});

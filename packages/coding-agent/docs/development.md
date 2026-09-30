@@ -55,11 +55,16 @@ A pre-commit hook runs biome checks, tests, and `tsgo --noEmit` (matching CI) au
 ```bash
 npm test                                           # All workspace tests
 npx vitest --run packages/coding-agent/test/some.test.ts  # Single file
-bash test.sh                                       # Full suite, including configured live providers
-bash test.sh --no-live-api                         # Offline suite (skips live provider calls)
+bash test.sh                                       # Full suite, offline (no live provider calls)
+bash test.sh --live-api                            # Also run live provider tests (spends real quota)
 ```
 
-CI runs `bash test.sh`. The script does not unset API keys: provider tests run when their credentials are available, including OAuth credentials from `~/.dreb/agent/auth.json`, and can consume tokens or subscription quota. CI normally has no provider credentials, so its live tests skip. Use `--no-live-api` for explicit offline isolation; it sets `DREB_SKIP_LIVE_API=1`. Both script modes disable local LLM tests.
+**Live provider tests are opt-in.** They make real, billed requests with API keys and subscription OAuth logins from `~/.dreb/agent/auth.json`, so `npm test`, `bash test.sh`, the pre-commit hook, and CI all skip them by default, even when credentials are present. Credentials are not read or refreshed unless you opt in.
+
+- `DREB_LIVE_API=1` (or `bash test.sh --live-api`) enables live provider tests for every provider you have credentials for.
+- `DREB_LIVE_API_EXPENSIVE=1` additionally enables the context-overflow tests, which send prompts larger than a model's full context window (hundreds of thousands of tokens per request). It has no effect without `DREB_LIVE_API=1`.
+
+Target a single file or provider when running live tests, for example `DREB_LIVE_API=1 npx vitest --run packages/ai/test/stream.test.ts -t "OpenAI Codex"`. New live tests must gate on `isLiveApiEnabled()` (or `isExpensiveLiveApiEnabled()`) from the package's `test/live-api.ts`; `packages/ai/test/live-api-gating.test.ts` fails if a credential-gated `skipIf`/`runIf` bypasses it. `test.sh` also disables local LLM tests.
 
 When updating live model fixtures, check protocol behavior as well as catalog membership. Adaptive Claude tests that assert visible thinking must request `thinkingDisplay: "summarized"`. A conservative registry window is not necessarily the endpoint's hard limit: overflow tests may need to check full input usage (`input + cacheRead + cacheWrite`) when the server accepts a request beyond the configured window.
 

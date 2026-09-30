@@ -927,96 +927,54 @@ async function generateModels() {
 	}
 
 	// OpenAI Codex (ChatGPT OAuth) models
-	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
-	// The Codex surface is a distinct API surface (chatgpt.com backend-api + ChatGPT OAuth):
-	// models.dev does not track it (no openai-codex/codex top-level key), and per-model
-	// semantics differ (context caps, effort clamping, service-tier pricing, Responses Lite
-	// protocol), so the manual list is the correct pattern. The codex CLI's model list is a
-	// candidate future live source. The list is live-probe-verified (2026-09-07): only the
-	// entries below resolve with a ChatGPT account.
-	// Most Codex models use the observed 272k ChatGPT-auth server limit. GPT-5.5
-	// has a 400k context window; GPT-5.6 Responses Lite models support 372k.
-	// GPT-5.6+ cache writes are billed at 1.25x the input rate (OpenAI pricing docs),
-	// unlike earlier Codex models which are left at cacheWrite 0.
+	// models.dev does not track the Codex surface (chatgpt.com backend-api + ChatGPT OAuth),
+	// so we derive it from the OpenAI Platform catalog: every frontier GPT model (5.5+, plus
+	// the gpt-daybreak-* previews) is mirrored onto openai-codex. This keeps Codex in sync
+	// with new OpenAI releases automatically. Availability of a given model on Codex depends
+	// on the user's ChatGPT plan/workspace (enterprise workspaces enable models later), so we
+	// do not filter by what one account can reach.
+	// Excluded: -pro / -mini / -nano / -chat* / -codex* variants (not Codex-surface models),
+	// and bare family ids (e.g. gpt-5.6) when named variants (sol/terra/luna) exist.
+	// Context: all Codex models use 272k, matching Codex CLI's default context_window and Pi.
+	// The models support ~1M, but prompts above 272k input are billed at 2x input / 1.5x output.
+	// Users can raise it per model via modelOverrides in models.json.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
-	const CODEX_LARGE_CONTEXT = 400000;
-	const CODEX_RESPONSES_LITE_CONTEXT = 372000;
 	const CODEX_MAX_TOKENS = 128000;
-	const codexModels: Model<"openai-codex-responses">[] = [
-		{
-			id: "gpt-5.4-mini",
-			name: "GPT-5.4 Mini",
-			api: "openai-codex-responses",
+	// Older models still served on Codex that fall outside the derivation rule.
+	const CODEX_EXTRA_IDS = ["gpt-5.4-mini"];
+	const CODEX_EXCLUDED_SUFFIX = /-(pro|mini|nano|chat|codex|spark|realtime|audio|search)(-|$)/;
+	const isCodexFrontier = (id: string): boolean => {
+		if (CODEX_EXTRA_IDS.includes(id)) return true;
+		if (/^gpt-daybreak-[a-z]+-latest$/.test(id)) return true;
+		const m = /^gpt-(\d+)(?:\.(\d+))?(-[a-z]+)?$/.exec(id);
+		if (!m || CODEX_EXCLUDED_SUFFIX.test(id)) return false;
+		const version = Number(m[1]) + Number(m[2] ?? 0) / 10;
+		return version >= 5.5;
+	};
+	const openaiIds = new Set(allModels.filter((m) => m.provider === "openai").map((m) => m.id));
+	const hasNamedVariants = (id: string): boolean =>
+		[...openaiIds].some((other) => other.startsWith(`${id}-`) && !CODEX_EXCLUDED_SUFFIX.test(other));
+	const codexModels: Model<"openai-codex-responses">[] = allModels
+		.filter((m) => m.provider === "openai" && isCodexFrontier(m.id))
+		.filter((m) => !(/^gpt-\d+(\.\d+)?$/.test(m.id) && hasNamedVariants(m.id)))
+		.map((m) => ({
+			id: m.id,
+			name: m.name,
+			api: "openai-codex-responses" as const,
 			provider: "openai-codex",
 			baseUrl: CODEX_BASE_URL,
 			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.5",
-			name: "GPT-5.5",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: CODEX_LARGE_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.6-sol",
-			name: "GPT-5.6 Sol",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-			contextWindow: CODEX_RESPONSES_LITE_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.6-terra",
-			name: "GPT-5.6 Terra",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-			contextWindow: CODEX_RESPONSES_LITE_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.6-luna",
-			name: "GPT-5.6 Luna",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-			contextWindow: CODEX_RESPONSES_LITE_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-6-astra",
-			name: "GPT-6 Astra",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-	];
+			input: ["text", "image"] as ("text" | "image")[],
+			cost: { ...m.cost },
+			contextWindow: Math.min(m.contextWindow, CODEX_CONTEXT),
+			maxTokens: Math.min(m.maxTokens, CODEX_MAX_TOKENS),
+		}));
+	for (const id of [...CODEX_EXTRA_IDS, "gpt-5.5", "gpt-5.6-luna", "gpt-6-astra"]) {
+		if (!codexModels.some((m) => m.id === id)) {
+			throw new Error(`openai-codex derivation lost expected model ${id} — OpenAI catalog changed?`);
+		}
+	}
 	allModels.push(...codexModels);
 
 	// Add missing Grok models

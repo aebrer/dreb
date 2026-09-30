@@ -19,9 +19,10 @@ import { ModelRegistry } from "../src/core/model-registry.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { codingTools } from "../src/core/tools/index.js";
+import { isLiveApiEnabled } from "./live-api.js";
 import { API_KEY, createTestResourceLoader } from "./utilities.js";
 
-describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)("AgentSession forking", () => {
+describe.skipIf(!isLiveApiEnabled() || !API_KEY)("AgentSession forking", () => {
 	let session: AgentSession;
 	let tempDir: string;
 	let sessionManager: SessionManager;
