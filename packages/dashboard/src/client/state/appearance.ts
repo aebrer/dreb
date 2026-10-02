@@ -18,6 +18,7 @@
  */
 
 import { createSignal } from "solid-js";
+import { ADDITIONAL_FONTS, type AdditionalFontId } from "./font-catalog.js";
 
 export interface ThemeEntry {
 	/** Stable id used for the `data-theme` attribute and storage. */
@@ -29,13 +30,16 @@ export interface ThemeEntry {
 export interface FontEntry {
 	/** Stable id used for the `data-font` attribute and storage. */
 	id: FontId;
-	/** Human label for pickers. */
+	/** Primary user-facing name; restricted derivatives use their neutral name. */
 	label: string;
+	/** Optional upstream attribution, never the derivative's primary name. */
+	sourceLabel?: string;
 }
 
 export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh" | "okabe" | "tol";
 export type ColorMode = "system" | "light" | "dark";
 export type FontId =
+	| AdditionalFontId
 	| "theme"
 	| "ibm-plex-mono"
 	| "jetbrains-mono"
@@ -69,8 +73,8 @@ export const MODES: readonly ColorMode[] = ["system", "light", "dark"] as const;
 
 /**
  * Fixed font picker catalog. `theme` preserves each theme's built-in family.
- * Monospace families come first, then the explicit accessibility options
- * (OpenDyslexic for dyslexia, Atkinson Hyperlegible for low vision).
+ * Existing monospace/accessibility choices keep their order and IDs, followed
+ * by fifteen Latin sans-serif and fifteen Latin serif families.
  */
 export const FONTS: readonly FontEntry[] = [
 	{ id: "theme", label: "Theme default" },
@@ -80,7 +84,30 @@ export const FONTS: readonly FontEntry[] = [
 	{ id: "iosevka", label: "Iosevka" },
 	{ id: "opendyslexic", label: "OpenDyslexic" },
 	{ id: "atkinson-hyperlegible", label: "Atkinson Hyperlegible" },
+	...ADDITIONAL_FONTS.map((entry) =>
+		"reservedName" in entry && entry.reservedName
+			? { id: entry.id, label: entry.family, sourceLabel: entry.label }
+			: { id: entry.id, label: entry.label },
+	),
 ] as const;
+
+export const FONT_GROUPS = ["Existing choices", "Sans-serif", "Serif"] as const;
+export type FontGroup = (typeof FONT_GROUPS)[number];
+
+export function fontGroup(id: FontId): FontGroup {
+	return ADDITIONAL_FONTS.find((entry) => entry.id === id)?.group ?? "Existing choices";
+}
+
+/** Theme-default previews ignore the currently committed explicit override. */
+export function fontFamily(id: FontId, activeTheme: ThemeId = theme()): string {
+	if (id === "theme") return activeTheme === "gruvbox" ? "JetBrains Mono" : "IBM Plex Mono";
+	if (id === "atkinson-hyperlegible") return "Atkinson Hyperlegible Next";
+	return ADDITIONAL_FONTS.find((entry) => entry.id === id)?.family ?? FONTS.find((entry) => entry.id === id)!.label;
+}
+
+export function fontStack(id: FontId, activeTheme: ThemeId = theme()): string {
+	return `"${fontFamily(id, activeTheme)}", "IBM Plex Mono", "Courier New", monospace`;
+}
 
 /** All font ids in picker order. */
 export const FONT_IDS: readonly FontId[] = FONTS.map((entry) => entry.id);

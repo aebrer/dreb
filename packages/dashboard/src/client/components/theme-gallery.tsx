@@ -17,17 +17,16 @@ import { For, type JSX } from "solid-js";
 import {
 	type ColorMode,
 	colorMode,
-	FONTS,
 	type FontId,
 	font,
 	MODES,
 	setColorMode,
-	setFont,
 	setTheme,
 	THEMES,
 	theme,
 } from "../state/appearance.js";
 import { StatusChip } from "./common.js";
+import { FontPicker } from "./font-picker.js";
 
 /** Order matters only for display; matches StatusChip's own glyph set. */
 const STATUSES = ["running", "attention", "idle", "error"] as const;
@@ -71,9 +70,7 @@ export function ThemeGallery(): JSX.Element {
 					<span class="hint">this browser only — “theme default” keeps each theme’s built-in font</span>
 				</label>
 				<span class="setting-control">
-					<select id="pref-font" value={font()} onChange={(e) => setFont(e.currentTarget.value as FontId)}>
-						<For each={FONTS}>{(entry) => <option value={entry.id}>{entry.label}</option>}</For>
-					</select>
+					<FontPicker />
 				</span>
 			</div>
 

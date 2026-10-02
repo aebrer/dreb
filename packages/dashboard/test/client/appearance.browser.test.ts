@@ -17,7 +17,7 @@
  * NOT jsdom.
  */
 
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { type Browser, chromium, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { FontId } from "../../src/client/state/appearance.js";
 
 // ---------------------------------------------------------------- sources
 
@@ -37,6 +38,10 @@ const tokensCss = readFileSync(join(stylesDir, "tokens.css"), "utf8");
 const appCss = readFileSync(join(stylesDir, "app.css"), "utf8");
 const themesCss = readFileSync(join(stylesDir, "themes.css"), "utf8");
 const indexHtml = readFileSync(indexHtmlPath, "utf8");
+const expandedCss = readFileSync(join(stylesDir, "font-catalog.css"), "utf8");
+const EXPANDED_FONTS: Array<{ id: FontId; family: string }> = JSON.parse(
+	readFileSync(join(fontsDir, "expanded/catalog.json"), "utf8"),
+);
 
 // ---------------------------------------------------------------- catalog
 
@@ -44,14 +49,6 @@ const THEME_IDS = ["default", "dim", "solarized", "gruvbox", "qud", "vangogh", "
 const MODES = ["system", "light", "dark"] as const;
 type ThemeId = (typeof THEME_IDS)[number];
 type Mode = (typeof MODES)[number];
-type FontId =
-	| "theme"
-	| "ibm-plex-mono"
-	| "jetbrains-mono"
-	| "fira-code"
-	| "iosevka"
-	| "opendyslexic"
-	| "atkinson-hyperlegible";
 type Scheme = "light" | "dark";
 
 /**
@@ -238,6 +235,8 @@ beforeAll(async () => {
 	writeFileSync(join(tempDir, "styles", "tokens.css"), tokensCss);
 	writeFileSync(join(tempDir, "styles", "app.css"), appCss);
 	writeFileSync(join(tempDir, "styles", "themes.css"), themesCss);
+	writeFileSync(join(tempDir, "styles", "font-catalog.css"), expandedCss);
+	cpSync(join(fontsDir, "expanded"), join(tempDir, "assets/fonts/expanded"), { recursive: true });
 	copyFileSync(join(fontsDir, "jetbrains-mono.woff2"), join(tempDir, "assets", "fonts", "jetbrains-mono.woff2"));
 	copyFileSync(
 		join(fontsDir, "jetbrains-mono-italic.woff2"),
@@ -273,6 +272,7 @@ beforeAll(async () => {
 			<link rel="stylesheet" href="./styles/tokens.css">
 			<link rel="stylesheet" href="./styles/app.css">
 			<link rel="stylesheet" href="./styles/themes.css">
+			<link rel="stylesheet" href="./styles/font-catalog.css">
 		</head><body><div id="body-text">body</div><pre id="mono">const answer = 42;</pre>
 			<select id="control"><option>control</option></select>
 			<textarea id="memory" class="memory-textarea">memory</textarea>
@@ -299,6 +299,7 @@ beforeAll(async () => {
 			<link rel="stylesheet" href="./styles/tokens.css">
 			<link rel="stylesheet" href="./styles/app.css">
 			<link rel="stylesheet" href="./styles/themes.css">
+			<link rel="stylesheet" href="./styles/font-catalog.css">
 			<script src="./appearance.js"></script>
 		</head><body></body></html>`,
 	);
@@ -1023,4 +1024,63 @@ describe("appearance — the live <meta name=theme-color> tracks the resolved --
 		expect(result.content).toBe(result.bg);
 		await ctx.close();
 	});
+});
+
+// All new preferences must restore using the real synchronous production head,
+// independently of the app module, and override active theme typography locally.
+describe("appearance — expanded font restoration and scoped typography", () => {
+	it.each(EXPANDED_FONTS)(
+		"$id restores before app code and overrides body/code/controls/cards",
+		async ({ id, family }) => {
+			const ctx = await browser.newContext();
+			try {
+				await ctx.addInitScript((id) => {
+					localStorage.setItem("dreb.dashboard.font", id);
+					localStorage.setItem("dreb.dashboard.theme", "gruvbox");
+				}, id);
+				const p = await ctx.newPage();
+				await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+				expect(await p.evaluate(() => document.documentElement.dataset.font)).toBe(id);
+				expect(await p.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain(family);
+				await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+				await applyRoot(p, "gruvbox", "system", id);
+				await p.evaluate(
+					({ id }) => {
+						const card = document.createElement("pre");
+						card.id = "expanded-card";
+						card.dataset.theme = "solarized";
+						card.dataset.font = id;
+						card.textContent = "Résumé 42";
+						document.body.append(card);
+					},
+					{ id },
+				);
+				await p.evaluate(() => document.fonts.ready);
+				const results = await p.evaluate(() =>
+					[
+						"body-text",
+						"mono",
+						"control",
+						"memory",
+						"face-400",
+						"face-700",
+						"face-400i",
+						"face-700i",
+						"expanded-card",
+					].map((id) => getComputedStyle(document.getElementById(id)!).fontFamily),
+				);
+				expect(results.every((stack) => stack.includes(family))).toBe(true);
+				expect(
+					await p.evaluate(
+						(family) =>
+							[...document.fonts].filter((face) => face.family.includes(family) && face.status === "loaded")
+								.length,
+						family,
+					),
+				).toBeGreaterThanOrEqual(2);
+			} finally {
+				await ctx.close();
+			}
+		},
+	);
 });

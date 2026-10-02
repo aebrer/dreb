@@ -4,9 +4,9 @@ These WOFF2 files back the **explicit Fira Code** browser-local font selection
 (see `../../styles/themes.css`). Fira Code is a monospace family known for its
 default-on coding ligatures (`->`, `=>`, `!=`, …, via the `calt` feature) and
 is offered as a *bundled* alternative to the Google-hosted IBM Plex Mono and
-the other self-hosted families. It is used only when `data-font="fira-code"`
-is active (an explicit picker choice — never a theme default), and is fetched
-lazily by the browser only then. Theme default keeps Gruvbox on JetBrains Mono
+the other self-hosted families. It is fetched lazily when selected
+(`data-font="fira-code"`, an explicit choice — never a theme default) or when
+open font-picker previews use it. Theme default keeps Gruvbox on JetBrains Mono
 and the other themes on IBM Plex Mono; an explicit choice overrides any theme.
 
 ## Source

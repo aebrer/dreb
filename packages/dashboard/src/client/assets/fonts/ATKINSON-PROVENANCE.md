@@ -4,10 +4,10 @@ These WOFF2 files back the **explicit Atkinson Hyperlegible** browser-local
 font selection (see `../../styles/themes.css`). Atkinson Hyperlegible is a
 sans-serif family designed for readers with low vision or dyslexia (distinct
 letterforms, open apertures, consistent stroke widths) and is offered as a
-*second bundled accessibility alternative* alongside OpenDyslexic. It is used
-only when `data-font="atkinson-hyperlegible"` is active (an explicit picker
-choice — never a theme default), and is fetched lazily by the browser only
-then. Theme default keeps Gruvbox on JetBrains Mono and the other themes on
+*second bundled accessibility alternative* alongside OpenDyslexic. It is fetched
+lazily when selected (`data-font="atkinson-hyperlegible"`, an explicit choice —
+never a theme default) or when open font-picker previews use it.
+Theme default keeps Gruvbox on JetBrains Mono and the other themes on
 IBM Plex Mono; an explicit choice overrides any theme.
 
 ## Source

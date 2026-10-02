@@ -30,7 +30,12 @@
 		"src/client/assets/fonts/IOSEVKA-OFL.txt",
 		"src/client/assets/fonts/IOSEVKA-PROVENANCE.md",
 		"src/client/assets/fonts/ATKINSON-OFL.txt",
-		"src/client/assets/fonts/ATKINSON-PROVENANCE.md"
+		"src/client/assets/fonts/ATKINSON-PROVENANCE.md",
+		"src/client/assets/fonts/expanded/*.json",
+		"src/client/assets/fonts/expanded/*.md",
+		"src/client/assets/fonts/expanded/licenses",
+		"src/client/assets/fonts/expanded/metadata",
+		"scripts/build-font-catalog.py"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
