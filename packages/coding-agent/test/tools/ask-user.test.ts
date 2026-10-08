@@ -45,12 +45,19 @@ describe("ask_user tool", () => {
 	it("validates the questions batch schema (1-10 questions, 2-4 nonblank options)", () => {
 		const def = createAskUserToolDefinition();
 		const props = (def.parameters as any).properties;
-		expect(props.questions.minItems).toBe(1);
-		expect(props.questions.maxItems).toBe(10);
-		const question = props.questions.items;
+		// questions is the array, or a JSON-encoded string of it (parsed and checked in execute).
+		const [questionsArray, questionsString] = props.questions.anyOf;
+		expect(questionsString.type).toBe("string");
+		expect(questionsArray.minItems).toBe(1);
+		expect(questionsArray.maxItems).toBe(10);
+		const question = questionsArray.items;
 		expect(question.properties.options.minItems).toBe(2);
 		expect(question.properties.options.maxItems).toBe(4);
-		expect(question.properties.options.items.pattern).toBe("^.*[^ \\t\\r\\n].*$");
+		// Each option is a nonblank string or a {label, description?} object; both
+		// use the llama.cpp-parseable nonblank pattern.
+		const [stringOption, objectOption] = question.properties.options.items.anyOf;
+		expect(stringOption.pattern).toBe("^.*[^ \\t\\r\\n].*$");
+		expect(objectOption.properties.label.pattern).toBe("^.*[^ \\t\\r\\n].*$");
 		expect(question.properties.question.type).toBe("string");
 		expect(Value.Check(def.parameters, { questions: [{ question: "Pick", options: ["A", "B"] }] })).toBe(true);
 		expect(Value.Check(def.parameters, { questions: [{ question: "Pick", options: ["", "B"] }] })).toBe(false);
@@ -58,6 +65,119 @@ describe("ask_user tool", () => {
 		expect(Value.Check(def.parameters, { questions: [{ question: "Pick", options: ["\t\r", "B"] }] })).toBe(false);
 		// An empty batch is rejected.
 		expect(Value.Check(def.parameters, { questions: [] })).toBe(false);
+	});
+
+	it("accepts labeled-object options and a header alias in its schema", () => {
+		const def = createAskUserToolDefinition();
+		const ok = (q: Record<string, unknown>) => Value.Check(def.parameters, { questions: [q] });
+		expect(ok({ question: "Pick", options: [{ label: "A" }, { label: "B", description: "why B" }] })).toBe(true);
+		expect(ok({ question: "Pick", options: ["A", { label: "B" }] })).toBe(true);
+		expect(ok({ question: "Pick", header: "Choice" })).toBe(true);
+		// Invalid shapes still fail.
+		expect(ok({ question: "Pick", options: [{ label: "" }, { label: "B" }] })).toBe(false);
+		expect(ok({ question: "Pick", options: [{ label: "  " }, { label: "B" }] })).toBe(false);
+		expect(ok({ question: "Pick", options: [{ description: "no label" }, { label: "B" }] })).toBe(false);
+		expect(ok({ question: "Pick", options: [{ label: "A" }] })).toBe(false);
+		expect(ok({ question: "Pick", options: ["A", "B", "C", "D", { label: "E" }] })).toBe(false);
+		expect(ok({ question: "Pick", options: [42, "B"] })).toBe(false);
+	});
+
+	it("folds labeled-object options into plain text before they reach the UI", async () => {
+		const def = createAskUserToolDefinition();
+		let received: AskRequest | undefined;
+		const ctx = makeCtx(async (request) => {
+			received = request;
+			return { answers: [{ selected: ["PostgreSQL — Full SQL server"] }] };
+		});
+		const result = await run(
+			def,
+			{
+				questions: [
+					{
+						question: "DB?",
+						options: [
+							{ label: "SQLite" },
+							{ label: "PostgreSQL", description: "Full SQL server" },
+							{ label: "JSON", description: "   " },
+							"Other",
+						],
+					},
+				],
+			},
+			ctx,
+		);
+		expect(received?.questions[0].options).toEqual(["SQLite", "PostgreSQL — Full SQL server", "JSON", "Other"]);
+		expect(result.details?.answers[0].selected).toEqual(["PostgreSQL — Full SQL server"]);
+	});
+
+	it("leaves plain-string options unchanged", async () => {
+		const def = createAskUserToolDefinition();
+		let received: AskRequest | undefined;
+		const ctx = makeCtx(async (request) => {
+			received = request;
+			return { answers: [{ selected: ["A"] }] };
+		});
+		await run(def, { questions: [{ question: "?", options: ["A", "B"] }] }, ctx);
+		expect(received?.questions[0].options).toEqual(["A", "B"]);
+	});
+
+	it("uses header as the title, with title winning when both are given", async () => {
+		const def = createAskUserToolDefinition();
+		let received: AskRequest | undefined;
+		const ctx = makeCtx(async (request) => {
+			received = request;
+			return {
+				answers: [
+					{ selected: [], customText: "x" },
+					{ selected: [], customText: "y" },
+				],
+			};
+		});
+		await run(
+			def,
+			{
+				questions: [
+					{ question: "One?", header: "From header" },
+					{ question: "Two?", header: "Ignored", title: "From title" },
+				],
+			},
+			ctx,
+		);
+		expect(received?.questions[0].title).toBe("From header");
+		expect(received?.questions[1].title).toBe("From title");
+		expect(received?.questions[0]).not.toHaveProperty("header");
+	});
+
+	it("accepts questions sent as a JSON-encoded string", async () => {
+		const def = createAskUserToolDefinition();
+		expect(Value.Check(def.parameters, { questions: "[]" })).toBe(true);
+		let received: AskRequest | undefined;
+		const ctx = makeCtx(async (request) => {
+			received = request;
+			return { answers: [{ selected: ["B"] }] };
+		});
+		const questions = JSON.stringify([{ question: "Pick", header: "H", options: [{ label: "A" }, "B"] }]);
+		const result = await run(def, { questions }, ctx);
+		expect(received?.questions).toEqual([
+			expect.objectContaining({ question: "Pick", title: "H", options: ["A", "B"] }),
+		]);
+		expect(result.details?.answers[0]).toMatchObject({ selected: ["B"], skipped: false });
+	});
+
+	it("fails loudly when a JSON-string questions value is invalid", async () => {
+		const def = createAskUserToolDefinition();
+		const ask = vi.fn();
+		const ctx = makeCtx(ask);
+		await expect(run(def, { questions: "not json" }, ctx)).rejects.toThrow(/not valid JSON/);
+		await expect(run(def, { questions: '{"question":"x"}' }, ctx)).rejects.toThrow(/not a valid questions array/);
+		await expect(run(def, { questions: "[]" }, ctx)).rejects.toThrow(/not a valid questions array/);
+		await expect(
+			run(def, { questions: JSON.stringify([{ question: "x", options: ["only one"] }]) }, ctx),
+		).rejects.toThrow(/not a valid questions array/);
+		await expect(
+			run(def, { questions: JSON.stringify([{ question: "x", options: [{ label: "" }, "B"] }]) }, ctx),
+		).rejects.toThrow(/not a valid questions array/);
+		expect(ask).not.toHaveBeenCalled();
 	});
 
 	it("exposes a validated optional timeoutSeconds field in its schema", () => {
@@ -326,6 +446,18 @@ describe("ask_user tool", () => {
 			{ lastComponent: undefined } as any,
 		);
 		expect(result).toBeDefined();
+	});
+
+	it("renders call labels for header and JSON-string questions without throwing", () => {
+		const def = createAskUserToolDefinition();
+		const render = (args: unknown) =>
+			def
+				.renderCall?.(args as any, mockTheme as any, { lastComponent: undefined } as any)
+				.render(80)
+				.join("\n");
+		expect(render({ questions: [{ question: "Long question text", header: "Short" }] })).toContain("Short");
+		expect(render({ questions: '[{"question":"x"}]' })).toContain("ask_user");
+		expect(render({ questions: '[{"quest' })).toContain("ask_user");
 	});
 
 	it("renders multi-question call label and per-batch result summary", () => {

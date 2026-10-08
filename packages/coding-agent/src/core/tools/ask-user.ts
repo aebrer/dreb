@@ -13,6 +13,7 @@
 
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import type { AskQuestion, AskRequest, AskResult, ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
 // ============================================================================
@@ -40,17 +41,37 @@ export interface AskUserDetails {
 // ============================================================================
 // Schema
 
+/** Nonblank text: at least one non-whitespace character (llama.cpp-parseable pattern). */
+const NONBLANK_PATTERN = "^.*[^ \\t\\r\\n].*$";
+
+/**
+ * One option: plain text, or a labeled object (the shape many models are
+ * trained on). Objects are folded back to plain text before reaching any UI.
+ */
+const optionSchema = Type.Union([
+	Type.String({ minLength: 1, pattern: NONBLANK_PATTERN }),
+	Type.Object({
+		label: Type.String({ minLength: 1, pattern: NONBLANK_PATTERN }),
+		description: Type.Optional(Type.String()),
+	}),
+]);
+
 const questionSchema = Type.Object({
 	question: Type.String({
 		description: "The Markdown-formatted question to ask the user. Be specific about what you need to decide.",
 	}),
 	title: Type.Optional(
 		Type.String({
-			description: "Short bold header shown above this question.",
+			description: "Short bold title shown above this question.",
+		}),
+	),
+	header: Type.Optional(
+		Type.String({
+			description: "Alias for title; title wins when both are given.",
 		}),
 	),
 	options: Type.Optional(
-		Type.Array(Type.String({ minLength: 1, pattern: "^.*[^ \\t\\r\\n].*$" }), {
+		Type.Array(optionSchema, {
 			minItems: 2,
 			maxItems: 4,
 			description: "2-4 nonblank suggested answers the user can pick from.",
@@ -73,14 +94,18 @@ const questionSchema = Type.Object({
 	),
 });
 
+const questionsArraySchema = Type.Array(questionSchema, {
+	minItems: 1,
+	maxItems: 10,
+	description:
+		"One or more clarifying questions to ask together in a single wizard. " +
+		"Batch every question you need answered in one call — the user answers them all and submits once.",
+});
+
 const askUserSchema = Type.Object({
-	questions: Type.Array(questionSchema, {
-		minItems: 1,
-		maxItems: 10,
-		description:
-			"One or more clarifying questions to ask together in a single wizard. " +
-			"Batch every question you need answered in one call — the user answers them all and submits once.",
-	}),
+	// A JSON-encoded string of the array is also accepted; it is parsed and
+	// checked against the same array schema in execute.
+	questions: Type.Union([questionsArraySchema, Type.String()]),
 	timeoutSeconds: Type.Optional(
 		Type.Number({
 			minimum: 5,
@@ -94,20 +119,55 @@ const askUserSchema = Type.Object({
 
 export type AskUserInput = Static<typeof askUserSchema>;
 type AskUserQuestion = Static<typeof questionSchema>;
+type AskUserOption = Static<typeof optionSchema>;
 
 // ============================================================================
 // Normalization
+
+/** Fold an option to plain text: "label" or "label — description". */
+function optionText(option: AskUserOption): string {
+	if (typeof option === "string") return option;
+	const description = option.description?.trim();
+	return description ? `${option.label} — ${description}` : option.label;
+}
+
+/**
+ * Resolve `questions` to an array. A JSON-encoded string is parsed and checked
+ * against the same schema as a real array; anything invalid throws.
+ */
+function resolveQuestions(questions: AskUserInput["questions"]): AskUserQuestion[] {
+	if (typeof questions !== "string") return questions;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(questions);
+	} catch (error) {
+		throw new Error(
+			`ask_user: \`questions\` was a string but not valid JSON (${error instanceof Error ? error.message : String(error)}). Pass \`questions\` as an array of question objects.`,
+		);
+	}
+	if (!Value.Check(questionsArraySchema, parsed)) {
+		const errors = [...Value.Errors(questionsArraySchema, parsed)]
+			.slice(0, 10)
+			.map((e) => `  - ${e.path || "questions"}: ${e.message}`)
+			.join("\n");
+		throw new Error(
+			`ask_user: \`questions\` was a JSON string that is not a valid questions array:\n${errors}\nPass \`questions\` as an array of question objects.`,
+		);
+	}
+	return parsed;
+}
 
 /**
  * Normalize a single question so every rendered surface has at least one usable
  * answer control and no impossible flag combinations survive.
  */
 function normalizeQuestion(q: AskUserQuestion): AskQuestion {
-	const hasOptions = (q.options?.length ?? 0) > 0;
+	const options = q.options?.map(optionText);
+	const hasOptions = (options?.length ?? 0) > 0;
 	return {
 		question: q.question,
-		title: q.title,
-		options: q.options,
+		title: q.title ?? q.header,
+		options,
 		// Guarantee at least one answer control: with no options, free text must
 		// be offered regardless of the requested flag, otherwise a question would
 		// render only a Skip control and no way to answer.
@@ -186,21 +246,22 @@ function answeredResult(questions: AskQuestion[], result: AskResult) {
 // ============================================================================
 // Render helpers
 
-function callLabel(args: { questions?: Array<{ title?: string; question?: string }> } | undefined): string {
-	const questions = args?.questions ?? [];
+type CallArgs = { questions?: Array<{ title?: string; header?: string; question?: string }> | string } | undefined;
+
+function callLabel(args: CallArgs): string {
+	// While streaming (or for a JSON-string batch) questions may not be an array yet.
+	const questions = Array.isArray(args?.questions) ? args.questions : [];
+	if (typeof args?.questions === "string") return "questions";
 	const count = questions.length;
 	if (count === 1) {
 		const first = questions[0];
-		const label = (first?.title || first?.question || "").replace(/\s+/g, " ").trim();
+		const label = (first?.title || first?.header || first?.question || "").replace(/\s+/g, " ").trim();
 		return label.length > 80 ? `${label.slice(0, 79)}…` : label;
 	}
 	return `${count} questions`;
 }
 
-function formatCall(
-	args: { questions?: Array<{ title?: string; question?: string }> } | undefined,
-	theme: any,
-): string {
+function formatCall(args: CallArgs, theme: any): string {
 	return `${theme.fg("toolTitle", theme.bold("ask_user"))} ${theme.fg("accent", callLabel(args))}`;
 }
 
@@ -247,13 +308,13 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 			"Call ask_user ONLY when you are genuinely blocked by ambiguity and there are multiple viable paths forward",
 			"Do NOT use it for routine confirmation, permission, or things you can reasonably decide yourself",
 			"Batch everything you need in ONE call: put each distinct decision in the `questions` array — the user answers them all and submits once",
-			"Provide 2-4 concrete `options` per question when there are clear candidate answers; the user can always type their own",
+			"Provide 2-4 concrete `options` per question (plain strings) when there are clear candidate answers; the user can always type their own",
 			"Set `multiSelect: true` when several options can be combined; `multiline: true` for open-ended answers",
 			"The user may stop the current turn instead of answering; never treat that as an answer, and unanswered questions come back as skipped",
 		],
 
 		async execute(_toolCallId, input: AskUserInput, signal, _onUpdate, ctx?: ExtensionContext) {
-			const questions = input.questions.map(normalizeQuestion);
+			const questions = resolveQuestions(input.questions).map(normalizeQuestion);
 			const request: AskRequest = { questions };
 
 			// Optional auto-stop timeout, forwarded to every UI surface (TUI
