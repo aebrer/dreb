@@ -143,7 +143,7 @@ networking window above.
 | **Subagent view** | Transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. While the child is running, a composer sends the user's text unchanged to that specific child as steering input, displays its pending steering queue, and reports its effective `one-at-a-time` or `all` delivery mode. Completed, failed, rehydrated, and unavailable children remain read-only. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
 | **Memories** | Dreb-only memory management for `~/.dreb/memory` and `.dreb/memory` under active/disk project roots. It lists existing `MEMORY.md` indexes and direct child `.md` entries only (no Claude paths, create, or rename), shows entry frontmatter or metadata errors so malformed files can be repaired, renders sanitized Markdown preview beside a raw editor, and uses exact SHA-256 revisions so stale saves/deletes return conflicts while preserving drafts. The index view is complete, not truncated, and warns when it exceeds the 200-line memory-index convention. Entry deletion requires both entry and index revisions, removes only matching safe Markdown-link index lines (`file.md` / `./file.md`), writes the cleaned index atomically before unlinking the entry, and rolls back loudly if the unlink fails. |
-| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, opt-in continuation of pending work after successful automatic compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The continuation option is off by default, can keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. The tab-title card exposes the default-enabled generator toggle and an exact authenticated `provider/model` picker; an unset model clearly retains Explore-agent routing, a pinned model can be cleared back to that route, and edits apply to new unnamed sessions. The scoped-models editor controls model cycling for new sessions only: grouped search, model/provider/all toggles, responsive controls, accessible up/down partial-scope ordering, and save/reset. An absent `enabledModels` is future-inclusive all models in registry order and cannot be reordered; a partial scope is a non-empty ordered list of canonical `provider/model` references. Editing legacy glob, fuzzy, or thinking-suffix values saves normalized exact references. The selected context reads effective global + project settings but writes global; a project-level `enabledModels` shadow is warned. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions, including **Max concurrent subagents** (default 4). Setting it to 0 starts new parents without the subagent tool and tells the parent model to perform normally delegated work itself; positive values cap running children per parent session. Context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards plus system/light/dark mode and Theme default/IBM Plex Mono/JetBrains Mono/Fira Code/Iosevka/OpenDyslexic/Atkinson Hyperlegible font selectors, saved per browser. Shows the current rotating pairing code on the host/local dashboard, the 1–3650 day lifetime used only for future pairings (180-day default), and paired-device expiry dates with unpair. |
+| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, opt-in continuation of pending work after successful automatic compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The continuation option is off by default, can keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. The tab-title card exposes the default-enabled generator toggle and an exact authenticated `provider/model` picker; an unset model clearly retains Explore-agent routing, a pinned model can be cleared back to that route, and edits apply to new unnamed sessions. The scoped-models editor controls model cycling for new sessions only: grouped search, model/provider/all toggles, responsive controls, accessible up/down partial-scope ordering, and save/reset. An absent `enabledModels` is future-inclusive all models in registry order and cannot be reordered; a partial scope is a non-empty ordered list of canonical `provider/model` references. Editing legacy glob, fuzzy, or thinking-suffix values saves normalized exact references. The selected context reads effective global + project settings but writes global; a project-level `enabledModels` shadow is warned. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions, including **Max concurrent subagents** (default 4). Setting it to 0 starts new parents without the subagent tool and tells the parent model to perform normally delegated work itself; positive values cap running children per parent session. Context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards plus system/light/dark mode and a font picker with 36 explicit choices plus Theme default (the existing IBM Plex Mono/JetBrains Mono/Fira Code/Iosevka/OpenDyslexic/Atkinson Hyperlegible plus 15 sans-serif and 15 serif families), regular-face previews in the open listbox, saved per browser. Shows the current rotating pairing code on the host/local dashboard, the 1–3650 day lifetime used only for future pairings (180-day default), and paired-device expiry dates with unpair. |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
 ### Fleet sidebar controls and session switching
@@ -615,13 +615,30 @@ TUI theme system** — dashboard themes intentionally do not map to TUI themes.
 - **Theme gallery and font selection.** The settings appearance section shows
   mode and font selectors plus a grid of live preview cards (one per theme).
   Each card previews its palette locally without touching the page until you
-  commit by clicking it. Theme default preserves each theme's built-in font;
-  IBM Plex Mono, JetBrains Mono, Fira Code (coding ligatures), Iosevka
-  (compact, coding ligatures), the bundled dyslexia-friendly OpenDyslexic, and
-  the low-vision-friendly Atkinson Hyperlegible can also be selected
-  independently. Explicit
-  choices are reflected in the previews, while Theme default previews stay on
-  IBM Plex Mono so the inactive Gruvbox card does not fetch JetBrains Mono.
+  commit by clicking it. The font picker offers **36 explicit choices plus
+  Theme default**: the six existing choices — IBM Plex Mono, JetBrains Mono,
+  Fira Code (coding ligatures), Iosevka (compact, coding ligatures), bundled
+  dyslexia-friendly OpenDyslexic, and low-vision-friendly Atkinson Hyperlegible —
+  plus 15 sans-serif and 15 serif families. Existing IDs and saved choices are
+  preserved; explicit choices override any theme and appear in theme-card
+  previews. Theme default preserves each theme's built-in font. Theme-card
+  previews stay on IBM Plex Mono for Theme default so an inactive Gruvbox card
+  does not fetch JetBrains Mono; the font picker's Theme default option instead
+  previews the **active** theme's built-in family, even if an explicit override
+  is currently selected.
+  Visible options preview their own regular face in the open listbox. The select-only
+  combobox supports Arrow Up/Down, Home/End, and typeahead to highlight options
+  without changing the saved choice; Enter/Space opens or commits, Escape
+  closes without committing, and Tab closes and moves focus without committing.
+  “Existing choices”, “Sans-serif fonts”, and “Serif fonts” are non-selectable
+  category headings, shown as uppercase, full-width dividers—not font options
+  or the smaller “Based on …” source descriptions.
+  Opening explicitly focuses the trigger. Background scrolling dismisses the
+  menu when its trigger leaves the viewport; internal catalog scrolling does not.
+  RFN-restricted additions have neutral primary option/trigger names and separate
+  “Based on …” descriptions naming the source (for example, Dreb Sans 07 / Based
+  on Lato). Typeahead also searches source families, and preference IDs are
+  unchanged. PT Serif uses Dreb Text 07 to avoid the reserved individual word Serif.
 - **Per-browser persistence.** Selections are stored in per-browser
   `localStorage` (`dreb.dashboard.theme`, `dreb.dashboard.colorMode`, and
   `dreb.dashboard.font`), with a cross-tab sync listener; a pristine install
@@ -631,19 +648,97 @@ TUI theme system** — dashboard themes intentionally do not map to TUI themes.
 - **No wrong-appearance flash.** A synchronous bootstrap in `index.html` paints
   the correct theme, mode, and explicit font before any CSS loads, and keeps a
   live `theme-color` meta in sync with the active background.
-- **Font loading.** Most themes default to Google-hosted IBM Plex Mono; Gruvbox
-  defaults to the bundled self-hosted JetBrains Mono (OFL, provenance in
-  `src/client/assets/fonts/`). Fira Code, Iosevka, the dyslexia-friendly
-  OpenDyslexic, and the low-vision-friendly Atkinson Hyperlegible are bundled
-  self-hosted explicit options (OFL, same directory, one provenance file each),
-  and any explicit font selection overrides the theme default. The self-hosted
-  families are lazy-loaded only
-  when active typography uses them — rendering a theme or its preview card
-  never fetches an alternate font. No `light-dark()` is used, keeping an iOS
-  Safari 16.4 floor.
+- **Font loading.** Existing Google-hosted IBM Plex Mono is unchanged; most
+  themes use it by default, while Gruvbox uses bundled self-hosted JetBrains
+  Mono. The existing five self-hosted families remain OFL-licensed with their
+  provenance in `packages/dashboard/src/client/assets/fonts/`. The 30 additions
+  are source-attributed Latin subsets with neutral internal names, all OFL-licensed; see
+  [`expanded/PROVENANCE.md`](../../dashboard/src/client/assets/fonts/expanded/PROVENANCE.md)
+  for sources, processing, checksums, and licenses.
+  Self-hosted faces load lazily when selected typography or open font-picker
+  previews use them. With the picker closed, alternate families are not used;
+  opening its listbox loads regular previews only as rows approach the visible
+  scroll window, not every family or unused bold/italic resource. Older browsers
+  without IntersectionObserver preview the complete open list. Every added
+  family has real regular, italic, bold, and bold-italic (400/700) support. Theme cards never introduce an alternate family beyond
+  the explicit selection. No font uploads or new multilingual bundles are
+  added; missing scripts use browser fallback.
+  New font source assets add **5,457,304 B** to the existing **1,395,464 B**, for
+  **6,852,768 B** combined. This source-asset total is not a startup download;
+  all new regular previews total **2,350,548 B**, downloaded progressively as
+  the list is explored. A local cold desktop fixture opened in about **14 ms**
+  and requested **109,412 B** of new fonts; closed startup requested none and
+  reopening reused loaded resources. Network/device speeds vary; the font
+  count is inexpensive DOM work (136 additional elements), while downloads
+  remain the main tradeoff. The same-toolchain production comparison adds
+  **4,737 B gzipped** across JavaScript and CSS; selected styles are fetched
+  on demand, and legal packaging does not duplicate source font binaries.
+  No `light-dark()` is used, keeping an iOS Safari 16.4 floor.
 - **PWA launch colors.** The static `manifest.webmanifest` keeps white
   (default-light) launch colors as the fallback; the live `theme-color` meta
   follows the active appearance once the app loads.
+
+### Custom fonts in a source build
+
+The released Dashboard supports its bundled catalog only. There is **no font
+upload control, custom-font install directory, settings-file font path, or
+runtime font discovery**. Uploading a font through the host Files screen does
+not register it with the appearance picker; installing it in your OS does not
+add a picker entry either. Font uploads are a separate feature, not a hidden
+configuration option.
+
+For a private customization, manually add the font to a **source checkout** and
+rebuild Dashboard. This is a developer workflow; npm upgrades do not preserve
+edits to an installed package:
+
+1. Put legally usable WOFF2 files and their license/provenance under
+   `packages/dashboard/src/client/assets/fonts/custom/`. Keep them separate from
+   `expanded/`, which is the hash-locked, generated catalog. Retain required
+   notices and obey Reserved Font Name rules if modifying a font. Supply genuine
+   normal/italic and weight faces for the styles you intend to use.
+2. Add a unique ID, label, CSS family, and existing `Sans-serif` or `Serif` group
+   to `packages/dashboard/src/client/state/font-catalog.ts`. For example:
+   ```ts
+   { id: "my-custom-font", label: "My Custom Font", family: "My Custom Font", group: "Sans-serif" },
+   ```
+   `appearance.ts` derives the valid IDs, picker entries and preview stack from
+   this registry. Keep restricted derivative names neutral, with secondary
+   source attribution using the registry's existing naming pattern.
+3. Create `packages/dashboard/src/client/styles/custom-fonts.css` with the real
+   faces and a scoped font override. For a regular-400 face:
+   ```css
+   @font-face {
+     font-family: "My Custom Font";
+     src: url("../assets/fonts/custom/my-custom-font-regular.woff2") format("woff2");
+     font-style: normal;
+     font-weight: 400;
+     font-display: swap;
+   }
+   [data-font="my-custom-font"] {
+     --mono-font: "My Custom Font", "IBM Plex Mono", "Courier New", monospace;
+   }
+   ```
+   Add corresponding rules for the other real faces. Link this stylesheet in
+   `packages/dashboard/src/client/index.html` **after** `font-catalog.css`; do
+   not append hand-written rules to the generated stylesheet.
+4. Add `my-custom-font` to the inline `FONTS` allowlist in that same HTML file so
+   saved selection restores synchronously. Update the catalog/count/group and
+   bootstrap test expectations for your private extra entry; retain the
+   existing checks for the managed `expanded/` records. If distributing your
+   build, include custom notices/provenance in Dashboard's `package.json`
+   `files` list as well as the built font resources.
+5. From the repository root, using Node 22, run `npm run check`, `npm run build`,
+   and `npm run verify-workspace-links`, then the Dashboard tests:
+   ```sh
+   npm run test --workspace @dreb/dashboard
+   node packages/dashboard/dist/index.js
+   ```
+   Use this built server, not an unchanged globally installed Dashboard. Check
+   selection, reload restoration, actual face loading and fallback behavior.
+
+There is no need to change server/RPC code for a private bundled font. A GUI
+upload feature would additionally need validation, storage, registration,
+persistence and licensing handling; it remains separate from this catalog.
 
 ## Limitations (deliberate, sequenced later)
 

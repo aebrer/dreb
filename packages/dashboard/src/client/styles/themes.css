@@ -64,7 +64,7 @@
  * Four unmodified upstream static faces; the dashboard's emphasized weights
  * (500–800) map to the upstream bold face (weight class 800) so headings and
  * emphasized controls use a real face, never synthesized faux bold. Fetched
- * lazily only when data-font="opendyslexic" is active (no <link rel=preload>).
+ * lazily when selected or visible open-picker previews use the regular face (no <link rel=preload>).
  */
 @font-face {
 	font-family: "OpenDyslexic";
@@ -104,7 +104,7 @@
  * ../assets/fonts/FIRACODE-PROVENANCE.md). Three unsubsetted re-encoded static
  * faces at the exact weights the dashboard uses. Fira Code ships no italic
  * face upstream, so italic text is synthesized — an upstream limitation.
- * Fetched lazily only when data-font="fira-code" is active
+ * Fetched lazily when selected typography or visible open-picker previews use it
  * (no <link rel=preload>).
  */
 @font-face {
@@ -138,7 +138,7 @@
  * dashboard's unicode needs (Latin/Extended, Greek, Cyrillic, coding
  * punctuation and symbols — including all status glyphs) and re-encoded;
  * the ~100 stylistic/vertical-writing GSUB features were pruned. Fetched
- * lazily only when data-font="iosevka" is active (no <link rel=preload>).
+ * lazily when selected typography or visible open-picker previews use it (no <link rel=preload>).
  */
 @font-face {
 	font-family: "Iosevka";
@@ -178,7 +178,7 @@
  * ../assets/fonts/ATKINSON-PROVENANCE.md). Four unmodified upstream WOFF2
  * faces (v2.001 "Next") at the exact weights the dashboard uses; the
  * per-weight upstream family names are declared under a single family name.
- * Fetched lazily only when data-font="atkinson-hyperlegible" is active
+ * Fetched lazily when selected typography or visible open-picker previews use it
  * (no <link rel=preload>).
  */
 @font-face {

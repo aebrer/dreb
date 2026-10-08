@@ -4,9 +4,9 @@ These WOFF2 files back the **explicit Iosevka** browser-local font selection
 (see `../../styles/themes.css`). Iosevka is a compact monospace family with a
 high density of glyphs per line and default-on coding ligatures (via the
 `calt` feature), offered as a *bundled* alternative to the Google-hosted IBM
-Plex Mono and the other self-hosted families. It is used only when
-`data-font="iosevka"` is active (an explicit picker choice — never a theme
-default), and is fetched lazily by the browser only then. Theme default keeps
+Plex Mono and the other self-hosted families. It is fetched lazily when
+selected (`data-font="iosevka"`, an explicit choice — never a theme default)
+or when open font-picker previews use it. Theme default keeps
 Gruvbox on JetBrains Mono and the other themes on IBM Plex Mono; an explicit
 choice overrides any theme.
 

@@ -23,6 +23,9 @@ import {
 	FONTS,
 	type FontId,
 	font,
+	fontFamily,
+	fontGroup,
+	fontStack,
 	initAppearance,
 	isValidFont,
 	isValidMode,
@@ -39,6 +42,7 @@ import {
 	theme,
 	updateThemeColorMeta,
 } from "../../src/client/state/appearance.js";
+import { ADDITIONAL_FONTS } from "../../src/client/state/font-catalog.js";
 
 function resetDom(): void {
 	const root = document.documentElement;
@@ -108,8 +112,8 @@ describe("appearance — catalog", () => {
 		for (const m of MODES) expect(isValidMode(m)).toBe(true);
 	});
 
-	it("exposes the seven font options in picker order", () => {
-		expect(FONTS).toEqual([
+	it("preserves the seven original options before the thirty additional fonts", () => {
+		expect(FONTS.slice(0, 7)).toEqual([
 			{ id: "theme", label: "Theme default" },
 			{ id: "ibm-plex-mono", label: "IBM Plex Mono" },
 			{ id: "jetbrains-mono", label: "JetBrains Mono" },
@@ -118,8 +122,69 @@ describe("appearance — catalog", () => {
 			{ id: "opendyslexic", label: "OpenDyslexic" },
 			{ id: "atkinson-hyperlegible", label: "Atkinson Hyperlegible" },
 		]);
+		expect(FONTS).toHaveLength(37);
+		expect(new Set(FONT_IDS).size).toBe(37);
+		expect(FONTS.slice(7).map(({ id }) => id)).toEqual(ADDITIONAL_FONTS.map(({ id }) => id));
+		expect(ADDITIONAL_FONTS.filter(({ group }) => group === "Sans-serif")).toHaveLength(15);
+		expect(ADDITIONAL_FONTS.filter(({ group }) => group === "Serif")).toHaveLength(15);
 		expect(FONT_IDS).toEqual(FONTS.map((entry) => entry.id));
 		for (const entry of FONTS) expect(isValidFont(entry.id)).toBe(true);
+	});
+
+	it("matches source-manifest IDs, labels, neutral families, and groups", () => {
+		const manifest = JSON.parse(readClientFile("assets/fonts/expanded/catalog.json")) as Array<{
+			id: string;
+			label: string;
+			family: string;
+			group: string;
+		}>;
+		expect(manifest.map(({ id, label, family, group }) => ({ id, label, family, group }))).toEqual(
+			ADDITIONAL_FONTS.map(({ id, label, family, group }) => ({ id, label, family, group })),
+		);
+		for (const entry of ADDITIONAL_FONTS) {
+			expect(fontFamily(entry.id)).toBe(entry.family);
+			expect(fontGroup(entry.id)).toBe(entry.group);
+			expect(fontStack(entry.id)).toBe(`"${entry.family}", "IBM Plex Mono", "Courier New", monospace`);
+		}
+		for (const entry of FONTS.slice(0, 7)) expect(fontGroup(entry.id)).toBe("Existing choices");
+		expect(fontFamily("atkinson-hyperlegible")).toBe("Atkinson Hyperlegible Next");
+		expect(manifest.find(({ id }) => id === "source-serif-4")?.label).toBe("Source Serif 4");
+	});
+
+	it("keeps restricted source names secondary and excludes individual RFN words from primary names", () => {
+		let restricted = 0;
+		for (const entry of ADDITIONAL_FONTS) {
+			const header = readClientFile(`assets/fonts/expanded/licenses/${entry.id}/OFL.txt`).split(
+				"This Font Software",
+			)[0];
+			const declaration = header.match(/with Reserved Font Names? ([^\n]+)/i)?.[1];
+			const primary = FONTS.find(({ id }) => id === entry.id)!;
+			expect("reservedName" in entry && entry.reservedName).toBe(Boolean(declaration));
+			if (!declaration) {
+				expect(primary).toEqual({ id: entry.id, label: entry.label });
+				continue;
+			}
+			restricted++;
+			expect(primary).toEqual({ id: entry.id, label: entry.family, sourceLabel: entry.label });
+			const primaryWords = primary.label.toLowerCase().split(/[^a-z0-9]+/);
+			for (const word of declaration
+				.toLowerCase()
+				.split(/[^a-z0-9]+/)
+				.filter((word) => word && word !== "and"))
+				expect(primaryWords, `${entry.id} must not use reserved word ${word}`).not.toContain(word);
+		}
+		expect(restricted).toBe(9);
+	});
+
+	it.each(THEME_IDS)("Theme default previews the built-in family for %s despite an explicit override", (id) => {
+		setTheme(id);
+		setFont("opendyslexic");
+		const family = id === "gruvbox" ? "JetBrains Mono" : "IBM Plex Mono";
+		expect(fontFamily("theme")).toBe(family);
+		expect(fontFamily("theme", id)).toBe(family);
+		expect(fontStack("theme", id)).toBe(`"${family}", "IBM Plex Mono", "Courier New", monospace`);
+		expect(fontFamily("opendyslexic", id)).toBe("OpenDyslexic");
+		expect(font()).toBe("opendyslexic");
 	});
 
 	it("rejects unknown theme, mode, and font values", () => {
@@ -280,6 +345,40 @@ describe("appearance — setters", () => {
 		expect(colorMode()).toBe("system");
 		setFont("bogus" as FontId);
 		expect(font()).toBe("theme");
+	});
+});
+
+describe("appearance — additional font persistence", () => {
+	it.each(ADDITIONAL_FONTS)("restores, sets, clears, and cross-tab syncs $id", ({ id }) => {
+		window.localStorage.setItem(FONT_STORAGE_KEY, id);
+		reloadAppearance();
+		expect(font()).toBe(id);
+		expect(document.documentElement.getAttribute("data-font")).toBe(id);
+
+		setFont("theme");
+		expect(font()).toBe("theme");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBeNull();
+		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
+
+		setFont(id);
+		expect(font()).toBe(id);
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe(id);
+		expect(document.documentElement.getAttribute("data-font")).toBe(id);
+		setTheme("gruvbox");
+		expect(font()).toBe(id);
+		expect(document.documentElement.getAttribute("data-font")).toBe(id);
+
+		setFont("theme");
+		initAppearance();
+		window.localStorage.setItem(FONT_STORAGE_KEY, id);
+		window.dispatchEvent(new StorageEvent("storage", { key: FONT_STORAGE_KEY, newValue: id }));
+		expect(font()).toBe(id);
+		expect(document.documentElement.getAttribute("data-font")).toBe(id);
+		window.localStorage.removeItem(FONT_STORAGE_KEY);
+		window.dispatchEvent(new StorageEvent("storage", { key: FONT_STORAGE_KEY, newValue: null }));
+		expect(font()).toBe("theme");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBeNull();
+		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
 	});
 });
 
@@ -459,21 +558,21 @@ describe("appearance — applyAppearance direct", () => {
 	});
 });
 
-function readIndexHtml(): string {
+function readClientFile(relativePath: string): string {
 	// The jsdom environment gives import.meta.url an http scheme, so resolve the
 	// file against the working directory. Tests may run from the package root
 	// (per-package vitest) or the monorepo root (`npm test`), so try both.
 	const candidates = [
-		resolve(process.cwd(), "src/client/index.html"),
-		resolve(process.cwd(), "packages/dashboard/src/client/index.html"),
+		resolve(process.cwd(), "src/client", relativePath),
+		resolve(process.cwd(), "packages/dashboard/src/client", relativePath),
 	];
 	const found = candidates.find((p) => existsSync(p));
-	if (!found) throw new Error(`appearance.test: index.html not found (tried ${candidates.join(", ")})`);
+	if (!found) throw new Error(`appearance.test: ${relativePath} not found (tried ${candidates.join(", ")})`);
 	return readFileSync(found, "utf-8");
 }
 
 describe("appearance — index.html bootstrap contract", () => {
-	const html = readIndexHtml();
+	const html = readClientFile("index.html");
 
 	it("declares the exact storage keys the module uses", () => {
 		expect(html).toContain(THEME_STORAGE_KEY);
@@ -502,8 +601,8 @@ describe("appearance — index.html bootstrap contract", () => {
 	it("lists only non-default theme, mode, and font values in bootstrap arrays", () => {
 		expect(html).toContain('["dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"]');
 		expect(html).toContain('["light", "dark"]');
-		expect(html).toContain(
-			'["ibm-plex-mono", "jetbrains-mono", "fira-code", "iosevka", "opendyslexic", "atkinson-hyperlegible"]',
-		);
+		const fontAllowlist = html.match(/var FONTS\s*=\s*(\[[\s\S]*?\]);/);
+		expect(fontAllowlist).not.toBeNull();
+		expect(JSON.parse(fontAllowlist![1])).toEqual(FONT_IDS.filter((id) => id !== "theme"));
 	});
 });

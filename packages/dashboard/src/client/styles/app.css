@@ -3576,3 +3576,104 @@ details.thinking .thinking-body {
 		grid-template-columns: 1fr;
 	}
 }
+
+/* Preview options exist only while the font picker is open. */
+.font-picker {
+	display: inline-block;
+	max-width: 100%;
+}
+
+.font-picker-trigger {
+	display: inline-flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	max-width: 100%;
+	min-height: 36px;
+	padding: 4px var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	font-size: var(--fs-secondary);
+}
+
+.font-picker-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.font-picker-name,
+.font-picker-source {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.font-picker-source {
+	font-size: var(--fs-small);
+	font-weight: 400;
+	color: var(--muted);
+}
+
+.font-picker-list {
+	z-index: 200;
+	overflow-y: auto;
+	/* Lazy font swaps must not undo explicit keyboard/scroll positioning. */
+	overflow-anchor: none;
+	overscroll-behavior: contain;
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	padding: var(--space-1);
+	box-shadow: 0 4px 16px #0003;
+}
+
+.font-picker-list fieldset {
+	border: 0;
+	margin: 0;
+	padding: 0;
+	min-width: 0;
+}
+
+.font-picker-list fieldset + fieldset {
+	margin-top: var(--space-2);
+}
+
+.font-picker-group {
+	width: 100%;
+	padding: var(--space-2);
+	margin-bottom: var(--space-1);
+	border-bottom: var(--hairline);
+	font-size: var(--fs-small);
+	font-weight: 400;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text);
+}
+
+.font-picker-option {
+	display: flex;
+	width: 100%;
+	min-height: 40px;
+	justify-content: space-between;
+	align-items: center;
+	gap: var(--space-2);
+	padding: 6px var(--space-2);
+	font-size: 16px;
+	font-weight: 400;
+	border: 1px solid transparent;
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	text-align: left;
+}
+
+.font-picker-option.highlighted {
+	border-color: var(--text);
+}
+
+.font-picker-trigger:focus-visible {
+	outline: 2px solid var(--text);
+	outline-offset: 2px;
+}

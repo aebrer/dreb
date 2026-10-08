@@ -3,9 +3,9 @@
 These WOFF2 files back the **explicit OpenDyslexic** browser-local font
 selection (see `../../styles/themes.css`). OpenDyslexic is a dyslexia-friendly
 family and is offered as a *bundled* alternative to the Google-hosted IBM Plex
-Mono and the self-hosted JetBrains Mono. It is used only when
-`data-font="opendyslexic"` is active (an explicit picker choice — never a theme
-default), and is fetched lazily by the browser only then. Theme default keeps
+Mono and the self-hosted JetBrains Mono. It is fetched lazily when selected
+(`data-font="opendyslexic"`, an explicit choice — never a theme default) or
+when open font-picker previews use it. Theme default keeps
 Gruvbox on JetBrains Mono and the other themes on IBM Plex Mono; an explicit
 choice overrides any theme.
 
@@ -42,7 +42,7 @@ JetBrains Mono files above (which were subset and re-encoded), no subsetting or
 re-encoding was applied here: subsetting would raise Reserved Font Name
 concerns under the OFL, while keeping the upstream WOFF2 files verbatim avoids
 them and still gives fully local, lazy browser loading (~112–120 KB per face,
-fetched only when OpenDyslexic is selected).
+fetched when selected typography or open font-picker previews use it).
 
 The upstream name table reports `Version 0.920` at this tag (the tag is named
 `v0.91.12`; the pin above is authoritative).

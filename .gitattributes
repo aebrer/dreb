@@ -1,0 +1,4 @@
+# Preserve pinned upstream legal/metadata records byte-for-byte, including
+# their original line endings and trailing spaces; hashes verify these copies.
+packages/dashboard/src/client/assets/fonts/expanded/licenses/** -text whitespace=-blank-at-eol,-blank-at-eof
+packages/dashboard/src/client/assets/fonts/expanded/metadata/*.pb -text whitespace=-blank-at-eol,-blank-at-eof
