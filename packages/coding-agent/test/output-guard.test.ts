@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	flushRawStdout,
+	isFatalExitPending,
 	isStdoutTakenOver,
 	MAX_NO_DRAIN_GRACE_MS,
 	MAX_QUEUED_STDOUT_BYTES,
@@ -470,6 +471,21 @@ describe("output-guard", () => {
 			expect(process.stdout.listenerCount("error")).toBe(before + 1);
 			resetOutputGuardForTests();
 			expect(process.stdout.listenerCount("error")).toBe(before);
+		});
+
+		it("records exit code 1 and reports pending fatal exit before the diagnostic flushes", () => {
+			process.stderr.write = (() => false) as typeof process.stderr.write; // callback never fires
+			const exitSpy = quietExit();
+			fakeStdoutWrite();
+			expect(isFatalExitPending()).toBe(false);
+			writeRawStdout("frame");
+			process.stdout.emit("error", errno("EPIPE"));
+			expect(exitSpy).not.toHaveBeenCalled();
+			expect(isFatalExitPending()).toBe(true);
+			expect(process.exitCode).toBe(1);
+			resetOutputGuardForTests();
+			expect(isFatalExitPending()).toBe(false);
+			expect(process.exitCode).toBeUndefined();
 		});
 
 		it("forces exit when stderr itself throws", () => {

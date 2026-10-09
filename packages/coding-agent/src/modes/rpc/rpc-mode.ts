@@ -46,7 +46,7 @@ import type {
 import { getGitBranch } from "../../core/git-branch.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
 import { parseModelPattern, resolveModelScopePatterns } from "../../core/model-resolver.js";
-import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import { isFatalExitPending, takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
@@ -61,6 +61,7 @@ import {
 	getBackgroundAgentPendingSteering,
 	getBackgroundAgents,
 	rehydrateBackgroundAgentsFromDisk,
+	setSubagentRpcFullMessageUpdates,
 	steerBackgroundAgent,
 } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
@@ -1935,6 +1936,10 @@ export async function runRpcMode(
 			: options.fullMessageUpdates
 				? undefined
 				: projectRpcMessageUpdates;
+	// Forward the opt-in to RPC-controlled subagent children: their relayed
+	// background_agent_event payloads are projected inside the child process and
+	// cannot be restored here, so the child must emit full frames itself.
+	setSubagentRpcFullMessageUpdates(eventProjector === undefined);
 
 	// Output all agent events as JSON
 	session.subscribe((event) => {
@@ -2488,6 +2493,12 @@ export async function runRpcMode(
 		subagentSessionCostTracker?.dispose();
 		detachInput();
 		process.stdin.pause();
+		if (isFatalExitPending()) {
+			// A stdout write failure is already exiting the process nonzero (a dying
+			// consumer often closes stdin and stdout together). Exiting 0 here would
+			// truncate its diagnostic and report success; let the fatal path finish.
+			return new Promise<never>(() => {});
+		}
 		process.exit(0);
 	}
 

@@ -1904,7 +1904,11 @@ The projection applies recursively to `message_update` events nested inside `bac
 {"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello","partial":{...}}}
 ```
 
-The flag requires `--mode rpc` and is rejected with `--ui dashboard` (dashboard runtimes are always projected). Prefer accumulating deltas or reading `message_end` instead.
+The flag requires `--mode rpc` and is rejected with `--ui dashboard` (dashboard runtimes are always projected). A server started with the flag forwards it to the RPC-controlled subagent children it spawns, so nested `message_update` events relayed in `background_agent_event` payloads are full frames too. Prefer accumulating deltas or reading `message_end` instead.
+
+**TypeScript types.** `RpcEvent` (exported from the package and used by `RpcClient.onEvent`) types `message_update` as `RpcMessageUpdateEvent`: `message` and `assistantMessageEvent.partial` are optional, because they are absent unless the server runs with `--rpc-full-message-updates`.
+
+**Stdout write failures.** If a stdout write fails (`EPIPE` when the consumer has gone, `ENOBUFS`, ...), the server writes a `Fatal: stdout write failed (<code>: ...)` diagnostic to stderr and exits 1. A stdin close that arrives at the same time (a dying consumer usually closes both pipes) does not override this with a clean exit.
 
 #### Dashboard-mode image dedupe (`--ui dashboard`)
 

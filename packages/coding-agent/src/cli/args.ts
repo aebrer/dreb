@@ -61,6 +61,19 @@ export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 /** Canonical list of thinking levels, shared so validators and error messages cannot drift. */
 export { VALID_THINKING_LEVELS };
 
+/**
+ * Validate `--rpc-full-message-updates` against the other parsed flags.
+ * Returns an error message for an invalid combination, or undefined if valid.
+ */
+export function validateRpcFullMessageUpdates(
+	parsed: Pick<Args, "rpcFullMessageUpdates" | "mode" | "ui">,
+): string | undefined {
+	if (!parsed.rpcFullMessageUpdates) return undefined;
+	if (parsed.mode !== "rpc") return "--rpc-full-message-updates requires --mode rpc";
+	if (parsed.ui === "dashboard") return "--rpc-full-message-updates is not supported with --ui dashboard";
+	return undefined;
+}
+
 export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
 	const result: Args = {
 		messages: [],

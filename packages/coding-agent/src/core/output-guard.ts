@@ -127,6 +127,10 @@ function abortForStdoutError(error: Error): void {
 function fatalExit(diagnostic: string): void {
 	if (fatalExitStarted) return;
 	fatalExitStarted = true;
+	// Record the failure immediately so any exit path that races the diagnostic
+	// (natural loop drain, or a shutdown that consults isFatalExitPending())
+	// still reports failure.
+	process.exitCode = 1;
 	let exiting = false;
 	const exit = (): void => {
 		if (exiting) return;
@@ -141,6 +145,15 @@ function fatalExit(diagnostic: string): void {
 	} catch {
 		exit();
 	}
+}
+
+/**
+ * True once a fatal stdout failure has started exiting the process. Graceful
+ * shutdown paths must not exit 0 (or exit at all) while this is set: the fatal
+ * path owns the exit and will terminate with code 1 once its diagnostic flushes.
+ */
+export function isFatalExitPending(): boolean {
+	return fatalExitStarted;
 }
 
 function writeToStdout(text: string): boolean {
@@ -291,5 +304,6 @@ export function resetOutputGuardForTests(): void {
 		process.stdout.off("error", stdoutErrorListener);
 		stdoutErrorListener = undefined;
 	}
+	if (fatalExitStarted) process.exitCode = undefined;
 	fatalExitStarted = false;
 }

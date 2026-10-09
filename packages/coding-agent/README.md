@@ -608,7 +608,7 @@ dreb --mode rpc
 
 RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `\n` only. Do not use generic line readers like Node `readline`, which also split on Unicode separators inside JSON payloads.
 
-Streaming `message_update` events are bounded by default (deltas only, no cumulative `message`/`partial` copies); pass `--rpc-full-message-updates` to restore legacy full frames. If a stdout pipe write fails (`EPIPE`, `ENOBUFS`, ...), the process prints a `Fatal: stdout write failed` diagnostic to stderr and exits 1.
+Streaming `message_update` events are bounded by default (deltas only, no cumulative `message`/`partial` copies); pass `--rpc-full-message-updates` to restore legacy full frames (forwarded to RPC subagent children, so nested updates are full too). If a stdout pipe write fails (`EPIPE`, `ENOBUFS`, ...), the process prints a `Fatal: stdout write failed` diagnostic to stderr and exits 1.
 
 See [docs/rpc.md](docs/rpc.md) for the protocol.
 

@@ -25,6 +25,7 @@ import {
 	resolveModelStringSingle,
 	resolveModelWithFallbacks,
 	type SubagentResult,
+	setSubagentRpcFullMessageUpdates,
 	subagentToolDefinition,
 } from "../src/core/tools/subagent.js";
 
@@ -832,6 +833,58 @@ describe("controlled subagent RPC lifecycle", () => {
 		expect(events.some((event) => event.type === "agent_end")).toBe(true);
 		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
 		expect(controls.at(-1)).toBeUndefined();
+	});
+
+	for (const enabled of [false, true]) {
+		test(`forwards --rpc-full-message-updates to RPC children only when enabled (${enabled})`, async () => {
+			setSubagentRpcFullMessageUpdates(enabled);
+			try {
+				const child = mockControlledSubagent();
+				const resultPromise = executeSingle(
+					makeAgents("controlled-model"),
+					"test-agent",
+					"Do work",
+					process.cwd(),
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					() => {},
+				);
+				await vi.waitFor(() => expect(child.commands[0]).toMatchObject({ type: "prompt" }));
+				const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+				expect(args).toContain("rpc");
+				expect(args.includes("--rpc-full-message-updates")).toBe(enabled);
+				child.finish();
+				await resultPromise;
+			} finally {
+				setSubagentRpcFullMessageUpdates(false);
+			}
+		});
+	}
+
+	test("never forwards --rpc-full-message-updates to json-mode children", async () => {
+		setSubagentRpcFullMessageUpdates(true);
+		try {
+			vi.mocked(spawn).mockImplementation((() => {
+				throw new Error("stop after spawn args captured");
+			}) as unknown as typeof spawn);
+			await executeSingle(makeAgents("controlled-model"), "test-agent", "Do work", process.cwd()).catch(() => {});
+			const args = vi.mocked(spawn).mock.calls[0]?.[1] as string[] | undefined;
+			expect(args).toBeDefined();
+			expect(args).toContain("json");
+			expect(args).not.toContain("--rpc-full-message-updates");
+		} finally {
+			setSubagentRpcFullMessageUpdates(false);
+		}
 	});
 
 	test("rejects pending control requests when the child process errors", async () => {

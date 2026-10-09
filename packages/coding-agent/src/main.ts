@@ -8,7 +8,7 @@
 import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@dreb/ai";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { type Args, parseArgs, printHelp } from "./cli/args.js";
+import { type Args, parseArgs, printHelp, validateRpcFullMessageUpdates } from "./cli/args.js";
 import { selectConfig } from "./cli/config-selector.js";
 import { processFileArguments } from "./cli/file-processor.js";
 import { buildInitialMessage } from "./cli/initial-message.js";
@@ -831,12 +831,9 @@ export async function main(args: string[]) {
 	migrateKeybindingsConfigFile(agentDir);
 	time("migrateKeybindingsConfigFile");
 
-	if (parsed.rpcFullMessageUpdates && parsed.mode !== "rpc") {
-		log.error(chalk.red("Error: --rpc-full-message-updates requires --mode rpc"));
-		process.exit(1);
-	}
-	if (parsed.rpcFullMessageUpdates && parsed.ui === "dashboard") {
-		log.error(chalk.red("Error: --rpc-full-message-updates is not supported with --ui dashboard"));
+	const rpcFullMessageUpdatesError = validateRpcFullMessageUpdates(parsed);
+	if (rpcFullMessageUpdatesError) {
+		log.error(chalk.red(`Error: ${rpcFullMessageUpdatesError}`));
 		process.exit(1);
 	}
 

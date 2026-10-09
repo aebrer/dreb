@@ -137,4 +137,32 @@ describe("runRpcMode generic event projection (issue 535)", () => {
 			harness.cleanup();
 		}
 	});
+
+	it("does not exit 0 on stdin end while a fatal stdout exit is pending (review finding 2)", async () => {
+		const harness = createHarness({ responses: ["ok"], uiType: "rpc" });
+		const capture = await start(harness);
+		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+		vi.spyOn(outputGuard, "isFatalExitPending").mockReturnValue(true);
+		try {
+			process.stdin.emit("end");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(exitSpy).not.toHaveBeenCalledWith(0);
+		} finally {
+			capture.detach();
+			harness.cleanup();
+		}
+	});
+
+	it("exits 0 on stdin end when no fatal stdout exit is pending", async () => {
+		const harness = createHarness({ responses: ["ok"], uiType: "rpc" });
+		const capture = await start(harness);
+		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+		try {
+			process.stdin.emit("end");
+			await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0));
+		} finally {
+			capture.detach();
+			harness.cleanup();
+		}
+	});
 });
