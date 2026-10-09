@@ -152,6 +152,18 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--rpc-full-message-updates flag", () => {
+		test("parses --rpc-full-message-updates", () => {
+			const result = parseArgs(["--mode", "rpc", "--rpc-full-message-updates"]);
+			expect(result.rpcFullMessageUpdates).toBe(true);
+			expect(result.mode).toBe("rpc");
+		});
+
+		test("defaults to undefined", () => {
+			expect(parseArgs(["--mode", "rpc"]).rpcFullMessageUpdates).toBeUndefined();
+		});
+	});
+
 	describe("--no-session flag", () => {
 		test("parses --no-session flag", () => {
 			const result = parseArgs(["--no-session"]);

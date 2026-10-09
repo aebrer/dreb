@@ -183,24 +183,4 @@ describe("runRpcMode dashboard event projection (issue 448)", () => {
 			harness.cleanup();
 		}
 	});
-
-	it("leaves the generic RPC protocol untouched when uiType is not dashboard", async () => {
-		const harness = createHarness({ responses: ["x".repeat(4_000)] });
-		const capture = await startRpcMode(harness);
-		try {
-			await harness.session.prompt("hi");
-
-			const updates = messageUpdateFrames(capture);
-			expect(updates.length).toBeGreaterThan(700);
-			for (const frame of updates) {
-				// Generic RPC consumers keep both cumulative fields.
-				expect(frame.message).toBeDefined();
-				const streamEvent = frame.assistantMessageEvent as Record<string, unknown>;
-				expect(streamEvent.partial).toBeDefined();
-			}
-		} finally {
-			capture.detach();
-			harness.cleanup();
-		}
-	});
 });

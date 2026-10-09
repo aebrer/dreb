@@ -10,6 +10,7 @@ export { RpcClient } from "./rpc-client.js";
 export {
 	createDashboardRpcEventProjector,
 	projectDashboardRpcEvent,
+	projectRpcMessageUpdates,
 } from "./rpc-event-projection.js";
 export type {
 	RpcAgentTypeInfo,

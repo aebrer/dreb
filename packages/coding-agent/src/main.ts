@@ -831,6 +831,15 @@ export async function main(args: string[]) {
 	migrateKeybindingsConfigFile(agentDir);
 	time("migrateKeybindingsConfigFile");
 
+	if (parsed.rpcFullMessageUpdates && parsed.mode !== "rpc") {
+		log.error(chalk.red("Error: --rpc-full-message-updates requires --mode rpc"));
+		process.exit(1);
+	}
+	if (parsed.rpcFullMessageUpdates && parsed.ui === "dashboard") {
+		log.error(chalk.red("Error: --rpc-full-message-updates is not supported with --ui dashboard"));
+		process.exit(1);
+	}
+
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
 		log.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
 		process.exit(1);
@@ -980,7 +989,7 @@ export async function main(args: string[]) {
 
 	if (mode === "rpc") {
 		printTimings();
-		await runRpcMode(session, modelFallbackMessage);
+		await runRpcMode(session, modelFallbackMessage, { fullMessageUpdates: parsed.rpcFullMessageUpdates });
 	} else if (isInteractive) {
 		if (scopedModels.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
 			const modelList = scopedModels

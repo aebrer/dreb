@@ -23,6 +23,7 @@ export interface Args {
 	version?: boolean;
 	mode?: Mode;
 	ui?: string;
+	rpcFullMessageUpdates?: boolean;
 	noSession?: boolean;
 	session?: string;
 	fork?: string;
@@ -81,6 +82,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			}
 		} else if (arg === "--ui" && i + 1 < args.length) {
 			result.ui = args[++i];
+		} else if (arg === "--rpc-full-message-updates") {
+			result.rpcFullMessageUpdates = true;
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
@@ -215,6 +218,7 @@ ${chalk.bold("Options:")}
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt
   --mode <mode>                  Output mode: text (default), json, or rpc
+  --rpc-full-message-updates     RPC only: include cumulative message/partial in message_update (legacy)
   --ui <type>                    UI type hint for system prompt (e.g. tui, telegram, rpc)
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session

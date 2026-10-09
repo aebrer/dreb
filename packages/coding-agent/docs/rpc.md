@@ -33,7 +33,7 @@ historical field as a safe process-spawn path.
 
 ### Process exit and pipe errors
 
-`RpcClient.onExit(listener)` receives an `RpcExitInfo` when the child dies: `{ code, signal }` from a process `exit`, or `{ error }` from a spawn/runtime `error`. Process exits also carry `stderrTail` — the last **2000 characters** of the child's captured stderr — so a host that only watches for exit codes can still surface the child's own diagnostic (for example the stdout backpressure guard's abort message) instead of an opaque exit code. In-flight requests are rejected with the exit reason.
+`RpcClient.onExit(listener)` receives an `RpcExitInfo` when the child dies: `{ code, signal }` from a process `exit`, or `{ error }` from a spawn/runtime `error`. Process exits also carry `stderrTail` — the last **2000 characters** of the child's captured stderr — so a host that only watches for exit codes can still surface the child's own diagnostic (for example the stdout backpressure guard's abort message, or the `Fatal: stdout write failed (EPIPE|ENOBUFS|...)` diagnostic the child writes before exiting 1 when a stdout pipe write fails) instead of an opaque exit code. In-flight requests are rejected with the exit reason.
 
 Child stdio pipe failures (e.g. an `EPIPE` when writing a large prompt to a dying child) are handled the same way: each pipe's `error` event fails in-flight requests with the pipe error and the captured stderr tail instead of crashing the host process.
 
@@ -1854,17 +1854,15 @@ Emitted when a message begins and completes. The `message` field contains an `Ag
 
 ### message_update (Streaming)
 
-Emitted during streaming of assistant messages. Contains both the partial message and a streaming delta event.
+Emitted during streaming of assistant messages. Carries a streaming delta event. By default, frames are **bounded**: they contain only the delta fields, never the cumulative message.
 
 ```json
 {
   "type": "message_update",
-  "message": {...},
   "assistantMessageEvent": {
     "type": "text_delta",
     "contentIndex": 0,
-    "delta": "Hello ",
-    "partial": {...}
+    "delta": "Hello "
   }
 }
 ```
@@ -1888,19 +1886,29 @@ The `assistantMessageEvent` field contains one of these delta types:
 
 Example streaming a text response:
 ```json
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_start","contentIndex":0,"partial":{...}}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello","partial":{...}}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" world","partial":{...}}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello world","partial":{...}}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" world"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello world"}}
 ```
 
-#### Dashboard-mode wire projection (`--ui dashboard`)
+#### Bounded wire projection (default)
 
-When the RPC server is launched with `--ui dashboard`, `message_update` events are projected **before serialization**: the cumulative top-level `message` field and the nested `assistantMessageEvent.partial` field are omitted from every frame. Both fields grow with the response, so carrying them on every delta makes the JSONL stream quadratic in response length; the dashboard reducer consumes only the delta fields (`type`, `contentIndex`, `delta`, `content`, `toolCall`), which are preserved unchanged.
+Every RPC server projects `message_update` events **before serialization**: the cumulative top-level `message` field and the nested `assistantMessageEvent.partial` field are omitted from every frame. Both fields grow with the response, so carrying them on every delta makes the JSONL stream quadratic in response length — long turns (especially large tool calls streamed as `toolcall_delta`) could flood the stdout pipe. The delta fields (`type`, `contentIndex`, `delta`, `content`, `toolCall`) are preserved unchanged, so total stdout volume stays proportional to response length.
 
-The projection applies recursively to `message_update` events nested inside `background_agent_event` payloads. It does **not** apply to command responses — `get_dashboard_snapshot` still returns complete messages — and `message_end` always carries the full final message as the authoritative transcript record. RPC servers launched without `--ui dashboard` emit the full unprojected protocol shown above.
+The projection applies recursively to `message_update` events nested inside `background_agent_event` payloads. It does **not** apply to command responses — `get_messages` and `get_dashboard_snapshot` still return complete messages — and `message_end` always carries the full final message as the authoritative transcript record.
 
-The same dashboard-mode projection also dedupes images across the wire. Inline `image` blocks (PNG, JPEG, GIF, WebP) are content-identified by `sha256(mimeType + 0x00 + decodedBytes)`; the first occurrence of each unique image is sent inline, and every later occurrence anywhere in the event stream is replaced with
+**Legacy full frames (opt-in).** Clients that still read `message` or `assistantMessageEvent.partial` from `message_update` can launch the server with `--rpc-full-message-updates` to restore the unprojected frames:
+
+```json
+{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello","partial":{...}}}
+```
+
+The flag requires `--mode rpc` and is rejected with `--ui dashboard` (dashboard runtimes are always projected). Prefer accumulating deltas or reading `message_end` instead.
+
+#### Dashboard-mode image dedupe (`--ui dashboard`)
+
+Dashboard runtimes also dedupe images across the wire. Inline `image` blocks (PNG, JPEG, GIF, WebP) are content-identified by `sha256(mimeType + 0x00 + decodedBytes)`; the first occurrence of each unique image is sent inline, and every later occurrence anywhere in the event stream is replaced with
 
 ```json
 {"type": "image_reference", "id": "<64 hex chars>", "mimeType": "image/png", "size": 12345}

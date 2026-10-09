@@ -397,4 +397,90 @@ describe("output-guard", () => {
 		expect(flushed).toBe(true);
 		expect(chunks.slice(0, 2)).toEqual(["first", "queued"]);
 	});
+
+	describe("stdout stream errors (issues 454, 535)", () => {
+		function captureStderr(): string[] {
+			const chunks: string[] = [];
+			process.stderr.write = ((chunk: string | Uint8Array, cb?: unknown) => {
+				chunks.push(String(chunk));
+				if (typeof cb === "function") (cb as () => void)();
+				return true;
+			}) as typeof process.stderr.write;
+			return chunks;
+		}
+
+		function errno(code: string): NodeJS.ErrnoException {
+			const error = new Error(`write ${code}`) as NodeJS.ErrnoException;
+			error.code = code;
+			return error;
+		}
+
+		function quietExit(): ReturnType<typeof vi.spyOn> {
+			return vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+		}
+
+		it("turns a stdout 'error' event after a direct write into a diagnostic and exit 1", () => {
+			const stderr = captureStderr();
+			const exitSpy = quietExit();
+			fakeStdoutWrite();
+			writeRawStdout("frame");
+			expect(() => process.stdout.emit("error", errno("EPIPE"))).not.toThrow();
+			expect(exitSpy).toHaveBeenCalledWith(1);
+			expect(stderr.join("")).toMatch(/stdout write failed \(EPIPE/);
+		});
+
+		it("handles ENOBUFS raised during a queued flush after drain", () => {
+			const stderr = captureStderr();
+			const exitSpy = quietExit();
+			let writable = false;
+			fakeStdoutWrite(() => writable);
+			writeRawStdout("first");
+			writeRawStdout("queued");
+			writable = true;
+			// The flush write fails asynchronously, as the real socket does.
+			process.stdout.write = ((_chunk: unknown, cb?: unknown) => {
+				if (typeof cb === "function") (cb as (e: Error) => void)(errno("ENOBUFS"));
+				return true;
+			}) as typeof process.stdout.write;
+			process.stdout.emit("drain");
+			expect(() => process.stdout.emit("error", errno("ENOBUFS"))).not.toThrow();
+			expect(exitSpy).toHaveBeenCalledTimes(1);
+			expect(exitSpy).toHaveBeenCalledWith(1);
+			expect(stderr.filter((c) => c.includes("ENOBUFS"))).toHaveLength(1);
+		});
+
+		it("handles write errors on the takeover route", () => {
+			const stderr = captureStderr();
+			const exitSpy = quietExit();
+			process.stdout.write = ((_chunk: unknown, cb?: unknown) => {
+				if (typeof cb === "function") (cb as (e: Error) => void)(errno("EPIPE"));
+				return true;
+			}) as typeof process.stdout.write;
+			takeOverStdout();
+			writeRawStdout("frame");
+			expect(exitSpy).toHaveBeenCalledWith(1);
+			expect(stderr.join("")).toContain("EPIPE");
+		});
+
+		it("installs the stdout error listener only once", () => {
+			fakeStdoutWrite();
+			const before = process.stdout.listenerCount("error");
+			writeRawStdout("a");
+			writeRawStdout("b");
+			expect(process.stdout.listenerCount("error")).toBe(before + 1);
+			resetOutputGuardForTests();
+			expect(process.stdout.listenerCount("error")).toBe(before);
+		});
+
+		it("forces exit when stderr itself throws", () => {
+			process.stderr.write = (() => {
+				throw new Error("stderr broken");
+			}) as typeof process.stderr.write;
+			const exitSpy = quietExit();
+			fakeStdoutWrite();
+			writeRawStdout("frame");
+			process.stdout.emit("error", errno("EPIPE"));
+			expect(exitSpy).toHaveBeenCalledWith(1);
+		});
+	});
 });

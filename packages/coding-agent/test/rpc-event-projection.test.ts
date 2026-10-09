@@ -286,3 +286,19 @@ describe("createDashboardRpcEventProjector (issue 495 image dedupe)", () => {
 		expect(seen).toEqual(new Set(["inline", expectedImageId("image/png", imgA)]));
 	});
 });
+
+describe("projectRpcMessageUpdates (issue 535 generic projection)", () => {
+	it("is the same projection the dashboard uses for message_update", async () => {
+		const mod = await import("../src/modes/rpc/rpc-event-projection.js");
+		expect(mod.projectRpcMessageUpdates).toBe(mod.projectDashboardRpcEvent);
+	});
+
+	it("never rewrites image blocks into image_references", async () => {
+		const { projectRpcMessageUpdates } = await import("../src/modes/rpc/rpc-event-projection.js");
+		const event = {
+			type: "message_end",
+			message: { role: "user", content: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }] },
+		};
+		expect(projectRpcMessageUpdates(event)).toBe(event);
+	});
+});
