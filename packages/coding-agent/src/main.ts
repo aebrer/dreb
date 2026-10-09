@@ -8,7 +8,7 @@
 import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@dreb/ai";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { type Args, parseArgs, printHelp } from "./cli/args.js";
+import { type Args, parseArgs, printHelp, validateRpcFullMessageUpdates } from "./cli/args.js";
 import { selectConfig } from "./cli/config-selector.js";
 import { processFileArguments } from "./cli/file-processor.js";
 import { buildInitialMessage } from "./cli/initial-message.js";
@@ -831,6 +831,12 @@ export async function main(args: string[]) {
 	migrateKeybindingsConfigFile(agentDir);
 	time("migrateKeybindingsConfigFile");
 
+	const rpcFullMessageUpdatesError = validateRpcFullMessageUpdates(parsed);
+	if (rpcFullMessageUpdatesError) {
+		log.error(chalk.red(`Error: ${rpcFullMessageUpdatesError}`));
+		process.exit(1);
+	}
+
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
 		log.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
 		process.exit(1);
@@ -980,7 +986,7 @@ export async function main(args: string[]) {
 
 	if (mode === "rpc") {
 		printTimings();
-		await runRpcMode(session, modelFallbackMessage);
+		await runRpcMode(session, modelFallbackMessage, { fullMessageUpdates: parsed.rpcFullMessageUpdates });
 	} else if (isInteractive) {
 		if (scopedModels.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
 			const modelList = scopedModels

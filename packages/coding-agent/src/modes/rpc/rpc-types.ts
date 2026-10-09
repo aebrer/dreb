@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
-import type { ImageContent, Model, Transport } from "@dreb/ai";
+import type { AssistantMessageEvent, ImageContent, Model, Transport } from "@dreb/ai";
 import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
@@ -228,8 +228,35 @@ export interface RpcDashboardSnapshotBarrierEvent {
 	snapshotId: string;
 }
 
+/**
+ * `assistantMessageEvent` as it appears on the RPC wire. RPC projects the
+ * cumulative `partial` snapshot away by default (issue 535); it is present only
+ * when the server runs with `--rpc-full-message-updates`. Deltas, `message`
+ * (on `done`), and `error` (on `error`) are unchanged.
+ */
+export type RpcAssistantMessageEvent = AssistantMessageEvent extends infer E
+	? E extends { partial: infer P }
+		? Omit<E, "partial"> & { partial?: P }
+		: E
+	: never;
+
+/**
+ * `message_update` as it appears on the RPC wire. By default RPC strips the
+ * cumulative `message` and `assistantMessageEvent.partial`; both are present
+ * only with `--rpc-full-message-updates`. Reconstruct streamed content from the
+ * deltas and use `message_end` for the authoritative final message.
+ */
+export interface RpcMessageUpdateEvent {
+	type: "message_update";
+	message?: AgentMessage;
+	assistantMessageEvent: RpcAssistantMessageEvent;
+}
+
+/** A session event as serialized on the RPC wire (message_update projected). */
+export type RpcSessionEvent = Exclude<AgentSessionEvent, { type: "message_update" }> | RpcMessageUpdateEvent;
+
 /** Non-response JSONL messages emitted by the RPC server on stdout. */
-export type RpcEvent = AgentSessionEvent | RpcExtensionUIRequest | RpcDashboardSnapshotBarrierEvent;
+export type RpcEvent = RpcSessionEvent | RpcExtensionUIRequest | RpcDashboardSnapshotBarrierEvent;
 
 export interface RpcSessionState {
 	model?: Model<any>;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseArgs } from "../src/cli/args.js";
+import { parseArgs, validateRpcFullMessageUpdates } from "../src/cli/args.js";
 
 describe("parseArgs", () => {
 	describe("--version flag", () => {
@@ -149,6 +149,52 @@ describe("parseArgs", () => {
 		test("--parent-session with no following value does not set parentSession", () => {
 			const result = parseArgs(["--parent-session"]);
 			expect(result.parentSession).toBeUndefined();
+		});
+	});
+
+	describe("--rpc-full-message-updates flag", () => {
+		test("parses --rpc-full-message-updates", () => {
+			const result = parseArgs(["--mode", "rpc", "--rpc-full-message-updates"]);
+			expect(result.rpcFullMessageUpdates).toBe(true);
+			expect(result.mode).toBe("rpc");
+		});
+
+		test("defaults to undefined", () => {
+			expect(parseArgs(["--mode", "rpc"]).rpcFullMessageUpdates).toBeUndefined();
+		});
+
+		test("is valid with --mode rpc (default and agent ui)", () => {
+			expect(
+				validateRpcFullMessageUpdates(parseArgs(["--mode", "rpc", "--rpc-full-message-updates"])),
+			).toBeUndefined();
+			expect(
+				validateRpcFullMessageUpdates(parseArgs(["--mode", "rpc", "--ui", "agent", "--rpc-full-message-updates"])),
+			).toBeUndefined();
+		});
+
+		test("errors outside --mode rpc", () => {
+			for (const argv of [
+				["--rpc-full-message-updates"],
+				["--mode", "json", "--rpc-full-message-updates"],
+				["--mode", "text", "--rpc-full-message-updates"],
+				["-p", "hi", "--rpc-full-message-updates"],
+			]) {
+				expect(validateRpcFullMessageUpdates(parseArgs(argv))).toBe(
+					"--rpc-full-message-updates requires --mode rpc",
+				);
+			}
+		});
+
+		test("errors with --ui dashboard", () => {
+			expect(
+				validateRpcFullMessageUpdates(
+					parseArgs(["--mode", "rpc", "--ui", "dashboard", "--rpc-full-message-updates"]),
+				),
+			).toBe("--rpc-full-message-updates is not supported with --ui dashboard");
+		});
+
+		test("no error when the flag is absent", () => {
+			expect(validateRpcFullMessageUpdates(parseArgs(["--mode", "json"]))).toBeUndefined();
 		});
 	});
 

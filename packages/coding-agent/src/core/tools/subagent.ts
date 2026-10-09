@@ -198,6 +198,19 @@ export interface SubagentResult {
 const DREB_SCRIPT = process.argv[1] || "dreb";
 const NODE_EXEC = process.execPath;
 
+/**
+ * Whether RPC-controlled subagent children should emit legacy full
+ * message_update frames. Set by an RPC host started with
+ * --rpc-full-message-updates so nested background_agent_event payloads relayed
+ * from children match the parent's opt-in (issue 535). Children launched with
+ * the flag set it again in their own process, so it propagates to every depth.
+ */
+let subagentRpcFullMessageUpdates = false;
+
+export function setSubagentRpcFullMessageUpdates(enabled: boolean): void {
+	subagentRpcFullMessageUpdates = enabled;
+}
+
 // Tools that must never be available to subagents — wait (subagents should
 // never no-op; they have a task to complete), watch_github_ci (parent workflow
 // orchestration), subagent (no recursive spawning), and suggest_next (would end
@@ -408,6 +421,7 @@ async function spawnSubagent(
 		const rpcModeIndex = args.indexOf("json");
 		if (rpcModeIndex !== -1) args[rpcModeIndex] = "rpc";
 		args.splice(args.length - 2, 2);
+		if (subagentRpcFullMessageUpdates) args.push("--rpc-full-message-updates");
 	}
 
 	// Early abort check — if the signal is already aborted (e.g. queued task whose

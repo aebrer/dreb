@@ -1,17 +1,19 @@
 /**
- * Dashboard-mode RPC event projection.
+ * RPC event projection.
  *
  * `message_update` events carry two cumulative copies of the growing assistant
  * message: the top-level `message` field and `assistantMessageEvent.partial`.
  * Serializing both for every token makes the child->parent JSONL pipe quadratic
  * in response length and floods the stdout queue (see issue 448).
  *
- * The dashboard never reads those fields: its browser reducer consumes only
- * the delta fields (`delta`, `content`, `toolCall`, `contentIndex`), and its
- * authoritative transcript comes from `message_end` plus `get_dashboard_snapshot`
- * RPC responses. The dashboard's own EventHub already strips the same fields at
- * the browser SSE boundary (projectDashboardEvent); this module applies the same
- * removal one boundary earlier, before JSONL serialization in runRpcMode.
+ * Every RPC runtime projects those fields out by default (issue 535): consumers
+ * read the delta fields (`delta`, `content`, `toolCall`, `contentIndex`) and get
+ * the authoritative final message from `message_end` (and, for the dashboard,
+ * `get_dashboard_snapshot` responses). Clients that still need the legacy full
+ * frames opt back in with `--rpc-full-message-updates`.
+ *
+ * Dashboard runtimes additionally dedupe inline images (see below), which
+ * requires a consumer that resolves `image_reference` blocks.
  *
  * Only the quadratic `message_update` fields are removed here. Broader bounding
  * (agent_end messages, tool_execution_update args, retry discardedPartial,
@@ -31,14 +33,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Project a single agent session event for dashboard-mode RPC transport.
+ * Project a single agent session event for RPC transport: strip the cumulative
+ * `message` / `assistantMessageEvent.partial` fields from `message_update`.
  *
  * Unknown event types are returned exactly as received (same reference) so
  * extensions and future event types remain forward-safe. Projected events are
  * shallow copies — the input event is never mutated, because other session
  * subscribers (and the session's own state) share the same object.
  */
-export function projectDashboardRpcEvent(event: Record<string, unknown>): Record<string, unknown> {
+export function projectRpcMessageUpdates(event: Record<string, unknown>): Record<string, unknown> {
 	switch (event.type) {
 		case "message_update": {
 			const projected = omit(event, "message");
@@ -49,12 +52,15 @@ export function projectDashboardRpcEvent(event: Record<string, unknown>): Record
 		}
 		case "background_agent_event": {
 			const child = event.event;
-			return isPlainObject(child) ? { ...event, event: projectDashboardRpcEvent(child) } : event;
+			return isPlainObject(child) ? { ...event, event: projectRpcMessageUpdates(child) } : event;
 		}
 		default:
 			return event;
 	}
 }
+
+/** Dashboard projection of a single event (message_update bounding only, no image dedupe). */
+export const projectDashboardRpcEvent = projectRpcMessageUpdates;
 
 // ---------------------------------------------------------------------------
 // Image dedupe (dashboard mode)
@@ -221,7 +227,7 @@ function dedupeImages(node: unknown, seen: Map<string, ImageReference>): unknown
 export function createDashboardRpcEventProjector(): (event: Record<string, unknown>) => Record<string, unknown> {
 	const seenImageIds = new Map<string, ImageReference>();
 	return (event: Record<string, unknown>): Record<string, unknown> => {
-		const projected = projectDashboardRpcEvent(event);
+		const projected = projectRpcMessageUpdates(event);
 		return dedupeImages(projected, seenImageIds) as Record<string, unknown>;
 	};
 }

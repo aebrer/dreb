@@ -10,9 +10,11 @@ export { RpcClient } from "./rpc-client.js";
 export {
 	createDashboardRpcEventProjector,
 	projectDashboardRpcEvent,
+	projectRpcMessageUpdates,
 } from "./rpc-event-projection.js";
 export type {
 	RpcAgentTypeInfo,
+	RpcAssistantMessageEvent,
 	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcCommandType,
@@ -23,12 +25,14 @@ export type {
 	RpcEvent,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcMessageUpdateEvent,
 	RpcPendingMessages,
 	RpcPerformanceStats,
 	RpcQueuedMessage,
 	RpcResources,
 	RpcResponse,
 	RpcScopedModel,
+	RpcSessionEvent,
 	RpcSessionInfo,
 	RpcSessionState,
 	RpcSessionTask,

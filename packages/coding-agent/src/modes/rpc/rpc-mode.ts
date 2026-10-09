@@ -46,7 +46,7 @@ import type {
 import { getGitBranch } from "../../core/git-branch.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
 import { parseModelPattern, resolveModelScopePatterns } from "../../core/model-resolver.js";
-import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import { isFatalExitPending, takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
@@ -61,11 +61,12 @@ import {
 	getBackgroundAgentPendingSteering,
 	getBackgroundAgents,
 	rehydrateBackgroundAgentsFromDisk,
+	setSubagentRpcFullMessageUpdates,
 	steerBackgroundAgent,
 } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
-import { createDashboardRpcEventProjector } from "./rpc-event-projection.js";
+import { createDashboardRpcEventProjector, projectRpcMessageUpdates } from "./rpc-event-projection.js";
 import type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
@@ -1776,7 +1777,21 @@ export function cancelPendingRpcExtensionRequests(
 	}
 }
 
-export async function runRpcMode(session: AgentSession, modelFallbackMessage?: string): Promise<never> {
+export interface RpcModeOptions {
+	/**
+	 * Emit legacy full `message_update` frames (cumulative `message` and
+	 * `assistantMessageEvent.partial`). Off by default: those fields make the
+	 * stream quadratic in response length (issue 535). Ignored for dashboard
+	 * runtimes, which are always projected.
+	 */
+	fullMessageUpdates?: boolean;
+}
+
+export async function runRpcMode(
+	session: AgentSession,
+	modelFallbackMessage?: string,
+	options: RpcModeOptions = {},
+): Promise<never> {
 	takeOverStdout();
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -1905,17 +1920,26 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				})
 			: undefined;
 
-	// Dashboard-launched runtimes (--ui dashboard) get events projected before
-	// serialization: message_update's cumulative `message` and
-	// `assistantMessageEvent.partial` fields are quadratic in response length on
-	// the JSONL pipe, and no dashboard consumer reads them (deltas, message_end,
-	// and get_dashboard_snapshot responses carry the authoritative data). Inline
-	// image blocks are deduped over the process lifetime so each unique image
-	// crosses stdout at most once — later occurrences become image_references
-	// the dashboard resolves from its image cache (issue 495). Generic RPC
-	// consumers keep the full protocol unchanged. Only the event stream is
+	// Events are projected before serialization. message_update's cumulative
+	// `message` and `assistantMessageEvent.partial` fields are quadratic in
+	// response length on the JSONL pipe (issues 448, 535), so every RPC runtime
+	// strips them by default; deltas, message_end, and command responses carry
+	// the authoritative data. `--rpc-full-message-updates` restores the legacy
+	// full frames for generic clients. Dashboard runtimes (--ui dashboard) are
+	// always projected and additionally dedupe inline images over the process
+	// lifetime — later occurrences become image_references the dashboard
+	// resolves from its image cache (issue 495). Only the event stream is
 	// projected — command responses (output() calls below) always stay complete.
-	const dashboardEventProjector = session.uiType === "dashboard" ? createDashboardRpcEventProjector() : undefined;
+	const eventProjector: ((event: Record<string, unknown>) => Record<string, unknown>) | undefined =
+		session.uiType === "dashboard"
+			? createDashboardRpcEventProjector()
+			: options.fullMessageUpdates
+				? undefined
+				: projectRpcMessageUpdates;
+	// Forward the opt-in to RPC-controlled subagent children: their relayed
+	// background_agent_event payloads are projected inside the child process and
+	// cannot be restored here, so the child must emit full frames itself.
+	setSubagentRpcFullMessageUpdates(eventProjector === undefined);
 
 	// Output all agent events as JSON
 	session.subscribe((event) => {
@@ -1934,7 +1958,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				tabTitleGenerator.onMessageEnd(event.message);
 			}
 		}
-		output(dashboardEventProjector ? dashboardEventProjector(event as unknown as Record<string, unknown>) : event);
+		output(eventProjector ? eventProjector(event as unknown as Record<string, unknown>) : event);
 	});
 
 	// Handle a single command
@@ -2469,6 +2493,12 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		subagentSessionCostTracker?.dispose();
 		detachInput();
 		process.stdin.pause();
+		if (isFatalExitPending()) {
+			// A stdout write failure is already exiting the process nonzero (a dying
+			// consumer often closes stdin and stdout together). Exiting 0 here would
+			// truncate its diagnostic and report success; let the fatal path finish.
+			return new Promise<never>(() => {});
+		}
 		process.exit(0);
 	}
 

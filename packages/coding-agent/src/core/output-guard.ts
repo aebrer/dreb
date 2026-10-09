@@ -77,11 +77,91 @@ let stdoutDrainListening = false;
 let stdoutDrainWaiters: Array<() => void> = [];
 let noDrainAbortTimer: ReturnType<typeof setTimeout> | undefined;
 
-function writeToStdout(text: string): boolean {
-	if (stdoutTakeoverState) {
-		return stdoutTakeoverState.rawStdoutWrite(text);
+// ---------------------------------------------------------------------------
+// Stdout stream errors (issues 454, 535)
+//
+// A failed pipe write (EPIPE when the reader is gone, ENOBUFS when the kernel
+// cannot buffer the write, ...) surfaces asynchronously as an 'error' event on
+// process.stdout. Without a listener Node rethrows it as an unhandled 'error'
+// event and the process dies with only a stack trace. Both the direct and the
+// takeover/raw-writer routes write to the same process.stdout socket, so one
+// listener covers both; per-write callbacks route the same failure through the
+// same fatal path. There is no recovery: stdout is this process's only output
+// channel, so a write failure ends the run loudly with a nonzero exit.
+// ---------------------------------------------------------------------------
+
+let stdoutErrorListener: ((error: Error) => void) | undefined;
+let fatalExitStarted = false;
+
+function ensureStdoutErrorListener(): void {
+	if (stdoutErrorListener) return;
+	stdoutErrorListener = (error: Error) => abortForStdoutError(error);
+	process.stdout.on("error", stdoutErrorListener);
+}
+
+function onStdoutWriteResult(error?: Error | null): void {
+	if (error) abortForStdoutError(error);
+}
+
+function abortForStdoutError(error: Error): void {
+	const code = (error as NodeJS.ErrnoException).code ?? "unknown";
+	const reason =
+		code === "EPIPE"
+			? "the consumer closed its end of the pipe"
+			: code === "ENOBUFS"
+				? "the OS ran out of pipe buffer space"
+				: "the stream reported an error";
+	fatalExit(
+		`Fatal: stdout write failed (${code}: ${error.message}); ${reason}. ` +
+			"Output from this process can no longer be delivered. Aborting.\n",
+	);
+}
+
+/**
+ * Write a diagnostic to stderr and exit 1. Idempotent: a write callback error
+ * and the stream 'error' event can both fire for the same failure. The exit is
+ * bounded by a timeout in case stderr is itself broken; stderr failures are
+ * swallowed here (never routed back into the stdout guard) because the process
+ * is already exiting nonzero.
+ */
+function fatalExit(diagnostic: string): void {
+	if (fatalExitStarted) return;
+	fatalExitStarted = true;
+	// Record the failure immediately so any exit path that races the diagnostic
+	// (natural loop drain, or a shutdown that consults isFatalExitPending())
+	// still reports failure.
+	process.exitCode = 1;
+	let exiting = false;
+	const exit = (): void => {
+		if (exiting) return;
+		exiting = true;
+		clearTimeout(forceExit);
+		process.exit(1);
+	};
+	const forceExit = setTimeout(exit, FATAL_DIAGNOSTIC_FLUSH_TIMEOUT_MS);
+	forceExit.unref();
+	try {
+		process.stderr.write(diagnostic, () => exit());
+	} catch {
+		exit();
 	}
-	return process.stdout.write(text);
+}
+
+/**
+ * True once a fatal stdout failure has started exiting the process. Graceful
+ * shutdown paths must not exit 0 (or exit at all) while this is set: the fatal
+ * path owns the exit and will terminate with code 1 once its diagnostic flushes.
+ */
+export function isFatalExitPending(): boolean {
+	return fatalExitStarted;
+}
+
+function writeToStdout(text: string): boolean {
+	ensureStdoutErrorListener();
+	if (stdoutTakeoverState) {
+		return stdoutTakeoverState.rawStdoutWrite(text, onStdoutWriteResult);
+	}
+	return process.stdout.write(text, onStdoutWriteResult);
 }
 
 function requestDrainFlush(): void {
@@ -128,16 +208,7 @@ function abortForStalledConsumer(): void {
 		`Fatal: stdout write queue exceeded ${MAX_QUEUED_STDOUT_BYTES} bytes with no drain progress ` +
 		`for ${MAX_NO_DRAIN_GRACE_MS} ms. The consumer of this process's stdout is not reading; ` +
 		"refusing unbounded memory growth. Aborting.\n";
-	let exiting = false;
-	const exit = (): void => {
-		if (exiting) return;
-		exiting = true;
-		clearTimeout(forceExit);
-		process.exit(1);
-	};
-	const forceExit = setTimeout(exit, FATAL_DIAGNOSTIC_FLUSH_TIMEOUT_MS);
-	forceExit.unref();
-	process.stderr.write(diagnostic, exit);
+	fatalExit(diagnostic);
 }
 
 function flushStdoutQueue(): void {
@@ -192,6 +263,7 @@ export function writeRawStdout(text: string): void {
 }
 
 export async function flushRawStdout(): Promise<void> {
+	ensureStdoutErrorListener();
 	// Wait for any queued output to drain so flushes observe true end-of-stream.
 	if (stdoutBackpressured || stdoutQueue.length > 0) {
 		await new Promise<void>((resolve) => {
@@ -228,4 +300,10 @@ export function resetOutputGuardForTests(): void {
 	stdoutBackpressured = false;
 	stdoutDrainWaiters.length = 0;
 	disarmNoDrainAbort();
+	if (stdoutErrorListener) {
+		process.stdout.off("error", stdoutErrorListener);
+		stdoutErrorListener = undefined;
+	}
+	if (fatalExitStarted) process.exitCode = undefined;
+	fatalExitStarted = false;
 }

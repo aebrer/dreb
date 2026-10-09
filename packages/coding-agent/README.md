@@ -608,6 +608,8 @@ dreb --mode rpc
 
 RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `\n` only. Do not use generic line readers like Node `readline`, which also split on Unicode separators inside JSON payloads.
 
+Streaming `message_update` events are bounded by default (deltas only, no cumulative `message`/`partial` copies); pass `--rpc-full-message-updates` to restore legacy full frames (forwarded to RPC subagent children, so nested updates are full too). If a stdout pipe write fails (`EPIPE`, `ENOBUFS`, ...), the process prints a `Fatal: stdout write failed` diagnostic to stderr and exits 1.
+
 See [docs/rpc.md](docs/rpc.md) for the protocol.
 
 ---
@@ -637,6 +639,7 @@ dreb config                    # Enable/disable package resources
 | `-p`, `--print` | Print response and exit |
 | `--mode json` | Output all events as JSON lines (see [docs/json.md](docs/json.md)) |
 | `--mode rpc` | RPC mode for process integration (see [docs/rpc.md](docs/rpc.md)) |
+| `--rpc-full-message-updates` | RPC only: emit legacy full `message_update` frames (cumulative `message`/`partial`) |
 | `--export <in> [out]` | Export session to HTML |
 
 In print mode, dreb also reads piped stdin and merges it into the initial prompt:
