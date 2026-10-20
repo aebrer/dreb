@@ -446,8 +446,8 @@ const response = await completeSimple(model, {
   reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   // Native normalized 'max' is model-aware (GPT-5.6, GPT-6, and Claude Opus/Sonnet 4.6+ and Haiku 5.5 on Anthropic Messages/Bedrock).
   // On Anthropic Messages (including GitHub Copilot) and Bedrock, Claude 'xhigh' and 'max' are sent as the native efforts of the same name.
-  // A model's `reasoningEfforts` (advertised by the provider, e.g. Copilot discovery) take precedence for xhigh/max.
-  // Use clampThinkingLevel(model, level) to apply dreb's capability fallback rules.
+  // Use getAvailableThinkingLevels(model) for the supported levels and
+  // clampThinkingLevel(model, level) to apply dreb's capability fallback rules.
 });
 
 // Access thinking and text blocks
@@ -1165,7 +1165,7 @@ const response = await complete(model, {
 
 **GitHub Copilot**: If you get "The requested model is not supported" error, enable the model manually in VS Code: open Copilot Chat, click the model selector, select the model (warning icon), and click "Enable".
 
-The Copilot OAuth provider also discovers the account's models: `login` and `refreshToken` read Copilot's `/models` and store the result as `credentials.models`, and `modifyModels()` applies it — hiding built-in Copilot models the account doesn't offer, routing by advertised endpoints (Claude Opus/Sonnet/Haiku via `/v1/messages`), setting each model's `reasoningEfforts`, and adding unknown Claude models Copilot offers. Without discovered models, `modifyModels()` only rewrites `baseUrl`.
+The Copilot OAuth provider also discovers the account's models: `login` and `refreshToken` read Copilot's `/models` and store the result as `credentials.models`, and `modifyModels()` applies it — hiding built-in Copilot models the account doesn't offer (or has disabled) and switching a model whose catalog endpoint isn't served to an advertised one (`/responses`, then `/chat/completions`). Capabilities still come from the catalog. Without discovered models, `modifyModels()` only rewrites `baseUrl`.
 
 **Google Gemini CLI / Antigravity**: These use Google Cloud OAuth. The `apiKey` returned by `getOAuthApiKey()` is a JSON string containing both the token and project ID, which the library handles automatically.
 

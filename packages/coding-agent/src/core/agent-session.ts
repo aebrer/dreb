@@ -29,13 +29,11 @@ import type {
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
 import {
 	clampThinkingLevel,
+	getAvailableThinkingLevels,
 	isContextOverflow,
 	isOutputLimitExhaustion,
 	modelsAreEqual,
 	resetApiProviders,
-	supportsMax,
-	supportsThinkingOff,
-	supportsXhigh,
 } from "@dreb/ai";
 import { getDocsPath, getSubagentSessionsDir } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
@@ -313,8 +311,6 @@ interface ToolDefinitionEntry {
 // Constants
 // ============================================================================
 
-/** Thinking levels every reasoning model supports. `off`, `xhigh` and `max` are added per model capability. */
-const BASE_THINKING_LEVELS: ThinkingLevel[] = ["minimal", "low", "medium", "high"];
 const MIN_PERFORMANCE_DURATION_MS = 10;
 
 // ============================================================================
@@ -2432,8 +2428,7 @@ export class AgentSession {
 	 * Saves to session and settings only if the level actually changes.
 	 */
 	setThinkingLevel(level: ThinkingLevel): void {
-		const availableLevels = this.getAvailableThinkingLevels();
-		const effectiveLevel = availableLevels.includes(level) ? level : this._clampThinkingLevel(level, availableLevels);
+		const effectiveLevel = clampThinkingLevel(this.model, level);
 
 		// Only persist if actually changing
 		const isChanging = effectiveLevel !== this.agent.state.thinkingLevel;
@@ -2473,25 +2468,7 @@ export class AgentSession {
 	 * and `xhigh` / `max` are included independently per model capability.
 	 */
 	getAvailableThinkingLevels(): ThinkingLevel[] {
-		const model = this.model;
-		if (!model?.reasoning) return ["off"];
-		const levels: ThinkingLevel[] = supportsThinkingOff(model) ? ["off"] : [];
-		levels.push(...BASE_THINKING_LEVELS);
-		if (supportsXhigh(model)) levels.push("xhigh");
-		if (supportsMax(model)) levels.push("max");
-		return levels;
-	}
-
-	/**
-	 * Check if current model supports xhigh thinking level.
-	 */
-	supportsXhighThinking(): boolean {
-		return this.model ? supportsXhigh(this.model) : false;
-	}
-
-	/** Check if the current model supports the native max thinking level. */
-	supportsMaxThinking(): boolean {
-		return this.model ? supportsMax(this.model) : false;
+		return getAvailableThinkingLevels(this.model);
 	}
 
 	/**
@@ -2516,11 +2493,6 @@ export class AgentSession {
 			return savedLevel;
 		}
 		return this.thinkingLevel;
-	}
-
-	private _clampThinkingLevel(level: ThinkingLevel, availableLevels: ThinkingLevel[]): ThinkingLevel {
-		const clamped = clampThinkingLevel(this.model, level);
-		return availableLevels.includes(clamped) ? clamped : (availableLevels[0] ?? "off");
 	}
 
 	// =========================================================================
@@ -3934,10 +3906,7 @@ export class AgentSession {
 			// Restore thinking level if saved (setThinkingLevel clamps to model capabilities)
 			this.setThinkingLevel(sessionContext.thinkingLevel as ThinkingLevel);
 		} else {
-			const availableLevels = this.getAvailableThinkingLevels();
-			const effectiveLevel = availableLevels.includes(defaultThinkingLevel)
-				? defaultThinkingLevel
-				: this._clampThinkingLevel(defaultThinkingLevel, availableLevels);
+			const effectiveLevel = clampThinkingLevel(this.model, defaultThinkingLevel);
 			this.agent.setThinkingLevel(effectiveLevel);
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
 		}

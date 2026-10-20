@@ -398,6 +398,11 @@ export async function loginGitHubCopilot(options: {
 	return models ? { ...credentials, models } : credentials;
 }
 
+/** Normalized enterprise domain from stored credentials, or undefined for github.com. */
+function credentialDomain(creds: CopilotCredentials): string | undefined {
+	return creds.enterpriseUrl ? (normalizeDomain(creds.enterpriseUrl) ?? undefined) : undefined;
+}
+
 export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 	id: "github-copilot",
 	name: "GitHub Copilot",
@@ -415,8 +420,7 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 		const creds = credentials as CopilotCredentials;
 		const fresh = await refreshGitHubCopilotToken(creds.refresh, creds.enterpriseUrl);
 		// Re-discover on every refresh; keep the previous list when discovery fails.
-		const domain = creds.enterpriseUrl ? (normalizeDomain(creds.enterpriseUrl) ?? undefined) : undefined;
-		const models = (await discoverGitHubCopilotModels(fresh.access, domain)) ?? creds.models;
+		const models = (await discoverGitHubCopilotModels(fresh.access, credentialDomain(creds))) ?? creds.models;
 		return models ? { ...fresh, models } : fresh;
 	},
 
@@ -426,8 +430,7 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 
 	modifyModels(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[] {
 		const creds = credentials as CopilotCredentials;
-		const domain = creds.enterpriseUrl ? (normalizeDomain(creds.enterpriseUrl) ?? undefined) : undefined;
-		const baseUrl = getGitHubCopilotBaseUrl(creds.access, domain);
+		const baseUrl = getGitHubCopilotBaseUrl(creds.access, credentialDomain(creds));
 		// Without a discovered list the built-in catalog is used as-is.
 		const discovered = Array.isArray(creds.models) ? creds.models : [];
 		return applyCopilotModelDiscovery(models, discovered).map((m) =>

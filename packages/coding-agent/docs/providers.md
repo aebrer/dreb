@@ -41,9 +41,9 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.jso
 - Copilot Claude Opus, Sonnet, and Haiku (4.x and 5.x) use Copilot's Anthropic Messages endpoint (`/v1/messages`) and follow the same [per-model Claude thinking rules](#claude-thinking-levels) as the Anthropic API: native `xhigh`/`max` effort, `between_tools` for Sonnet 5.5 when thinking is off, and no `off` level for Opus 5.5. Copilot Fable still uses the OpenAI Completions API, which receives no reasoning field.
 - **Model discovery:** at login and on every Copilot token refresh, dreb reads Copilot's `/models` for your account and stores the result with the OAuth credential. Once discovery has succeeded:
   - Built-in Copilot models your plan or organization doesn't offer (or has disabled) are hidden from `/model`. Custom `models.json` entries stay.
-  - API routing follows the endpoints Copilot advertises.
-  - The `xhigh`/`max` levels follow the reasoning efforts Copilot advertises for each model.
-  - Claude Opus/Sonnet/Haiku models Copilot offers that dreb doesn't know yet are added.
+  - A model whose built-in API endpoint Copilot doesn't serve switches to one it does (`/responses`, then `/chat/completions`).
+
+  Thinking levels and limits still come from dreb's built-in catalog, and models released after your dreb version appear after the next update (or can be added through `models.json`).
 
   If discovery fails, the last discovered list (or the built-in catalog) is used. The model list updates when the model selector opens or dreb restarts.
 - A registry context window can be lower than the endpoint's hard limit. Accepting a larger request does not change dreb's configured window. Usage-based overflow detection includes uncached input, cache reads, and cache writes.
@@ -155,7 +155,7 @@ On Anthropic-native transports — the Anthropic Messages API (Anthropic, GitHub
 | Sonnet 5.5 | adaptive + effort | `between_tools` | ✓ | ✓ | ✓ |
 | Haiku 5.5 | adaptive + effort | `disabled` | ✓ | ✓ | ✓ |
 
-Effort mapping: `minimal`/`low` → `low`, `medium` → `medium`, `high` → `high`, `xhigh` → `xhigh`, `max` → `max`. No effort is sent while thinking is off. Background calls that send no reasoning (compaction, tab titles, an arbiter with no `thinking` set) to Opus 5.5 therefore run at the model's default effort. Claude served through OpenAI-compatible APIs (OpenRouter, Copilot Fable) keeps its existing mapping. When a provider advertises a model's reasoning efforts (GitHub Copilot discovery), those decide whether `xhigh` and `max` are offered.
+Effort mapping: `minimal`/`low` → `low`, `medium` → `medium`, `high` → `high`, `xhigh` → `xhigh`, `max` → `max`. No effort is sent while thinking is off. Background calls that send no reasoning (compaction, tab titles, an arbiter with no `thinking` set) to Opus 5.5 therefore run at the model's default effort. Claude served through OpenAI-compatible APIs (OpenRouter, Copilot Fable) keeps its existing mapping.
 
 ## Cloud Providers
 

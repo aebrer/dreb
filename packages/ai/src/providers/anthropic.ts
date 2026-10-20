@@ -5,7 +5,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost, clampThinkingLevel, getClaudeThinkingOffMode, supportsAdaptiveThinking } from "../models.js";
+import { calculateCost, getClaudeEffort, getClaudeThinkingOffMode, supportsAdaptiveThinking } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -468,32 +468,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 	return stream;
 };
 
-/**
- * Map dreb thinking levels to Anthropic adaptive-thinking effort levels. `xhigh` and
- * `max` are sent as themselves after clamping to the model's capabilities
- * (unsupported `xhigh` → `max` on Opus/Sonnet 4.6).
- */
-function mapThinkingLevelToEffort(
-	level: SimpleStreamOptions["reasoning"],
-	model: Model<"anthropic-messages">,
-): AnthropicEffort {
-	switch (level === undefined ? level : clampThinkingLevel(model, level)) {
-		case "minimal":
-		case "low":
-			return "low";
-		case "medium":
-			return "medium";
-		case "high":
-			return "high";
-		case "xhigh":
-			return "xhigh";
-		case "max":
-			return "max";
-		default:
-			return "high";
-	}
-}
-
 export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleStreamOptions> = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -512,7 +486,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 	// Opus/Sonnet 4.6+ and Haiku 5+ use adaptive thinking with effort.
 	// Older models use budget-based thinking.
 	if (supportsAdaptiveThinking(model)) {
-		const effort = mapThinkingLevelToEffort(options.reasoning, model);
+		const effort = getClaudeEffort(model, options.reasoning);
 		return streamAnthropic(model, context, {
 			...base,
 			thinkingEnabled: true,
@@ -779,10 +753,8 @@ function buildParams(
 			// model default effort applies. Sonnet 5.5+ also rejects `disabled`; its off
 			// setting is `between_tools`, which SDK 0.73 doesn't type yet.
 			const offMode = getClaudeThinkingOffMode(model);
-			if (offMode === "disabled") {
-				params.thinking = { type: "disabled" };
-			} else if (offMode === "between_tools") {
-				params.thinking = { type: "between_tools" } as unknown as Anthropic.Messages.ThinkingConfigParam;
+			if (offMode !== "omit") {
+				params.thinking = { type: offMode } as Anthropic.Messages.ThinkingConfigParam;
 			}
 		}
 	}

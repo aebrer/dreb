@@ -22,8 +22,8 @@ import {
 
 import {
 	calculateCost,
-	clampThinkingLevel,
 	claudeThinksByDefault,
+	getClaudeEffort,
 	getClaudeThinkingOffMode,
 	supportsAdaptiveThinking,
 } from "../models.js";
@@ -412,31 +412,6 @@ function handleContentBlockStop(
 }
 
 /**
- * Map dreb thinking levels to Anthropic adaptive-thinking effort levels. `xhigh` and
- * `max` are sent as themselves after clamping to the model's capabilities.
- */
-function mapThinkingLevelToEffort(
-	level: SimpleStreamOptions["reasoning"],
-	model: Model<"bedrock-converse-stream">,
-): "low" | "medium" | "high" | "xhigh" | "max" {
-	switch (level === undefined ? level : clampThinkingLevel(model, level)) {
-		case "minimal":
-		case "low":
-			return "low";
-		case "medium":
-			return "medium";
-		case "high":
-			return "high";
-		case "xhigh":
-			return "xhigh";
-		case "max":
-			return "max";
-		default:
-			return "high";
-	}
-}
-
-/**
  * Resolve cache retention preference.
  * Defaults to "short" and uses DREB_CACHE_RETENTION for backward compatibility.
  */
@@ -748,7 +723,7 @@ export function buildAdditionalModelRequestFields(
 					}
 					return {
 						thinking,
-						output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model) },
+						output_config: { effort: getClaudeEffort(model, options.reasoning) },
 					};
 				})()
 			: (() => {

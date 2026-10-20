@@ -355,13 +355,6 @@ export interface Model<TApi extends Api> {
 	wireModelId?: string;
 	/** Explicit auth transport. When unset, the provider's default and token heuristics apply. */
 	authMode?: AuthMode;
-	/**
-	 * Native reasoning-effort values the provider advertises for this model (for example
-	 * `["low", "medium", "high", "xhigh", "max"]` from GitHub Copilot's `/models`). When set,
-	 * `supportsXhigh()` / `supportsMax()` use it instead of model-id detection. Today it is
-	 * only populated by GitHub Copilot model discovery.
-	 */
-	reasoningEfforts?: string[];
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"
 		? OpenAICompletionsCompat

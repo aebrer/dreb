@@ -1508,9 +1508,7 @@ describe("ModelRegistry GitHub Copilot model discovery", () => {
 				{
 					id: "claude-opus-5.5",
 					endpoints: ["/v1/messages", "/chat/completions"],
-					reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
 					policyState: "enabled",
-					pickerEnabled: true,
 				},
 			],
 		} as Parameters<AuthStorage["set"]>[1]);
@@ -1521,7 +1519,6 @@ describe("ModelRegistry GitHub Copilot model discovery", () => {
 		expect(copilot[0]).toMatchObject({
 			api: "anthropic-messages",
 			baseUrl: "https://api.business.githubcopilot.com",
-			reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
 		});
 	});
 

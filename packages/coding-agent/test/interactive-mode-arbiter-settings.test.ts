@@ -35,12 +35,12 @@ function model(reasoning = true): Model<Api> {
 	} as Model<Api>;
 }
 
-function guide(): string {
+function guide(modelRef = "provider/router"): string {
 	return `---
 schema_version: 1
 generated_at: "2026-07-29T00:00:00Z"
 covered_model_ids:
-  - "provider/router"
+  - "${modelRef}"
 local_evidence: "cold-start"
 analyzed_session_directories:
   - "~/.dreb/agent/subagent-sessions/"
@@ -51,7 +51,7 @@ session_date_range:
 # Model Routing Guide
 ## Routing safeguards
 Use role and cost fit.
-## Model: provider/router
+## Model: ${modelRef}
 ${REQUIRED_SUBSECTIONS.map((heading) => `### ${heading}\nUnknown`).join("\n")}
 `;
 }
@@ -62,6 +62,11 @@ async function invokeHandler(fakeThis: object, settings: SubagentArbiterSettings
 
 async function invokeEvent(fakeThis: object, event: object): Promise<void> {
 	await (InteractiveMode as any).prototype.handleEvent.call(fakeThis, event);
+}
+
+/** Claude Opus 5.5 on Anthropic Messages: thinking cannot be turned off. */
+function opus55(): Model<Api> {
+	return { ...model(), provider: "anthropic", id: "claude-opus-5-5", api: "anthropic-messages" } as Model<Api>;
 }
 
 function makeFakeThis(params: { scopedModels?: Array<{ model: Model<Api> }>; routerModel?: Model<Api> } = {}) {
@@ -145,6 +150,40 @@ describe("InteractiveMode Dispatch Arbiter settings callback", () => {
 			}),
 		).resolves.toBe(false);
 		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("not supported by non-reasoning model"));
+		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).not.toHaveBeenCalled();
+	});
+
+	test("accepts an unset thinking level on a model whose thinking cannot be turned off", async () => {
+		const opus = opus55();
+		const fakeThis = makeFakeThis({ routerModel: opus });
+		const opusGuidePath = join(tempDir, "opus-guide.md");
+		writeFileSync(opusGuidePath, guide("anthropic/claude-opus-5-5"));
+		const settings: SubagentArbiterSettings = {
+			enabled: true,
+			model: "anthropic/claude-opus-5-5",
+			guidePath: opusGuidePath,
+		};
+
+		await expect(invokeHandler(fakeThis, settings)).resolves.toBe(true);
+		expect(fakeThis.showError).not.toHaveBeenCalled();
+		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).toHaveBeenCalledWith(settings);
+	});
+
+	test("rejects an explicit off on a model whose thinking cannot be turned off", async () => {
+		const opus = opus55();
+		const fakeThis = makeFakeThis({ routerModel: opus });
+		const opusGuidePath = join(tempDir, "opus-guide.md");
+		writeFileSync(opusGuidePath, guide("anthropic/claude-opus-5-5"));
+
+		await expect(
+			invokeHandler(fakeThis, {
+				enabled: true,
+				model: "anthropic/claude-opus-5-5",
+				thinking: "off",
+				guidePath: opusGuidePath,
+			}),
+		).resolves.toBe(false);
+		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("thinking cannot be turned off"));
 		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).not.toHaveBeenCalled();
 	});
 

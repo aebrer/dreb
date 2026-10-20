@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	clampThinkingLevel,
 	claudeThinksByDefault,
+	getAvailableThinkingLevels,
+	getClaudeEffort,
 	getClaudeThinkingOffMode,
 	getModel,
 	supportsAdaptiveThinking,
@@ -138,27 +140,6 @@ describe("Claude thinking capabilities on OpenAI-compatible transports keep the 
 	});
 });
 
-describe("advertised reasoningEfforts take precedence over model-id rules", () => {
-	it("hides xhigh/max the provider does not advertise", () => {
-		const model = { ...getModel("github-copilot", "claude-opus-5.5"), reasoningEfforts: ["low", "medium", "high"] };
-		expect(supportsXhigh(model)).toBe(false);
-		expect(supportsMax(model)).toBe(false);
-		expect(clampThinkingLevel(model, "max")).toBe("high");
-		expect(clampThinkingLevel(model, "xhigh")).toBe("high");
-	});
-
-	it("offers xhigh/max the provider advertises even when id rules would not", () => {
-		const model = { ...getModel("github-copilot", "claude-sonnet-4.6"), reasoningEfforts: ["low", "xhigh", "max"] };
-		expect(supportsXhigh(model)).toBe(true);
-		expect(supportsMax(model)).toBe(true);
-	});
-
-	it("leaves thinking-off detection to the model-id rules", () => {
-		const model = { ...getModel("github-copilot", "claude-opus-5.5"), reasoningEfforts: ["low", "max"] };
-		expect(supportsThinkingOff(model)).toBe(false);
-	});
-});
-
 describe("getClaudeThinkingOffMode", () => {
 	it.each([
 		["claude-opus-4-5", "disabled"],
@@ -226,5 +207,60 @@ describe("clampThinkingLevel", () => {
 			expect(clampThinkingLevel(model("claude-haiku-5-5"), level)).toBe(level);
 		}
 		expect(clampThinkingLevel(model("claude-opus-4-6"), "max")).toBe("max");
+	});
+
+	it("maps an unknown level to the lowest available level", () => {
+		expect(clampThinkingLevel(model("claude-opus-5-5"), "bogus" as "high")).toBe("minimal");
+		expect(clampThinkingLevel(model("claude-opus-4-5"), "bogus" as "high")).toBe("off");
+	});
+});
+
+describe("getAvailableThinkingLevels", () => {
+	const model = (id: string, overrides: Partial<Model<Api>> = {}) => ({ ...anthropicBase, id, ...overrides });
+
+	it.each([
+		["claude-opus-4-5", ["off", "minimal", "low", "medium", "high"]],
+		["claude-opus-4-6", ["off", "minimal", "low", "medium", "high", "max"]],
+		["claude-sonnet-4-6", ["off", "minimal", "low", "medium", "high", "max"]],
+		["claude-opus-5-5", ["minimal", "low", "medium", "high", "xhigh", "max"]],
+		["claude-sonnet-5-5", ["off", "minimal", "low", "medium", "high", "xhigh", "max"]],
+		["claude-haiku-5-5", ["off", "minimal", "low", "medium", "high", "xhigh", "max"]],
+	] as const)("%s → %j", (id, levels) => {
+		expect(getAvailableThinkingLevels(model(id))).toEqual(levels);
+	});
+
+	it("returns only off for non-reasoning or missing models", () => {
+		expect(getAvailableThinkingLevels(model("claude-opus-5-5", { reasoning: false }))).toEqual(["off"]);
+		expect(getAvailableThinkingLevels(undefined)).toEqual(["off"]);
+	});
+
+	it("contains every clamp result", () => {
+		for (const id of ["claude-opus-4-5", "claude-opus-4-6", "claude-opus-5-5", "claude-haiku-5-5"]) {
+			const available = getAvailableThinkingLevels(model(id));
+			for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+				expect(available).toContain(clampThinkingLevel(model(id), level));
+			}
+		}
+	});
+});
+
+describe("getClaudeEffort", () => {
+	const model = (id: string, overrides: Partial<Model<Api>> = {}) => ({ ...anthropicBase, id, ...overrides });
+
+	it("maps levels to native effort after clamping", () => {
+		const haiku = model("claude-haiku-5-5");
+		expect(getClaudeEffort(haiku, "minimal")).toBe("low");
+		expect(getClaudeEffort(haiku, "low")).toBe("low");
+		expect(getClaudeEffort(haiku, "medium")).toBe("medium");
+		expect(getClaudeEffort(haiku, "high")).toBe("high");
+		expect(getClaudeEffort(haiku, "xhigh")).toBe("xhigh");
+		expect(getClaudeEffort(haiku, "max")).toBe("max");
+		expect(getClaudeEffort(model("claude-opus-4-6"), "xhigh")).toBe("max");
+		expect(getClaudeEffort(model("claude-opus-4-5"), "max")).toBe("high");
+	});
+
+	it("defaults to high when the level is unset or the model does not reason", () => {
+		expect(getClaudeEffort(model("claude-opus-5"), undefined)).toBe("high");
+		expect(getClaudeEffort(model("claude-opus-5", { reasoning: false }), "max")).toBe("high");
 	});
 });

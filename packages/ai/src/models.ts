@@ -217,11 +217,8 @@ export function isQwen38OrLater(modelId: string): boolean {
  * - GPT-6 model families (Astra and future variants)
  * - On Anthropic-native transports (Anthropic Messages, including GitHub Copilot, and
  *   Bedrock): Claude Opus/Sonnet 4.6+ (including the Claude 5 families) and Haiku 5.5+
- *
- * A model's advertised `reasoningEfforts` (provider discovery) take precedence.
  */
 export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
-	if (model.reasoningEfforts) return model.reasoningEfforts.includes("max");
 	const id = model.id.toLowerCase();
 	// Anchored to the id start or a gateway "/" prefix so unrelated ids
 	// (e.g. "gpt-60") do not match.
@@ -245,23 +242,11 @@ export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
  *   (the legacy rule; those transports map effort themselves)
  * - Kimi Code K3 (xhigh maps to its advertised "max" effort)
  * - Qwen 3.8+ model families (xhigh is their top native effort tier)
- *
- * A model's advertised `reasoningEfforts` (provider discovery) take precedence.
  */
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
-	if (model.reasoningEfforts) return model.reasoningEfforts.includes("xhigh");
 	if (model.provider === "kimi-coding-oauth" && model.id === "k3") return true;
 	if (isQwen38OrLater(model.id)) return true;
-	if (
-		model.id.includes("gpt-5.2") ||
-		model.id.includes("gpt-5.3") ||
-		model.id.includes("gpt-5.4") ||
-		model.id.includes("gpt-5.5") ||
-		model.id.includes("gpt-5.6") ||
-		model.id.includes("gpt-6")
-	) {
-		return true;
-	}
+	if (/gpt-(?:5\.[2-6]|6)/.test(model.id)) return true;
 
 	const claude = claudeFamilyVersion(model.id);
 	if (!claude) return false;
@@ -297,8 +282,7 @@ export function supportsAdaptiveThinking<TApi extends Api>(model: Model<TApi>): 
  * maps a requested `off` to `minimal`.
  */
 export function supportsThinkingOff<TApi extends Api>(model: Model<TApi>): boolean {
-	const claude = nativeClaude(model);
-	return !(claude?.family === "opus" && claudeAtLeast(claude, 5, 5));
+	return getClaudeThinkingOffMode(model) !== "omit";
 }
 
 /** How a request turns Claude thinking off on an Anthropic-native transport. */
@@ -331,31 +315,68 @@ export function claudeThinksByDefault<TApi extends Api>(model: Model<TApi>): boo
 	return claude !== undefined && claude.major >= 5;
 }
 
+/** Every dreb thinking level, in ascending order. */
+const THINKING_LEVEL_ORDER: readonly (ThinkingLevel | "off")[] = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+];
+
+/**
+ * Thinking levels a model supports, in ascending order: `["off"]` for non-reasoning
+ * models; otherwise the full scale minus `off` when thinking cannot be turned off
+ * (Claude Opus 5.5+), `xhigh` without {@link supportsXhigh}, and `max` without
+ * {@link supportsMax}.
+ */
+export function getAvailableThinkingLevels<TApi extends Api>(
+	model: Model<TApi> | undefined,
+): (ThinkingLevel | "off")[] {
+	if (!model?.reasoning) return ["off"];
+	return THINKING_LEVEL_ORDER.filter((level) => {
+		if (level === "off") return supportsThinkingOff(model);
+		if (level === "xhigh") return supportsXhigh(model);
+		if (level === "max") return supportsMax(model);
+		return true;
+	});
+}
+
 /**
  * Clamp a requested thinking level to what a model supports. This is the single
- * source of truth for thinking-level fallback across dreb:
+ * source of truth for thinking-level fallback across dreb: the nearest available
+ * level at or above the request, else the highest available level. So:
  * - non-reasoning models → `off`
  * - `off` on models where thinking cannot be turned off → `minimal`
  * - unsupported `xhigh` → `max` when the model has `max` (Opus/Sonnet 4.6), else `high`
  * - unsupported `max` → `xhigh` when supported, else `high`
+ * - an unknown level → the lowest available level
  */
 export function clampThinkingLevel<TApi extends Api>(
 	model: Model<TApi> | undefined,
 	level: ThinkingLevel | "off",
 ): ThinkingLevel | "off" {
-	if (!model?.reasoning) return "off";
-	switch (level) {
-		case "off":
-			return supportsThinkingOff(model) ? "off" : "minimal";
-		case "xhigh":
-			if (supportsXhigh(model)) return "xhigh";
-			return supportsMax(model) ? "max" : "high";
-		case "max":
-			if (supportsMax(model)) return "max";
-			return supportsXhigh(model) ? "xhigh" : "high";
-		default:
-			return level;
-	}
+	const available = getAvailableThinkingLevels(model);
+	const requested = THINKING_LEVEL_ORDER.indexOf(level);
+	return (
+		available.find((candidate) => THINKING_LEVEL_ORDER.indexOf(candidate) >= requested) ??
+		available[available.length - 1]
+	);
+}
+
+/**
+ * Anthropic adaptive-thinking effort (`output_config.effort`) for a dreb thinking level,
+ * after clamping it to the model. `minimal` → `low`; `xhigh` and `max` are sent as
+ * themselves; an unset level (or `off` on a non-reasoning model) → `high`.
+ */
+export function getClaudeEffort<TApi extends Api>(
+	model: Model<TApi>,
+	level: ThinkingLevel | undefined,
+): Exclude<ThinkingLevel, "minimal"> {
+	const clamped = level === undefined ? "high" : clampThinkingLevel(model, level);
+	return clamped === "minimal" ? "low" : clamped === "off" ? "high" : clamped;
 }
 
 /**
