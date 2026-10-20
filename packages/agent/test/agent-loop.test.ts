@@ -249,6 +249,46 @@ describe("agentLoop with AgentMessage", () => {
 		});
 	});
 
+	it.each([
+		["claude-opus-5-5", undefined, "minimal"],
+		["claude-opus-5-5", "max", "max"],
+		["claude-sonnet-5-5", undefined, "off"],
+		["claude-opus-4-6", "xhigh", "max"],
+	] as const)("reports the shared clamp for Anthropic %s with reasoning %s", async (id, reasoning, expected) => {
+		const context: AgentContext = { systemPrompt: "You are helpful.", messages: [], tools: [] };
+		const model: Model<"anthropic-messages"> = {
+			...createModel(),
+			api: "anthropic-messages",
+			provider: "anthropic",
+			id,
+			reasoning: true,
+			compat: undefined,
+		};
+		const config: AgentLoopConfig = { model, reasoning, convertToLlm: identityConverter };
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "Hi" }]),
+				});
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+		await stream.result();
+
+		expect(events.find((event) => event.type === "agent_start")).toEqual({
+			type: "agent_start",
+			model: { provider: "anthropic", id },
+			thinkingLevel: expected,
+		});
+	});
+
 	it("should set durationMs > 0 on successful assistant responses", async () => {
 		const context: AgentContext = {
 			systemPrompt: "You are helpful.",

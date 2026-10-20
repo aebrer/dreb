@@ -3863,11 +3863,15 @@ export class InteractiveMode {
 				this.showError(`Dispatch Arbiter model "${settings.model}" is not available.`);
 				return false;
 			}
-			const thinking = settings.thinking ?? "off";
-			const thinkingValidation = validateThinkingLevelForModel(arbiterModel, thinking);
-			if (!thinkingValidation.ok) {
-				this.showError(thinkingValidation.error);
-				return false;
+			// Only an explicit thinking level is validated. When unset, the arbiter sends no
+			// reasoning and the provider applies the model's thinking-off config (matches RPC
+			// and the runtime arbiter).
+			if (settings.thinking !== undefined) {
+				const thinkingValidation = validateThinkingLevelForModel(arbiterModel, settings.thinking);
+				if (!thinkingValidation.ok) {
+					this.showError(thinkingValidation.error);
+					return false;
+				}
 			}
 			try {
 				loadAndValidateModelRoutingGuide(

@@ -8,6 +8,7 @@ dreb supports subscription-based providers via OAuth and API key providers via e
 - [Subscriptions](#subscriptions)
 - [API Keys](#api-keys)
 - [Auth File](#auth-file)
+- [Claude Thinking Levels](#claude-thinking-levels)
 - [Cloud Providers](#cloud-providers)
 - [Custom Providers](#custom-providers)
 - [Resolution Order](#resolution-order)
@@ -37,6 +38,14 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.jso
 - If you get "model not supported", enable it in VS Code: Copilot Chat → model selector → select model → "Enable"
 - GPT-6 models, including `github-copilot/gpt-6-astra`, use the Responses API. Astra supports `xhigh` and native `max` thinking; access depends on the subscription and enabled models.
 - For adaptive Claude models such as Opus 4.8, readable thinking requires `thinkingDisplay: "summarized"` in SDK calls; enabling thinking alone can return only opaque signatures. See [thinking display](../../ai/README.md#controlling-thinking-display-anthropic-adaptive-models).
+- Copilot Claude Opus, Sonnet, and Haiku (4.x and 5.x) use Copilot's Anthropic Messages endpoint (`/v1/messages`) and follow the same [per-model Claude thinking rules](#claude-thinking-levels) as the Anthropic API: native `xhigh`/`max` effort, `between_tools` for Sonnet 5.5 when thinking is off, and no `off` level for Opus 5.5. Copilot Fable still uses the OpenAI Completions API, which receives no reasoning field.
+- **Model discovery:** at login and on every Copilot token refresh, dreb reads Copilot's `/models` for your account and stores the result with the OAuth credential. Once discovery has succeeded:
+  - Built-in Copilot models your plan or organization doesn't offer (or has disabled) are hidden from `/model`. Custom `models.json` entries stay.
+  - A model whose built-in API endpoint Copilot doesn't serve switches to one it does (`/responses`, then `/chat/completions`).
+
+  Thinking levels and limits still come from dreb's built-in catalog, and models released after your dreb version appear after the next update (or can be added through `models.json`).
+
+  If discovery fails, the last discovered list (or the built-in catalog) is used. The model list updates when the model selector opens or dreb restarts.
 - A registry context window can be lower than the endpoint's hard limit. Accepting a larger request does not change dreb's configured window. Usage-based overflow detection includes uncached input, cache reads, and cache writes.
 
 ### Google Providers
@@ -133,6 +142,21 @@ The `key` field supports three formats:
 
 OAuth credentials are also stored here after `/login` and managed automatically.
 
+## Claude Thinking Levels
+
+On Anthropic-native transports — the Anthropic Messages API (Anthropic, GitHub Copilot, opencode, and custom Anthropic-compatible endpoints) plus Amazon Bedrock — dreb picks Claude thinking and effort fields per model. Capability detection is by model id, so custom `models.json` entries behave the same as built-in ones.
+
+| Model | Thinking on | dreb `off` sends | `off` offered | `xhigh` | `max` |
+|---|---|---|---|---|---|
+| Opus/Sonnet/Haiku 4.5 and older | budget (`enabled`) | `disabled` | ✓ | ✗ | ✗ |
+| Opus 4.6, Sonnet 4.6 | adaptive + effort | `disabled` | ✓ | ✗ (uses `max`) | ✓ |
+| Opus 4.7/4.8, Opus 5, Sonnet 5 | adaptive + effort | `disabled` | ✓ | ✓ | ✓ |
+| Opus 5.5 | adaptive + effort | no `thinking` field or effort (model default) | ✗ (uses `minimal`) | ✓ | ✓ |
+| Sonnet 5.5 | adaptive + effort | `between_tools` | ✓ | ✓ | ✓ |
+| Haiku 5.5 | adaptive + effort | `disabled` | ✓ | ✓ | ✓ |
+
+Effort mapping: `minimal`/`low` → `low`, `medium` → `medium`, `high` → `high`, `xhigh` → `xhigh`, `max` → `max`. No effort is sent while thinking is off. Background calls that send no reasoning (compaction, tab titles, an arbiter with no `thinking` set) to Opus 5.5 therefore run at the model's default effort. Claude served through OpenAI-compatible APIs (OpenRouter, Copilot Fable) keeps its existing mapping.
+
 ## Cloud Providers
 
 ### Azure OpenAI
@@ -170,6 +194,8 @@ Also supports ECS task roles (`AWS_CONTAINER_CREDENTIALS_*`) and IRSA (`AWS_WEB_
 ```bash
 dreb --provider amazon-bedrock --model us.anthropic.claude-sonnet-4-20250514-v1:0
 ```
+
+Claude thinking on Bedrock follows the same per-model rules as the Anthropic API (see [Claude thinking levels](#claude-thinking-levels)). When reasoning is off, Claude 5-generation models (Opus 5, Sonnet 5/5.5, Haiku 5.5), which think by default, receive an explicit off config in `additionalModelRequestFields` (`disabled`, or `between_tools` for Sonnet 5.5); Opus 5.5 gets no thinking field, and older Claude models keep the previous behavior of omitting it.
 
 Prompt caching is enabled automatically for Claude models whose ID contains a recognizable model name (base models and system-defined inference profiles). For application inference profiles (whose ARNs don't contain the model name), set `AWS_BEDROCK_FORCE_CACHE=1` to enable cache points:
 

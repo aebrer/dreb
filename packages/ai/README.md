@@ -444,7 +444,10 @@ const response = await completeSimple(model, {
   messages: [{ role: 'user', content: 'Solve: 2x + 5 = 13' }]
 }, {
   reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-  // Native normalized 'max' is model-aware (currently GPT-5.6 and GPT-6 families). Claude's established xhigh mapping still emits provider-native 'max'.
+  // Native normalized 'max' is model-aware (GPT-5.6, GPT-6, and Claude Opus/Sonnet 4.6+ and Haiku 5.5 on Anthropic Messages/Bedrock).
+  // On Anthropic Messages (including GitHub Copilot) and Bedrock, Claude 'xhigh' and 'max' are sent as the native efforts of the same name.
+  // Use getAvailableThinkingLevels(model) for the supported levels and
+  // clampThinkingLevel(model, level) to apply dreb's capability fallback rules.
 });
 
 // Access thinking and text blocks
@@ -512,8 +515,8 @@ for await (const event of s) {
 
 ### Controlling Thinking Display (Anthropic adaptive models)
 
-Adaptive-thinking Claude models (Opus and Sonnet 4.6–4.x, plus Claude 5 families)
-support a `thinkingDisplay` option on `streamSimple`/`completeSimple`:
+Adaptive-thinking Claude models (Opus and Sonnet 4.6+, Haiku 5+, including the
+Claude 5 families) support a `thinkingDisplay` option on `streamSimple`/`completeSimple`:
 
 ```typescript
 const s = streamSimple(model, context, {
@@ -534,6 +537,12 @@ it is silently ignored by other models and budget-based thinking. When unset, th
 provider default applies.
 
 Use `supportsAdaptiveThinking(model)` to check whether a model honors this option.
+
+Related capability helpers: `supportsXhigh(model)`, `supportsMax(model)`, and
+`supportsThinkingOff(model)` (false for Claude Opus 5.5+ on Anthropic Messages/Bedrock, where
+thinking cannot be turned off). `clampThinkingLevel(model, level)` applies dreb's shared
+fallback rules (`off` → `minimal` on always-thinking models, `xhigh` → `max` or `high`,
+`max` → `xhigh` → `high`, non-reasoning → `off`).
 
 ## Stop Reasons
 
@@ -1155,6 +1164,8 @@ const response = await complete(model, {
 **Azure OpenAI (Responses)**: Uses the Responses API only. Set `AZURE_OPENAI_API_KEY` and either `AZURE_OPENAI_BASE_URL` or `AZURE_OPENAI_RESOURCE_NAME`. Use `AZURE_OPENAI_API_VERSION` (defaults to `v1`) to override the API version if needed. Deployment names are treated as model IDs by default, override with `azureDeploymentName` or `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` using comma-separated `model-id=deployment` pairs (for example `gpt-4o-mini=my-deployment,gpt-4o=prod`). Legacy deployment-based URLs are intentionally unsupported.
 
 **GitHub Copilot**: If you get "The requested model is not supported" error, enable the model manually in VS Code: open Copilot Chat, click the model selector, select the model (warning icon), and click "Enable".
+
+The Copilot OAuth provider also discovers the account's models: `login` and `refreshToken` read Copilot's `/models` and store the result as `credentials.models`, and `modifyModels()` applies it — hiding built-in Copilot models the account doesn't offer (or has disabled) and switching a model whose catalog endpoint isn't served to an advertised one (`/responses`, then `/chat/completions`). Capabilities still come from the catalog. Without discovered models, `modifyModels()` only rewrites `baseUrl`.
 
 **Google Gemini CLI / Antigravity**: These use Google Cloud OAuth. The `apiKey` returned by `getOAuthApiKey()` is a JSON string containing both the token and project ID, which the library handles automatically.
 

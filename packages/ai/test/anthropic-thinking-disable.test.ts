@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findModel } from "../src/models.js";
+import { getModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 import { isLiveApiEnabled } from "./live-api.js";
@@ -102,23 +102,58 @@ async function runWithoutReasoning(model: Model<"anthropic-messages">): Promise<
 
 describe("Anthropic thinking disable payload", () => {
 	it("sends thinking.type=disabled for budget-based reasoning models when thinking is off", async () => {
-		const payload = await capturePayload(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
+		const payload = await capturePayload(getModel("anthropic", "claude-sonnet-4-5"));
 
 		expect(payload.thinking).toEqual({ type: "disabled" });
 		expect(payload.output_config).toBeUndefined();
 	});
 
-	it("sends thinking.type=disabled for adaptive reasoning models when thinking is off", async () => {
-		const payload = await capturePayload(findModel("anthropic", "opus")! as Model<"anthropic-messages">);
+	it.each(["claude-opus-4-8", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5"] as const)(
+		"sends thinking.type=disabled for adaptive model %s when thinking is off",
+		async (id) => {
+			const payload = await capturePayload(getModel("anthropic", id));
 
-		expect(payload.thinking).toEqual({ type: "disabled" });
+			expect(payload.thinking).toEqual({ type: "disabled" });
+			expect(payload.output_config).toBeUndefined();
+		},
+	);
+
+	it("sends thinking.type=between_tools for Sonnet 5.5 when thinking is off", async () => {
+		const payload = await capturePayload(getModel("anthropic", "claude-sonnet-5-5"));
+
+		expect(payload.thinking).toEqual({ type: "between_tools" });
 		expect(payload.output_config).toBeUndefined();
+	});
+
+	it("sends no thinking field and no effort to Opus 5.5 when thinking is off", async () => {
+		const payload = await capturePayload(getModel("anthropic", "claude-opus-5-5"));
+
+		expect(payload).not.toHaveProperty("thinking");
+		expect(payload).not.toHaveProperty("output_config");
+	});
+
+	it.each([
+		["claude-opus-4.8", { type: "disabled" }],
+		["claude-haiku-5.5", { type: "disabled" }],
+		["claude-sonnet-5.5", { type: "between_tools" }],
+	] as const)("sends the native off config to Copilot %s", async (id, thinking) => {
+		const payload = await capturePayload(getModel("github-copilot", id));
+
+		expect(payload.thinking).toEqual(thinking);
+		expect(payload.output_config).toBeUndefined();
+	});
+
+	it("sends no thinking field to Copilot Opus 5.5 when thinking is off", async () => {
+		const payload = await capturePayload(getModel("github-copilot", "claude-opus-5.5"));
+
+		expect(payload).not.toHaveProperty("thinking");
+		expect(payload).not.toHaveProperty("output_config");
 	});
 });
 
 describe.skipIf(!isLiveApiEnabled() || !process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E", () => {
 	it("disables thinking for Claude reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		const result = await runWithoutReasoning(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
+		const result = await runWithoutReasoning(getModel("anthropic", "claude-sonnet-4-5"));
 
 		expect(result.thinkingEventCount).toBe(0);
 		expect(result.thinkingCharCount).toBe(0);

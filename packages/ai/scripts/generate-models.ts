@@ -498,12 +498,14 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				if (m.tool_call !== true) continue;
 				if (m.status === "deprecated") continue;
 
-				// Claude 4.x models route to Anthropic Messages API
-				const isCopilotClaude4 = /^claude-(haiku|sonnet|opus)-4([.\-]|$)/.test(modelId);
+				// Claude Opus/Sonnet/Haiku 4.x and later route to Copilot's Anthropic Messages
+				// endpoint (/v1/messages), which honors adaptive thinking and native effort.
+				// Fable/Mythos stay on OpenAI completions until dreb models their thinking rules.
+				const isCopilotClaude = /^claude-(haiku|sonnet|opus)-([4-9]|\d{2,})([.\-]|$)/.test(modelId);
 				// gpt-5 and gpt-6 models require responses API, others use completions
 				const needsResponsesApi = modelId.startsWith("gpt-5") || modelId.startsWith("gpt-6") || modelId.startsWith("oswe");
 
-				const api: Api = isCopilotClaude4
+				const api: Api = isCopilotClaude
 					? "anthropic-messages"
 					: needsResponsesApi
 						? "openai-responses"

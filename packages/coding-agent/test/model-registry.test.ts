@@ -1495,3 +1495,45 @@ describe("ModelRegistry", () => {
 		});
 	});
 });
+
+describe("ModelRegistry GitHub Copilot model discovery", () => {
+	test("applies discovered Copilot models stored in the OAuth credential", () => {
+		const authStorage = AuthStorage.inMemory();
+		authStorage.set("github-copilot", {
+			type: "oauth",
+			refresh: "gho_test",
+			access: "tid=test;exp=9999999999;proxy-ep=proxy.business.githubcopilot.com;",
+			expires: Date.now() + 60_000,
+			models: [
+				{
+					id: "claude-opus-5.5",
+					endpoints: ["/v1/messages", "/chat/completions"],
+					policyState: "enabled",
+				},
+			],
+		} as Parameters<AuthStorage["set"]>[1]);
+		const registry = new ModelRegistry(authStorage, undefined);
+
+		const copilot = registry.getAll().filter((model) => model.provider === "github-copilot");
+		expect(copilot.map((model) => model.id)).toEqual(["claude-opus-5.5"]);
+		expect(copilot[0]).toMatchObject({
+			api: "anthropic-messages",
+			baseUrl: "https://api.business.githubcopilot.com",
+		});
+	});
+
+	test("keeps the full built-in Copilot catalog without discovered models", () => {
+		const authStorage = AuthStorage.inMemory();
+		authStorage.set("github-copilot", {
+			type: "oauth",
+			refresh: "gho_test",
+			access: "tid=test;exp=9999999999;",
+			expires: Date.now() + 60_000,
+		});
+		const registry = new ModelRegistry(authStorage, undefined);
+
+		expect(registry.getAll().filter((model) => model.provider === "github-copilot")).toHaveLength(
+			getModels("github-copilot").length,
+		);
+	});
+});

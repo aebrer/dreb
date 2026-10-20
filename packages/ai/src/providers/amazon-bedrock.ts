@@ -20,7 +20,13 @@ import {
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 
-import { calculateCost, supportsAdaptiveThinking, supportsXhigh } from "../models.js";
+import {
+	calculateCost,
+	claudeThinksByDefault,
+	getClaudeEffort,
+	getClaudeThinkingOffMode,
+	supportsAdaptiveThinking,
+} from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -405,26 +411,6 @@ function handleContentBlockStop(
 	}
 }
 
-function mapThinkingLevelToEffort(
-	level: SimpleStreamOptions["reasoning"],
-	model: Model<"bedrock-converse-stream">,
-): "low" | "medium" | "high" | "max" {
-	switch (level) {
-		case "minimal":
-		case "low":
-			return "low";
-		case "medium":
-			return "medium";
-		case "high":
-			return "high";
-		case "xhigh":
-		case "max":
-			return supportsXhigh(model) ? "max" : "high";
-		default:
-			return "high";
-	}
-}
-
 /**
  * Resolve cache retention preference.
  * Defaults to "short" and uses DREB_CACHE_RETENTION for backward compatibility.
@@ -711,11 +697,22 @@ export function buildAdditionalModelRequestFields(
 	model: Model<"bedrock-converse-stream">,
 	options: BedrockOptions,
 ): Record<string, any> | undefined {
-	if (!options.reasoning || !model.reasoning) {
+	if (!model.reasoning) {
 		return undefined;
 	}
 
-	if (model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude")) {
+	const isClaude = model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude");
+
+	if (!options.reasoning) {
+		// Omitting the thinking field turns thinking off for older Claude models, but the
+		// Claude 5 generation thinks by default, so they need the explicit off config.
+		// Opus 5.5+ cannot turn thinking off at all: send no thinking field and no effort.
+		if (!isClaude || !claudeThinksByDefault(model)) return undefined;
+		const offMode = getClaudeThinkingOffMode(model);
+		return offMode === "omit" ? undefined : { thinking: { type: offMode } };
+	}
+
+	if (isClaude) {
 		const result: Record<string, any> = supportsAdaptiveThinking(model)
 			? (() => {
 					// Adaptive thinking: the `display` field controls whether thinking text is
@@ -726,7 +723,7 @@ export function buildAdditionalModelRequestFields(
 					}
 					return {
 						thinking,
-						output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model) },
+						output_config: { effort: getClaudeEffort(model, options.reasoning) },
 					};
 				})()
 			: (() => {
