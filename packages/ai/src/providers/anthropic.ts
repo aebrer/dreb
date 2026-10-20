@@ -5,7 +5,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost, supportsAdaptiveThinking, supportsXhigh } from "../models.js";
+import { calculateCost, clampThinkingLevel, getClaudeThinkingOffMode, supportsAdaptiveThinking } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -152,33 +152,37 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "max";
+export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface AnthropicOptions extends StreamOptions {
 	/**
 	 * Enable extended thinking.
-	 * Opus/Sonnet 4.6–4.x and Claude 5 families use adaptive thinking
-	 * (the model decides when/how much to think); older models use a token budget.
+	 * Opus/Sonnet 4.6+ and Haiku 5+ use adaptive thinking (the model decides
+	 * when/how much to think); older models use a token budget.
+	 * `false` sends the model's thinking-off config: `disabled` for most models,
+	 * `between_tools` for Sonnet 5.5+, and no `thinking` field for Opus 5.5+ (where
+	 * thinking cannot be turned off).
 	 */
 	thinkingEnabled?: boolean;
 	/**
 	 * Token budget for extended thinking (older models only).
-	 * Ignored by adaptive-thinking Opus/Sonnet 4.6–4.x and Claude 5 families.
+	 * Ignored by adaptive-thinking models (Opus/Sonnet 4.6+, Haiku 5+).
 	 */
 	thinkingBudgetTokens?: number;
 	/**
-	 * Effort level for adaptive-thinking Opus/Sonnet 4.6–4.x and Claude 5 families.
+	 * Effort level for adaptive-thinking models (Opus/Sonnet 4.6+, Haiku 5+).
 	 * Controls how much thinking Claude allocates:
-	 * - "max": Always thinks with no constraints (Opus 4.6–4.x and Claude 5 families)
-	 * - "high": Always thinks, deep reasoning (default)
+	 * - "max": Always thinks with no constraints (Opus/Sonnet 4.6+, Haiku 5.5+)
+	 * - "xhigh": Extended deep reasoning (Opus 4.7+, Sonnet 5+, Haiku 5.5+)
+	 * - "high": Always thinks, deep reasoning
 	 * - "medium": Moderate thinking, may skip for simple queries
 	 * - "low": Minimal thinking, skips for simple tasks
 	 * Ignored for older models.
 	 */
 	effort?: AnthropicEffort;
 	/**
-	 * Controls whether thinking text is returned for adaptive-thinking Opus/Sonnet
-	 * 4.6–4.x and Claude 5 families. "summarized" returns visible thinking; "omitted"
+	 * Controls whether thinking text is returned for adaptive-thinking models
+	 * (Opus/Sonnet 4.6+, Haiku 5+). "summarized" returns visible thinking; "omitted"
 	 * returns only an encrypted signature. When unset, the API default applies
 	 * (Opus 4.7+ default to "omitted").
 	 */
@@ -464,14 +468,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 	return stream;
 };
 
-/** Map dreb thinking levels to Anthropic adaptive-thinking effort levels. */
+/**
+ * Map dreb thinking levels to Anthropic adaptive-thinking effort levels. `xhigh` and
+ * `max` are sent as themselves after clamping to the model's capabilities
+ * (unsupported `xhigh` → `max` on Opus/Sonnet 4.6).
+ */
 function mapThinkingLevelToEffort(
 	level: SimpleStreamOptions["reasoning"],
 	model: Model<"anthropic-messages">,
 ): AnthropicEffort {
-	switch (level) {
+	switch (level === undefined ? level : clampThinkingLevel(model, level)) {
 		case "minimal":
-			return "low";
 		case "low":
 			return "low";
 		case "medium":
@@ -479,8 +486,9 @@ function mapThinkingLevelToEffort(
 		case "high":
 			return "high";
 		case "xhigh":
+			return "xhigh";
 		case "max":
-			return supportsXhigh(model) ? "max" : "high";
+			return "max";
 		default:
 			return "high";
 	}
@@ -501,7 +509,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 		return streamAnthropic(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
 	}
 
-	// Opus/Sonnet 4.6–4.x and Claude 5 families use adaptive thinking with effort.
+	// Opus/Sonnet 4.6+ and Haiku 5+ use adaptive thinking with effort.
 	// Older models use budget-based thinking.
 	if (supportsAdaptiveThinking(model)) {
 		const effort = mapThinkingLevelToEffort(options.reasoning, model);
@@ -554,7 +562,7 @@ function createClient(
 	optionsHeaders?: Record<string, string>,
 	dynamicHeaders?: Record<string, string>,
 ): { client: Anthropic; isOAuthToken: boolean } {
-	// Adaptive-thinking Opus/Sonnet 4.6–4.x and Claude 5 families have
+	// Adaptive-thinking models (Opus/Sonnet 4.6+, Haiku 5+) have
 	// interleaved thinking built in. The beta header is deprecated there.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model);
 	const firstParty = isFirstPartyAnthropic(model.baseUrl);
@@ -715,8 +723,8 @@ function buildParams(
 		params.tools = convertTools(context.tools, isOAuthToken);
 	}
 
-	// Configure thinking mode: adaptive (Opus/Sonnet 4.6–4.x and Claude 5),
-	// budget-based (older models), or explicitly disabled.
+	// Configure thinking mode: adaptive (Opus/Sonnet 4.6+, Haiku 5+),
+	// budget-based (older models), or the model's thinking-off config.
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			if (supportsAdaptiveThinking(model)) {
@@ -730,7 +738,8 @@ function buildParams(
 					(params.thinking as { display?: string }).display = options.thinkingDisplay;
 				}
 				if (options.effort) {
-					params.output_config = { effort: options.effort };
+					// SDK 0.73 doesn't type the native "xhigh" effort yet; the API accepts it.
+					params.output_config = { effort: options.effort as Anthropic.Messages.OutputConfig["effort"] };
 				}
 			} else {
 				// Budget-based thinking for older models.
@@ -765,7 +774,16 @@ function buildParams(
 				};
 			}
 		} else if (options?.thinkingEnabled === false) {
-			params.thinking = { type: "disabled" };
+			// Models differ in how thinking is turned off. Opus 5.5+ rejects `disabled`
+			// at every effort (thinking is always on), so the field is omitted and the
+			// model default effort applies. Sonnet 5.5+ also rejects `disabled`; its off
+			// setting is `between_tools`, which SDK 0.73 doesn't type yet.
+			const offMode = getClaudeThinkingOffMode(model);
+			if (offMode === "disabled") {
+				params.thinking = { type: "disabled" };
+			} else if (offMode === "between_tools") {
+				params.thinking = { type: "between_tools" } as unknown as Anthropic.Messages.ThinkingConfigParam;
+			}
 		}
 	}
 

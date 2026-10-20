@@ -4,11 +4,17 @@
 
 import { getModels } from "../../models.js";
 import type { Api, Model } from "../../types.js";
+import { applyCopilotModelDiscovery, type CopilotModelInfo, listGitHubCopilotModels } from "./github-copilot-models.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
 type CopilotCredentials = OAuthCredentials & {
 	enterpriseUrl?: string;
+	/** Models discovered from Copilot's `/models` endpoint at login / last token refresh. */
+	models?: CopilotModelInfo[];
 };
+
+/** Upper bound for the `/models` discovery call made during login and token refresh. */
+const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 
 const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
@@ -319,6 +325,28 @@ async function enableAllGitHubCopilotModels(
 }
 
 /**
+ * Discover the account's Copilot models. Returns undefined when discovery fails or
+ * yields no models, so callers keep the previous list (or the built-in catalog).
+ */
+async function discoverGitHubCopilotModels(
+	token: string,
+	enterpriseDomain?: string,
+): Promise<CopilotModelInfo[] | undefined> {
+	try {
+		const models = await listGitHubCopilotModels(
+			token,
+			getGitHubCopilotBaseUrl(token, enterpriseDomain),
+			COPILOT_HEADERS,
+			AbortSignal.timeout(MODEL_DISCOVERY_TIMEOUT_MS),
+		);
+		return models.length > 0 ? models : undefined;
+	} catch {
+		// Discovery is best-effort: the built-in catalog (or the last discovered list) still works.
+		return undefined;
+	}
+}
+
+/**
  * Login with GitHub Copilot OAuth (device code flow)
  *
  * @param options.onAuth - Callback with URL and optional instructions (user code)
@@ -364,7 +392,10 @@ export async function loginGitHubCopilot(options: {
 	// Enable all models after successful login
 	options.onProgress?.("Enabling models...");
 	await enableAllGitHubCopilotModels(credentials.access, enterpriseDomain ?? undefined);
-	return credentials;
+
+	options.onProgress?.("Discovering available models...");
+	const models = await discoverGitHubCopilotModels(credentials.access, enterpriseDomain ?? undefined);
+	return models ? { ...credentials, models } : credentials;
 }
 
 export const githubCopilotOAuthProvider: OAuthProviderInterface = {
@@ -382,7 +413,11 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 
 	async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
 		const creds = credentials as CopilotCredentials;
-		return refreshGitHubCopilotToken(creds.refresh, creds.enterpriseUrl);
+		const fresh = await refreshGitHubCopilotToken(creds.refresh, creds.enterpriseUrl);
+		// Re-discover on every refresh; keep the previous list when discovery fails.
+		const domain = creds.enterpriseUrl ? (normalizeDomain(creds.enterpriseUrl) ?? undefined) : undefined;
+		const models = (await discoverGitHubCopilotModels(fresh.access, domain)) ?? creds.models;
+		return models ? { ...fresh, models } : fresh;
 	},
 
 	getApiKey(credentials: OAuthCredentials): string {
@@ -393,6 +428,10 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 		const creds = credentials as CopilotCredentials;
 		const domain = creds.enterpriseUrl ? (normalizeDomain(creds.enterpriseUrl) ?? undefined) : undefined;
 		const baseUrl = getGitHubCopilotBaseUrl(creds.access, domain);
-		return models.map((m) => (m.provider === "github-copilot" ? { ...m, baseUrl } : m));
+		// Without a discovered list the built-in catalog is used as-is.
+		const discovered = Array.isArray(creds.models) ? creds.models : [];
+		return applyCopilotModelDiscovery(models, discovered).map((m) =>
+			m.provider === "github-copilot" ? { ...m, baseUrl } : m,
+		);
 	},
 };

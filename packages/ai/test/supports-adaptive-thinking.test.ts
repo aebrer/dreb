@@ -43,6 +43,20 @@ describe("supportsAdaptiveThinking", () => {
 		},
 	);
 
+	it.each(["claude-haiku-5-5", "anthropic.claude-haiku-5-5", "us.anthropic.claude-haiku-5-5-v1:0", "claude-haiku-5"])(
+		"returns true for Haiku 5+ model %s",
+		(id) => {
+			expect(supportsAdaptiveThinking(model(id))).toBe(true);
+		},
+	);
+
+	it.each(["claude-3-5-haiku-20241022", "claude-haiku-4-5", "haiku-4-5-20251001", "claude-3-haiku-20240307"])(
+		"returns false for legacy Haiku model %s",
+		(id) => {
+			expect(supportsAdaptiveThinking(model(id))).toBe(false);
+		},
+	);
+
 	it("returns true for Bedrock-prefixed anthropic.claude-opus-4-7", () => {
 		expect(supportsAdaptiveThinking(model("anthropic.claude-opus-4-7"))).toBe(true);
 	});

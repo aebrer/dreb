@@ -20,7 +20,13 @@ import {
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 
-import { calculateCost, supportsAdaptiveThinking, supportsXhigh } from "../models.js";
+import {
+	calculateCost,
+	clampThinkingLevel,
+	claudeThinksByDefault,
+	getClaudeThinkingOffMode,
+	supportsAdaptiveThinking,
+} from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -405,11 +411,15 @@ function handleContentBlockStop(
 	}
 }
 
+/**
+ * Map dreb thinking levels to Anthropic adaptive-thinking effort levels. `xhigh` and
+ * `max` are sent as themselves after clamping to the model's capabilities.
+ */
 function mapThinkingLevelToEffort(
 	level: SimpleStreamOptions["reasoning"],
 	model: Model<"bedrock-converse-stream">,
-): "low" | "medium" | "high" | "max" {
-	switch (level) {
+): "low" | "medium" | "high" | "xhigh" | "max" {
+	switch (level === undefined ? level : clampThinkingLevel(model, level)) {
 		case "minimal":
 		case "low":
 			return "low";
@@ -418,8 +428,9 @@ function mapThinkingLevelToEffort(
 		case "high":
 			return "high";
 		case "xhigh":
+			return "xhigh";
 		case "max":
-			return supportsXhigh(model) ? "max" : "high";
+			return "max";
 		default:
 			return "high";
 	}
@@ -711,11 +722,22 @@ export function buildAdditionalModelRequestFields(
 	model: Model<"bedrock-converse-stream">,
 	options: BedrockOptions,
 ): Record<string, any> | undefined {
-	if (!options.reasoning || !model.reasoning) {
+	if (!model.reasoning) {
 		return undefined;
 	}
 
-	if (model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude")) {
+	const isClaude = model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude");
+
+	if (!options.reasoning) {
+		// Omitting the thinking field turns thinking off for older Claude models, but the
+		// Claude 5 generation thinks by default, so they need the explicit off config.
+		// Opus 5.5+ cannot turn thinking off at all: send no thinking field and no effort.
+		if (!isClaude || !claudeThinksByDefault(model)) return undefined;
+		const offMode = getClaudeThinkingOffMode(model);
+		return offMode === "omit" ? undefined : { thinking: { type: offMode } };
+	}
+
+	if (isClaude) {
 		const result: Record<string, any> = supportsAdaptiveThinking(model)
 			? (() => {
 					// Adaptive thinking: the `display` field controls whether thinking text is

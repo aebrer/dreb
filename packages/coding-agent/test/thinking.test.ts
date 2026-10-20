@@ -65,6 +65,23 @@ describe("resolveEffectiveThinkingLevel", () => {
 	test("max-capable models preserve max", () => {
 		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "gpt-5.6-sol" }, "max")).toBe("max");
 	});
+
+	test("off clamps to minimal on Claude Opus 5.5, whose thinking cannot be turned off", () => {
+		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "claude-opus-5-5" }, "off")).toBe("minimal");
+		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "claude-sonnet-5-5" }, "off")).toBe("off");
+	});
+
+	test("unsupported xhigh clamps up to max on Claude Opus/Sonnet 4.6", () => {
+		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "claude-opus-4-6" }, "xhigh")).toBe("max");
+		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "claude-sonnet-4-6" }, "xhigh")).toBe("max");
+	});
+
+	test("Claude 5.5 models preserve native xhigh and max", () => {
+		for (const id of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
+			expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id }, "xhigh")).toBe("xhigh");
+			expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id }, "max")).toBe("max");
+		}
+	});
 });
 
 describe("thinkingLevelToReasoning", () => {
@@ -103,6 +120,46 @@ describe("validateThinkingLevelForModel", () => {
 	test("accepts max only for max-capable models", () => {
 		expect(validateThinkingLevelForModel(maxModel, "max")).toEqual({ ok: true });
 		expect(validateThinkingLevelForModel(xhighModel, "max")).toMatchObject({ ok: false });
+	});
+
+	test("rejects off for a model whose thinking cannot be turned off", () => {
+		const result = validateThinkingLevelForModel({ ...reasoningModel, id: "claude-opus-5-5" }, "off");
+		expect(result).toMatchObject({ ok: false });
+		if (!result.ok) {
+			expect(result.error).toContain('Thinking level "off" is not supported');
+			expect(result.error).toContain('"minimal" or "low"');
+		}
+	});
+
+	test("accepts off for reasoning models that can turn thinking off, and for non-reasoning models", () => {
+		expect(validateThinkingLevelForModel({ ...reasoningModel, id: "claude-sonnet-5-5" }, "off")).toEqual({
+			ok: true,
+		});
+		expect(validateThinkingLevelForModel(reasoningModel, "off")).toEqual({ ok: true });
+		expect(validateThinkingLevelForModel({ ...nonReasoningModel, id: "claude-opus-5-5" }, "off")).toEqual({
+			ok: true,
+		});
+	});
+
+	test("max error suggests xhigh only when the model supports it", () => {
+		const xhighResult = validateThinkingLevelForModel(xhighModel, "max");
+		const plainResult = validateThinkingLevelForModel(reasoningModel, "max");
+		if (xhighResult.ok || plainResult.ok) throw new Error("expected max to be rejected");
+		expect(xhighResult.error).toContain('Use "xhigh"');
+		expect(plainResult.error).toContain('Use "high"');
+		expect(plainResult.error).not.toContain('"xhigh"');
+	});
+
+	test("xhigh error suggests max on models that have max but not xhigh", () => {
+		const result = validateThinkingLevelForModel({ ...reasoningModel, id: "claude-opus-4-6" }, "xhigh");
+		if (result.ok) throw new Error("expected xhigh to be rejected");
+		expect(result.error).toContain('Use "max" or "high"');
+	});
+
+	test("accepts native Anthropic max on Claude Opus 4.6 and the 5.5 models", () => {
+		for (const id of ["claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-5-5", "claude-haiku-5-5"]) {
+			expect(validateThinkingLevelForModel({ ...reasoningModel, id }, "max")).toEqual({ ok: true });
+		}
 	});
 
 	test("rejects non-off thinking for non-reasoning models", () => {

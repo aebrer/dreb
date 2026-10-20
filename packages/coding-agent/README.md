@@ -659,7 +659,7 @@ cat README.md | dreb -p "Summarize this text"
 | `--models <patterns>` | Comma-separated patterns for model cycling |
 | `--list-models [search]` | List available models |
 
-`max` is a separate native effort currently supported by the GPT-5.6 family (Sol, Terra, and Luna) and the GPT-6 family (Astra and future variants); `xhigh` remains available independently. Codex `ultra` is not a provider effort: it combines `max` with client-side multi-agent orchestration, so dreb does not send `ultra` as a raw value.
+`max` is a separate native effort currently supported by the GPT-5.6 family (Sol, Terra, and Luna), the GPT-6 family (Astra and future variants), and — on Anthropic, GitHub Copilot, and Bedrock — Claude Opus/Sonnet 4.6+ and Haiku 5.5; `xhigh` remains available independently. On those transports, Claude `xhigh` (Opus 4.7+, Sonnet 5+, Haiku 5.5) and `max` are sent as the native efforts of the same name; Opus/Sonnet 4.6 have `max` but no `xhigh`, so a requested `xhigh` uses `max` there. Claude Opus 5.5 cannot turn thinking off, so `off` is not offered for it and a requested `off` uses `minimal`. OpenRouter keeps its own Claude effort mapping. GitHub Copilot's model list, routing, and `xhigh`/`max` support are refreshed from your account's Copilot `/models` at login and token refresh, and models your plan doesn't offer are hidden. Codex `ultra` is not a provider effort: it combines `max` with client-side multi-agent orchestration, so dreb does not send `ultra` as a raw value.
 
 ### Session Options
 

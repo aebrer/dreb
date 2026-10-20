@@ -20,7 +20,10 @@ function makePayloadCaptureContext(): Context {
  */
 async function capturePayload(
 	model: Model<"anthropic-messages">,
-	options: { reasoning?: "low" | "high" | "xhigh"; thinkingDisplay?: "summarized" | "omitted" } = {},
+	options: {
+		reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+		thinkingDisplay?: "summarized" | "omitted";
+	} = {},
 ): Promise<AnthropicThinkingPayload> {
 	let capturedPayload: AnthropicThinkingPayload | undefined;
 	const payloadCaptureModel: Model<"anthropic-messages"> = {
@@ -79,12 +82,52 @@ describe("Anthropic thinking display payload", () => {
 		expect(payload.thinking?.display).toBeUndefined();
 	});
 
-	it("maps xhigh to max effort for Claude Opus 5 adaptive thinking", async () => {
-		const base = findModel("anthropic", "claude-opus-4-6")! as Model<"anthropic-messages">;
-		const payload = await capturePayload({ ...base, id: "claude-opus-5" }, { reasoning: "xhigh" });
+	it.each([
+		["claude-opus-5", "xhigh", "xhigh"],
+		["claude-opus-5", "max", "max"],
+		["claude-opus-5-5", "xhigh", "xhigh"],
+		["claude-opus-5-5", "max", "max"],
+		["claude-sonnet-5-5", "xhigh", "xhigh"],
+		["claude-sonnet-5-5", "max", "max"],
+		["claude-haiku-5-5", "xhigh", "xhigh"],
+		["claude-haiku-5-5", "max", "max"],
+		["claude-opus-4-6", "max", "max"],
+		["claude-opus-4-6", "xhigh", "max"],
+		["claude-sonnet-4-6", "max", "max"],
+		["claude-sonnet-4-6", "xhigh", "max"],
+		["claude-opus-4-8", "xhigh", "xhigh"],
+	] as const)("sends %s reasoning=%s as native effort %s", async (id, reasoning, effort) => {
+		const base = getModel("anthropic", "claude-opus-4-6");
+		const payload = await capturePayload({ ...base, id }, { reasoning });
 
 		expect(payload.thinking).toEqual({ type: "adaptive" });
-		expect(payload.output_config).toEqual({ effort: "max" });
+		expect(payload.output_config).toEqual({ effort });
+	});
+
+	it.each([
+		["minimal", "low"],
+		["low", "low"],
+		["medium", "medium"],
+		["high", "high"],
+	] as const)("uses adaptive thinking (never enabled) for Haiku 5.5 at %s → %s", async (reasoning, effort) => {
+		const payload = await capturePayload(getModel("anthropic", "claude-haiku-5-5"), { reasoning });
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.thinking?.budget_tokens).toBeUndefined();
+		expect(payload.output_config).toEqual({ effort });
+	});
+
+	it.each([
+		["claude-opus-4.8", "xhigh", "xhigh"],
+		["claude-opus-4.8", "max", "max"],
+		["claude-sonnet-4.6", "xhigh", "max"],
+		["claude-opus-5.5", "max", "max"],
+		["claude-haiku-5.5", "xhigh", "xhigh"],
+	] as const)("sends native effort to Copilot %s reasoning=%s → %s", async (id, reasoning, effort) => {
+		const payload = await capturePayload(getModel("github-copilot", id), { reasoning });
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.output_config).toEqual({ effort });
 	});
 
 	it("never sets display on budget-based models even when thinkingDisplay is requested", async () => {

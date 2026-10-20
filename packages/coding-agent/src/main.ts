@@ -5,7 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@dreb/ai";
+import { clampThinkingLevel, type ImageContent, modelsAreEqual, supportsMax, supportsThinkingOff } from "@dreb/ai";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { type Args, parseArgs, printHelp, validateRpcFullMessageUpdates } from "./cli/args.js";
@@ -35,6 +35,7 @@ import { DefaultResourceLoader } from "./core/resource-loader.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./core/sdk.js";
 import { type SessionInfo, SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
+import { unsupportedMaxError } from "./core/thinking.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 import { allTools } from "./core/tools/index.js";
 import { runMigrations, showDeprecationWarnings } from "./migrations.js";
@@ -966,19 +967,17 @@ export async function main(args: string[]) {
 	if (session.model && cliThinkingOverride) {
 		const requestedThinking = parsed.thinking ?? sessionOptions.thinkingLevel;
 		if (requestedThinking === "max" && !supportsMax(session.model)) {
-			log.error(
-				chalk.red(
-					`Thinking level "max" is not supported by model "${session.model.provider}/${session.model.id}". Use "xhigh" or choose a max-capable model.`,
-				),
-			);
+			log.error(chalk.red(unsupportedMaxError(session.model)));
 			process.exit(1);
 		}
-		let effectiveThinking = session.thinkingLevel;
-		if (!session.model.reasoning) {
-			effectiveThinking = "off";
-		} else if (effectiveThinking === "xhigh" && !supportsXhigh(session.model)) {
-			effectiveThinking = "high";
+		if (requestedThinking === "off" && session.model.reasoning && !supportsThinkingOff(session.model)) {
+			log.warn(
+				chalk.yellow(
+					`Warning: Thinking cannot be turned off for model "${session.model.provider}/${session.model.id}". Using "minimal" instead.`,
+				),
+			);
 		}
+		const effectiveThinking = clampThinkingLevel(session.model, session.thinkingLevel);
 		if (effectiveThinking !== session.thinkingLevel) {
 			session.setThinkingLevel(effectiveThinking);
 		}

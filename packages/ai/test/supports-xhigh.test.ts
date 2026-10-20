@@ -8,10 +8,28 @@ describe("supportsXhigh", () => {
 		expect(supportsXhigh(model!)).toBe(true);
 	});
 
-	it("returns true for Opus 4.6 by exact ID", () => {
+	it("returns false for native Opus 4.6, which supports max but not xhigh", () => {
 		const model = getModel("anthropic", "claude-opus-4-6");
 		expect(model).toBeDefined();
-		expect(supportsXhigh(model!)).toBe(true);
+		expect(supportsXhigh(model!)).toBe(false);
+	});
+
+	it("returns true for Opus 4.7 by exact ID", () => {
+		const base = getModel("anthropic", "claude-opus-4-6");
+		expect(supportsXhigh({ ...base, id: "claude-opus-4-7" })).toBe(true);
+	});
+
+	it.each(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] as const)(
+		"returns true for Claude 5.5 model %s",
+		(id) => {
+			expect(supportsXhigh(getModel("anthropic", id))).toBe(true);
+		},
+	);
+
+	it("follows the native rules on Copilot's Messages API", () => {
+		expect(supportsXhigh(getModel("github-copilot", "claude-opus-4.8"))).toBe(true);
+		expect(supportsXhigh(getModel("github-copilot", "claude-sonnet-4.6"))).toBe(false);
+		expect(supportsXhigh(getModel("github-copilot", "claude-haiku-5.5"))).toBe(true);
 	});
 
 	it.each(["opus", "sonnet"] as const)("returns true for Claude 5 %s models", (family) => {

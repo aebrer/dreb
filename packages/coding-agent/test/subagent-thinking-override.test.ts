@@ -55,7 +55,16 @@ const nonXhighModel: Model<"openai-responses"> = {
 	name: "Ordinary reasoning model",
 };
 
-const models = [reasoningModel, nonReasoningModel, nonXhighModel];
+/** Claude Opus 5.5 on an Anthropic-native transport: thinking cannot be turned off. */
+const alwaysThinkingModel: Model<"anthropic-messages"> = {
+	...reasoningModel,
+	id: "claude-opus-5-5",
+	name: "Claude Opus 5.5",
+	api: "anthropic-messages",
+	compat: undefined,
+};
+
+const models = [reasoningModel, nonReasoningModel, nonXhighModel, alwaysThinkingModel];
 const registry = {
 	getAll: () => models,
 	find: (provider: string, modelId: string) =>
@@ -386,6 +395,31 @@ describe("executeSingle thinking validation and child arguments", () => {
 
 		expect(result.exitCode).toBe(1);
 		expect(result.errorMessage).toContain("not supported");
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	test("rejects explicit off for a model whose thinking cannot be turned off before spawn", async () => {
+		const result = await executeSingle(
+			testAgents("test-provider/claude-opus-5-5"),
+			"thinking-test",
+			"do work",
+			tempCwd,
+			undefined,
+			undefined,
+			undefined,
+			"test-provider",
+			registry,
+			undefined,
+			alwaysThinkingModel.id,
+			undefined,
+			undefined,
+			undefined,
+			"off",
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain('Thinking level "off" is not supported');
+		expect(result.errorMessage).toContain('"minimal"');
 		expect(spawn).not.toHaveBeenCalled();
 	});
 });
