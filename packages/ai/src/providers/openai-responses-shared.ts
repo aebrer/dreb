@@ -298,174 +298,227 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
-	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
-	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
+	type OpenItem =
+		| { kind: "reasoning"; item: ResponseReasoningItem; block: ThinkingContent; contentIndex: number }
+		| { kind: "message"; item: ResponseOutputMessage; block: TextContent; contentIndex: number }
+		| {
+				kind: "function_call";
+				item: ResponseFunctionToolCall;
+				block: ToolCall & { partialJson?: string };
+				contentIndex: number;
+				doneArguments?: string;
+		  };
+	// Output items can overlap (e.g. a message opened before a reasoning item and
+	// completed after it, or several function calls open at once). Route every
+	// event to the item it identifies rather than to the most recently added one.
+	const openItems = new Map<string, OpenItem>();
 	const blocks = output.content;
-	const blockIndex = () => blocks.length - 1;
 	let receivedResponseCompleted = false;
+
+	const resolveOpenItem = (eventType: string, itemId: string | undefined): OpenItem => {
+		if (itemId !== undefined && itemId !== null && itemId !== "") {
+			const entry = openItems.get(itemId);
+			if (!entry) {
+				throw new Error(`Responses stream: ${eventType} references unknown or already completed item "${itemId}"`);
+			}
+			return entry;
+		}
+		// Some providers/proxies omit item_id. That is only unambiguous when exactly one item is open.
+		if (openItems.size === 1) {
+			return openItems.values().next().value as OpenItem;
+		}
+		throw new Error(
+			`Responses stream: ${eventType} has no item_id while ${openItems.size} output items are open; cannot route it unambiguously`,
+		);
+	};
 
 	for await (const event of openaiStream) {
 		if (event.type === "response.created") {
 			output.responseId = event.response.id;
 		} else if (event.type === "response.output_item.added") {
 			const item = event.item;
+			if (item.type === "reasoning" || item.type === "message" || item.type === "function_call") {
+				if (!item.id) {
+					throw new Error(`Responses stream: output_item.added for ${item.type} item has no id`);
+				}
+				if (openItems.has(item.id)) {
+					throw new Error(`Responses stream: output_item.added for already open item "${item.id}"`);
+				}
+			}
 			if (item.type === "reasoning") {
-				currentItem = item;
-				currentBlock = { type: "thinking", thinking: "" };
-				output.content.push(currentBlock);
-				stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+				const block: ThinkingContent = { type: "thinking", thinking: "" };
+				output.content.push(block);
+				const contentIndex = blocks.length - 1;
+				openItems.set(item.id, { kind: "reasoning", item, block, contentIndex });
+				stream.push({ type: "thinking_start", contentIndex, partial: output });
 			} else if (item.type === "message") {
-				currentItem = item;
-				currentBlock = { type: "text", text: "" };
-				output.content.push(currentBlock);
-				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+				const block: TextContent = { type: "text", text: "" };
+				output.content.push(block);
+				const contentIndex = blocks.length - 1;
+				openItems.set(item.id, { kind: "message", item, block, contentIndex });
+				stream.push({ type: "text_start", contentIndex, partial: output });
 			} else if (item.type === "function_call") {
-				currentItem = item;
-				currentBlock = {
+				const block: ToolCall & { partialJson?: string } = {
 					type: "toolCall",
 					id: `${item.call_id}|${item.id}`,
 					name: item.name,
 					arguments: {},
 					partialJson: item.arguments || "",
 				};
-				output.content.push(currentBlock);
-				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+				output.content.push(block);
+				const contentIndex = blocks.length - 1;
+				openItems.set(item.id as string, { kind: "function_call", item, block, contentIndex });
+				stream.push({ type: "toolcall_start", contentIndex, partial: output });
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
-			if (currentItem && currentItem.type === "reasoning") {
-				currentItem.summary = currentItem.summary || [];
-				currentItem.summary.push(event.part);
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "reasoning") {
+				entry.item.summary = entry.item.summary || [];
+				entry.item.summary.push(event.part);
 			}
 		} else if (event.type === "response.reasoning_summary_text.delta") {
-			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
-				currentItem.summary = currentItem.summary || [];
-				const lastPart = currentItem.summary[currentItem.summary.length - 1];
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "reasoning") {
+				entry.item.summary = entry.item.summary || [];
+				const lastPart = entry.item.summary[entry.item.summary.length - 1];
 				if (lastPart) {
-					currentBlock.thinking += event.delta;
+					entry.block.thinking += event.delta;
 					lastPart.text += event.delta;
 					stream.push({
 						type: "thinking_delta",
-						contentIndex: blockIndex(),
+						contentIndex: entry.contentIndex,
 						delta: event.delta,
 						partial: output,
 					});
 				}
 			}
 		} else if (event.type === "response.reasoning_summary_part.done") {
-			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
-				currentItem.summary = currentItem.summary || [];
-				const lastPart = currentItem.summary[currentItem.summary.length - 1];
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "reasoning") {
+				entry.item.summary = entry.item.summary || [];
+				const lastPart = entry.item.summary[entry.item.summary.length - 1];
 				if (lastPart) {
-					currentBlock.thinking += "\n\n";
+					entry.block.thinking += "\n\n";
 					lastPart.text += "\n\n";
 					stream.push({
 						type: "thinking_delta",
-						contentIndex: blockIndex(),
+						contentIndex: entry.contentIndex,
 						delta: "\n\n",
 						partial: output,
 					});
 				}
 			}
 		} else if (event.type === "response.content_part.added") {
-			if (currentItem?.type === "message") {
-				currentItem.content = currentItem.content || [];
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "message") {
+				entry.item.content = entry.item.content || [];
 				// Filter out ReasoningText, only accept output_text and refusal
 				if (event.part.type === "output_text" || event.part.type === "refusal") {
-					currentItem.content.push(event.part);
+					entry.item.content.push(event.part);
 				}
 			}
 		} else if (event.type === "response.output_text.delta") {
-			if (currentItem?.type === "message" && currentBlock?.type === "text") {
-				if (!currentItem.content || currentItem.content.length === 0) {
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "message") {
+				if (!entry.item.content || entry.item.content.length === 0) {
 					continue;
 				}
-				const lastPart = currentItem.content[currentItem.content.length - 1];
+				const lastPart = entry.item.content[entry.item.content.length - 1];
 				if (lastPart?.type === "output_text") {
-					currentBlock.text += event.delta;
+					entry.block.text += event.delta;
 					lastPart.text += event.delta;
 					stream.push({
 						type: "text_delta",
-						contentIndex: blockIndex(),
+						contentIndex: entry.contentIndex,
 						delta: event.delta,
 						partial: output,
 					});
 				}
 			}
 		} else if (event.type === "response.refusal.delta") {
-			if (currentItem?.type === "message" && currentBlock?.type === "text") {
-				if (!currentItem.content || currentItem.content.length === 0) {
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "message") {
+				if (!entry.item.content || entry.item.content.length === 0) {
 					continue;
 				}
-				const lastPart = currentItem.content[currentItem.content.length - 1];
+				const lastPart = entry.item.content[entry.item.content.length - 1];
 				if (lastPart?.type === "refusal") {
-					currentBlock.text += event.delta;
+					entry.block.text += event.delta;
 					lastPart.refusal += event.delta;
 					stream.push({
 						type: "text_delta",
-						contentIndex: blockIndex(),
+						contentIndex: entry.contentIndex,
 						delta: event.delta,
 						partial: output,
 					});
 				}
 			}
 		} else if (event.type === "response.function_call_arguments.delta") {
-			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-				currentBlock.partialJson += event.delta;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson, options?.onWarning);
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "function_call") {
+				entry.block.partialJson = (entry.block.partialJson ?? "") + event.delta;
+				entry.block.arguments = parseStreamingJson(entry.block.partialJson, options?.onWarning);
 				stream.push({
 					type: "toolcall_delta",
-					contentIndex: blockIndex(),
+					contentIndex: entry.contentIndex,
 					delta: event.delta,
 					partial: output,
 				});
 			}
 		} else if (event.type === "response.function_call_arguments.done") {
-			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-				currentBlock.partialJson = event.arguments;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson, options?.onWarning);
+			const entry = resolveOpenItem(event.type, event.item_id);
+			if (entry.kind === "function_call") {
+				entry.doneArguments = event.arguments;
+				entry.block.partialJson = event.arguments;
+				entry.block.arguments = parseStreamingJson(entry.block.partialJson, options?.onWarning);
 			}
 		} else if (event.type === "response.output_item.done") {
 			const item = event.item;
+			if (item.type !== "reasoning" && item.type !== "message" && item.type !== "function_call") {
+				continue;
+			}
+			const entry = resolveOpenItem(event.type, item.id);
+			if (entry.kind !== item.type) {
+				throw new Error(
+					`Responses stream: output_item.done for ${item.type} item "${item.id}" does not match open ${entry.kind} item`,
+				);
+			}
+			openItems.delete(item.id as string);
 
-			if (item.type === "reasoning" && currentBlock?.type === "thinking") {
-				currentBlock.thinking = item.summary?.map((s) => s.text).join("\n\n") || "";
-				currentBlock.thinkingSignature = JSON.stringify(item);
+			if (entry.kind === "reasoning" && item.type === "reasoning") {
+				entry.block.thinking = item.summary?.map((s) => s.text).join("\n\n") || "";
+				entry.block.thinkingSignature = JSON.stringify(item);
 				stream.push({
 					type: "thinking_end",
-					contentIndex: blockIndex(),
-					content: currentBlock.thinking,
+					contentIndex: entry.contentIndex,
+					content: entry.block.thinking,
 					partial: output,
 				});
-				currentBlock = null;
-			} else if (item.type === "message" && currentBlock?.type === "text") {
-				currentBlock.text = item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("");
-				currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+			} else if (entry.kind === "message" && item.type === "message") {
+				entry.block.text = item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("");
+				entry.block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
 				stream.push({
 					type: "text_end",
-					contentIndex: blockIndex(),
-					content: currentBlock.text,
+					contentIndex: entry.contentIndex,
+					content: entry.block.text,
 					partial: output,
 				});
-				currentBlock = null;
-			} else if (item.type === "function_call") {
-				const args =
-					currentBlock?.type === "toolCall" && currentBlock.partialJson
-						? parseStreamingJson(currentBlock.partialJson, options?.onWarning)
-						: parseStreamingJson(item.arguments || "{}", options?.onWarning);
+			} else if (entry.kind === "function_call" && item.type === "function_call") {
+				// The identified completion record is authoritative; fall back to this
+				// item's own streamed arguments only when the record carries none.
+				const rawArgs = item.arguments || entry.doneArguments || entry.block.partialJson || "{}";
+				const args = parseStreamingJson(rawArgs, options?.onWarning);
+				entry.block.id = `${item.call_id}|${item.id}`;
+				entry.block.name = item.name;
+				entry.block.arguments = args;
+				delete entry.block.partialJson;
 				const toolCall: ToolCall = {
 					type: "toolCall",
-					id: `${item.call_id}|${item.id}`,
-					name: item.name,
+					id: entry.block.id,
+					name: entry.block.name,
 					arguments: args,
 				};
-
-				// Clean up partialJson from the output block before finalising
-				if (currentBlock && "partialJson" in currentBlock) {
-					delete (currentBlock as ToolCall & { partialJson?: string }).partialJson;
-				}
-
-				currentBlock = null;
-				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+				stream.push({ type: "toolcall_end", contentIndex: entry.contentIndex, toolCall, partial: output });
 			}
 		} else if (event.type === "response.completed") {
 			receivedResponseCompleted = true;
