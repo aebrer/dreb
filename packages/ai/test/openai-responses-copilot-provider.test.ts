@@ -19,7 +19,7 @@ describe("openai-responses github-copilot defaults", () => {
 	});
 
 	it("omits reasoning when no reasoning is requested", async () => {
-		const model = getModel("github-copilot", "gpt-5-mini");
+		const model = getModel("github-copilot", "gpt-5.4-nano");
 		let capturedPayload: unknown;
 
 		mockDoneStream();
