@@ -1,9 +1,11 @@
 import type { ThinkingLevel as AgentThinkingLevel } from "@dreb/agent-core";
 import {
 	type ThinkingLevel as AiThinkingLevel,
+	clampThinkingLevel,
 	type Model,
 	supportsAdaptiveThinking,
 	supportsMax,
+	supportsThinkingOff,
 	supportsXhigh,
 } from "@dreb/ai";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
@@ -17,10 +19,7 @@ export function resolveEffectiveThinkingLevel(
 	thinkingLevel: AgentThinkingLevel | undefined,
 	defaultThinkingLevel: AgentThinkingLevel = DEFAULT_THINKING_LEVEL,
 ): AgentThinkingLevel {
-	const effectiveThinkingLevel = thinkingLevel ?? defaultThinkingLevel;
-	if (!model?.reasoning) return "off";
-	if (effectiveThinkingLevel === "max" && !supportsMax(model)) return supportsXhigh(model) ? "xhigh" : "high";
-	return effectiveThinkingLevel === "xhigh" && !supportsXhigh(model) ? "high" : effectiveThinkingLevel;
+	return clampThinkingLevel(model, thinkingLevel ?? defaultThinkingLevel);
 }
 
 /** Convert an effective thinking level into the reasoning option passed to streamSimple. */
@@ -41,14 +40,21 @@ export function validateThinkingLevelForModel(
 	model: Model<any> | undefined,
 	thinkingLevel: AgentThinkingLevel,
 ): ThinkingLevelValidation {
-	if (thinkingLevel === "off") return { ok: true };
 	if (!model) {
+		if (thinkingLevel === "off") return { ok: true };
 		return {
 			ok: false,
 			error: `Cannot validate thinking level "${thinkingLevel}" because no concrete child model was resolved.`,
 		};
 	}
 	const modelRef = `${model.provider}/${model.id}`;
+	if (thinkingLevel === "off") {
+		if (!model.reasoning || supportsThinkingOff(model)) return { ok: true };
+		return {
+			ok: false,
+			error: `Thinking level "off" is not supported by model "${modelRef}" because its thinking cannot be turned off. Use "minimal" or "low" for the least thinking.`,
+		};
+	}
 	if (!model.reasoning) {
 		return {
 			ok: false,
@@ -56,18 +62,22 @@ export function validateThinkingLevelForModel(
 		};
 	}
 	if (thinkingLevel === "max" && !supportsMax(model)) {
-		return {
-			ok: false,
-			error: `Thinking level "max" is not supported by model "${modelRef}". Use "xhigh" or choose a max-capable model.`,
-		};
+		return { ok: false, error: unsupportedMaxError(model) };
 	}
 	if (thinkingLevel === "xhigh" && !supportsXhigh(model)) {
+		const suggestion = supportsMax(model) ? '"max" or "high"' : '"high"';
 		return {
 			ok: false,
-			error: `Thinking level "xhigh" is not supported by model "${modelRef}". Use "high" or choose an xhigh-capable model.`,
+			error: `Thinking level "xhigh" is not supported by model "${modelRef}". Use ${suggestion} or choose an xhigh-capable model.`,
 		};
 	}
 	return { ok: true };
+}
+
+/** Error text for an explicit `max` on a model without native `max`. */
+export function unsupportedMaxError(model: Model<any>): string {
+	const suggestion = supportsXhigh(model) ? '"xhigh"' : '"high"';
+	return `Thinking level "max" is not supported by model "${model.provider}/${model.id}". Use ${suggestion} or choose a max-capable model.`;
 }
 
 /**

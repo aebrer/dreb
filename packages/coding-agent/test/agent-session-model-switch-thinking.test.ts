@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type ThinkingLevel } from "@dreb/agent-core";
-import { type Api, findModel, type Model } from "@dreb/ai";
+import { type Api, findModel, getModel, type Model } from "@dreb/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -159,6 +159,131 @@ describe("AgentSession model switching", () => {
 			).toEqual(["off", "high", "off", "high"]);
 		} finally {
 			session.dispose();
+		}
+	});
+});
+
+describe("AgentSession Claude thinking levels", () => {
+	const opus55 = getModel("anthropic", "claude-opus-5-5");
+	const sonnet55 = getModel("anthropic", "claude-sonnet-5-5");
+	const haiku55 = getModel("anthropic", "claude-haiku-5-5");
+	const opus46 = getModel("anthropic", "claude-opus-4-6");
+	const sonnet46 = getModel("anthropic", "claude-sonnet-4-6");
+	const opus48 = getModel("anthropic", "claude-opus-4-8");
+	const sonnet45 = getModel("anthropic", "claude-sonnet-4-5");
+	const ALL_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+	it.each([
+		["Opus 5.5", opus55, ["minimal", "low", "medium", "high", "xhigh", "max"]],
+		["Opus 4.6", opus46, ["off", "minimal", "low", "medium", "high", "max"]],
+		["Sonnet 4.6", sonnet46, ["off", "minimal", "low", "medium", "high", "max"]],
+		["Sonnet 5.5", sonnet55, ALL_LEVELS],
+		["Haiku 5.5", haiku55, ALL_LEVELS],
+		["Sonnet 4.5", sonnet45, ["off", "minimal", "low", "medium", "high"]],
+	] as const)("lists the available levels for %s", (_label, model, expected) => {
+		const { session } = createSession({ initialModel: model });
+		try {
+			expect(session.getAvailableThinkingLevels()).toEqual(expected);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("lands off on minimal for Opus 5.5 and keeps the saved off preference across switches", async () => {
+		const { session, settingsManager } = createSession({ thinkingLevel: "off", initialModel: sonnet45 });
+
+		try {
+			await session.setModel(opus55);
+			expect(session.thinkingLevel).toBe("minimal");
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("off");
+
+			session.setThinkingLevel("off");
+			expect(session.thinkingLevel).toBe("minimal");
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("off");
+
+			await session.setModel(sonnet45);
+			expect(session.thinkingLevel).toBe("off");
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("off");
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("keeps an explicitly chosen level when switching away from Opus 5.5", async () => {
+		const { session, settingsManager } = createSession({ thinkingLevel: "off", initialModel: sonnet45 });
+
+		try {
+			await session.setModel(opus55);
+			session.setThinkingLevel("low");
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("low");
+
+			await session.setModel(sonnet45);
+			expect(session.thinkingLevel).toBe("low");
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("never cycles to off on Opus 5.5 and wraps from max to minimal", () => {
+		const { session } = createSession({ thinkingLevel: "max", initialModel: opus55 });
+
+		try {
+			const seen: ThinkingLevel[] = [];
+			for (let i = 0; i < 6; i++) {
+				seen.push(session.cycleThinkingLevel()!);
+			}
+			expect(seen).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("clamps a saved xhigh up to max on Opus 4.6 and restores xhigh on Opus 4.8", async () => {
+		const { session, settingsManager } = createSession({ thinkingLevel: "xhigh", initialModel: opus48 });
+
+		try {
+			await session.setModel(opus46);
+			expect(session.thinkingLevel).toBe("max");
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("xhigh");
+
+			await session.setModel(opus48);
+			expect(session.thinkingLevel).toBe("xhigh");
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("restores a saved off session entry as minimal on Opus 5.5 without overwriting the preference", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "dreb-opus55-restore-"));
+		const sessionPath = join(dir, "session.jsonl");
+		const timestamp = new Date().toISOString();
+		const entries = [
+			{ type: "session", version: 3, id: "opus55-restore", timestamp, cwd: process.cwd() },
+			{
+				type: "model_change",
+				id: "mc1",
+				parentId: null,
+				timestamp,
+				provider: opus55.provider,
+				modelId: opus55.id,
+			},
+			{ type: "thinking_level_change", id: "tl1", parentId: "mc1", timestamp, thinkingLevel: "off" },
+		];
+		writeFileSync(sessionPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+		const { session, settingsManager } = createSession({
+			thinkingLevel: "high",
+			defaultThinkingLevel: "off",
+			initialModel: sonnet45,
+		});
+
+		try {
+			expect(await session.switchSession(sessionPath)).toBe(true);
+			expect(session.model?.id).toBe(opus55.id);
+			expect(session.thinkingLevel).toBe("minimal");
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("off");
+		} finally {
+			session.dispose();
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

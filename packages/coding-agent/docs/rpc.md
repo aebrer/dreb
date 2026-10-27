@@ -514,7 +514,7 @@ Set the reasoning/thinking level for models that support it.
 
 Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`
 
-Note: `"xhigh"` is supported by GPT-5.2 through GPT-5.6 model families, the GPT-6 family (Astra and future variants), Claude Opus 4.6–4.x and Claude 5 families (where it maps to adaptive effort `"max"`), and Kimi Code K3. The separate normalized `"max"` tier is model-aware and currently supported by GPT-5.6 aliases and Sol/Terra/Luna variants, plus the GPT-6 family.
+Note: `"xhigh"` is supported by GPT-5.2 through GPT-5.6 model families, the GPT-6 family (Astra and future variants), Claude Opus 4.7+, Sonnet 5+ and Haiku 5.5 on Anthropic, GitHub Copilot and Bedrock (sent as native effort `"xhigh"`), Claude Opus 4.6+ and Sonnet 5+ on OpenRouter, Kimi Code K3, and Qwen 3.8+. The separate normalized `"max"` tier is model-aware and currently supported by GPT-5.6 aliases and Sol/Terra/Luna variants, the GPT-6 family, and Claude Opus/Sonnet 4.6+ and Haiku 5.5 on Anthropic, GitHub Copilot and Bedrock. Unsupported levels are clamped (`xhigh` → `max` on Claude Opus/Sonnet 4.6, otherwise `high`; `max` → `xhigh` → `high`). `availableThinkingLevels` in `get_state` lists only the levels the current model supports and may omit `"off"`: Claude Opus 5.5 cannot turn thinking off, so its list starts at `"minimal"` and `set_thinking_level` with `"off"` lands on `"minimal"` (the saved default is left unchanged).
 
 Response:
 ```json

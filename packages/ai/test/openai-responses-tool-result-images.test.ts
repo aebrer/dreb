@@ -172,8 +172,8 @@ describe("Responses API tool result images", () => {
 		},
 	);
 
-	describe("GitHub Copilot Responses Provider (gpt-5.4)", () => {
-		const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
+	describe("GitHub Copilot Responses Provider (gpt-5.4-nano)", () => {
+		const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4-nano"), githubCopilotToken);
 
 		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should send tool result images in function_call_output",

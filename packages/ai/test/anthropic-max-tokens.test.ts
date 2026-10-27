@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findModel } from "../src/models.js";
+import { getModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 
@@ -48,7 +48,7 @@ async function captureParams(
 
 describe("Anthropic max_tokens default", () => {
 	it("defaults max_tokens to the model's full output ceiling (not maxTokens/3)", async () => {
-		const model = findModel("anthropic", "sonnet")! as Model<"anthropic-messages">;
+		const model = getModel("anthropic", "claude-sonnet-4-5");
 
 		const params = await captureParams(model, {});
 
@@ -59,7 +59,7 @@ describe("Anthropic max_tokens default", () => {
 	});
 
 	it("respects an explicit maxTokens when provided", async () => {
-		const model = findModel("anthropic", "sonnet")! as Model<"anthropic-messages">;
+		const model = getModel("anthropic", "claude-sonnet-4-5");
 
 		const params = await captureParams(model, { maxTokens: 1234 });
 
@@ -68,7 +68,7 @@ describe("Anthropic max_tokens default", () => {
 
 	it("keeps the budget-based thinking budget strictly below max_tokens with text headroom", async () => {
 		// haiku-4-5 uses budget-based thinking (not adaptive), so thinkingBudgetTokens applies.
-		const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
+		const model = getModel("anthropic", "claude-haiku-4-5");
 
 		// Request a huge thinking budget at/above the default full max_tokens to
 		// exercise the headroom guard.
@@ -90,7 +90,7 @@ describe("Anthropic max_tokens default", () => {
 	});
 
 	it("passes through a modest thinking budget unchanged when there is ample headroom", async () => {
-		const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
+		const model = getModel("anthropic", "claude-haiku-4-5");
 
 		const params = await captureParams(model, {
 			reasoning: "high",
@@ -107,7 +107,7 @@ describe("Anthropic max_tokens default", () => {
 		// max_tokens (== 1024), which the Anthropic API rejects (it requires the
 		// strict inequality budget_tokens < max_tokens). The final clamp must keep
 		// the request structurally valid.
-		const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
+		const model = getModel("anthropic", "claude-haiku-4-5");
 
 		const params = await captureParams(model, {
 			maxTokens: 1024,
