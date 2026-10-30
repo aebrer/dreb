@@ -1018,6 +1018,35 @@ describe("dashboard server — fleet and runtimes", () => {
 		await expect(missing.json()).resolves.toMatchObject({ error: expect.stringContaining("No background agent") });
 	});
 
+	it("subagent abort endpoint stops only the selected child and surfaces failures", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+		const create = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await create.json()) as { key: string };
+		const client = clients[0] as any;
+		client.abort = vi.fn(async () => {});
+
+		const stop = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/abort`, { method: "POST" });
+		expect(stop.status).toBe(200);
+		expect(client.abortBackgroundAgent).toHaveBeenCalledWith("bg1");
+		// Never the session-wide abort: the parent run and siblings keep running.
+		expect(client.abort).not.toHaveBeenCalled();
+
+		client.abortBackgroundAgent.mockRejectedValueOnce(new Error('Background agent "bg1" is no longer running.'));
+		const late = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/abort`, { method: "POST" });
+		expect(late.status).toBe(502);
+		await expect(late.json()).resolves.toEqual({ error: 'Background agent "bg1" is no longer running.' });
+
+		const unknownRuntime = await fetch(`${base}/api/runtimes/no-such-runtime/subagents/bg1/abort`, {
+			method: "POST",
+		});
+		expect(unknownRuntime.status).toBe(404);
+	});
+
 	it("prompt endpoint dispatches steer/follow_up/prompt modes", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
 		tempDirs.push(dir);

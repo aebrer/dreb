@@ -1426,6 +1426,31 @@ describe("applySessionEvent — subagent relay", () => {
 		expect(state.subagents.bg1?.streaming).toBe(false);
 	});
 
+	it("a cancelled background_agent_end marks the agent cancelled and stops its live transcript", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "background_agent_start",
+			agentId: "bg-stop",
+			agentType: "Explore",
+			taskSummary: "t",
+		});
+		applySessionEvent(state, {
+			type: "background_agent_event",
+			agentId: "bg-stop",
+			event: { type: "agent_start" },
+		});
+		applySessionEvent(state, {
+			type: "background_agent_end",
+			agentId: "bg-stop",
+			agentType: "Explore",
+			success: false,
+			cancelled: true,
+		});
+
+		expect(state.backgroundAgents["bg-stop"]?.status).toBe("cancelled");
+		expect(state.subagents["bg-stop"]?.streaming).toBe(false);
+	});
+
 	it("caps completed background agents and evicts their subagent transcripts while preserving running agents", () => {
 		const state = makeState();
 		for (let i = 0; i <= MAX_COMPLETED_BACKGROUND_AGENTS; i++) {

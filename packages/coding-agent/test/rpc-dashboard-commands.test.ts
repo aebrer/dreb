@@ -10,6 +10,7 @@ import * as outputGuard from "../src/core/output-guard.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 import { SubagentSessionCostTracker } from "../src/core/subagent-session-cost-tracker.js";
 import type { TabTitleDeps } from "../src/core/tab-title.js";
+import { abortBackgroundAgent } from "../src/core/tools/subagent.js";
 import type {
 	RpcDashboardSnapshot as AggregateRpcDashboardSnapshot,
 	RpcEvent as AggregateRpcEvent,
@@ -34,6 +35,13 @@ import {
 	runRpcMode,
 } from "../src/modes/rpc/rpc-mode.js";
 import { createTestResourceLoader, createTestSession } from "./utilities.js";
+
+// Pass-through wrapper so dispatcher tests can assert the single-agent stop target
+// without launching a real child; the real implementation runs by default.
+vi.mock("../src/core/tools/subagent.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../src/core/tools/subagent.js")>();
+	return { ...actual, abortBackgroundAgent: vi.fn(actual.abortBackgroundAgent) };
+});
 
 const capturedTabTitleDeps = vi.hoisted(() => [] as TabTitleDeps[]);
 
@@ -470,6 +478,50 @@ describe("runRpcMode dashboard dispatcher", () => {
 			await expect(session.newSession()).resolves.toBe(true);
 			expect(sessionManager.getHeader()?.cwd).toBe(tempDir);
 			expect(sessionManager.getCwd()).toBe(tempDir);
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("abort_background_agent stops only the requested agent", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		vi.mocked(abortBackgroundAgent).mockImplementationOnce(() => {});
+		const abortSpy = vi.spyOn(session, "abort");
+
+		try {
+			const outputs = await dispatchRpcCommand(session, {
+				id: "stop-one",
+				type: "abort_background_agent",
+				agentId: "bg-target",
+			});
+			expect(outputs.find((output) => output.id === "stop-one")).toMatchObject({
+				type: "response",
+				command: "abort_background_agent",
+				success: true,
+			});
+			expect(abortBackgroundAgent).toHaveBeenCalledWith("bg-target");
+			// The parent run is not aborted (unlike the session-wide `abort` command).
+			expect(abortSpy).not.toHaveBeenCalled();
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("abort_background_agent fails loudly for an unknown agent", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+
+		try {
+			const outputs = await dispatchRpcCommand(session, {
+				id: "stop-unknown",
+				type: "abort_background_agent",
+				agentId: "no-such-agent",
+			});
+			expect(outputs.find((output) => output.id === "stop-unknown")).toMatchObject({
+				type: "response",
+				command: "abort_background_agent",
+				success: false,
+				error: expect.stringContaining('Unknown background agent "no-such-agent"'),
+			});
 		} finally {
 			cleanup();
 		}

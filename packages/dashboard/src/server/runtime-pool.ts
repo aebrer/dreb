@@ -581,7 +581,7 @@ export class RuntimePool {
 		if (type === "background_agent_end") {
 			const existing = handle.backgroundAgents.get(event.agentId as string);
 			if (existing) {
-				existing.status = event.success ? "completed" : "failed";
+				existing.status = event.cancelled === true ? "cancelled" : event.success ? "completed" : "failed";
 				existing.sessionFile = (event.sessionFile as string | undefined) ?? existing.sessionFile;
 				this.pruneCompletedBackgroundAgents(handle);
 			}

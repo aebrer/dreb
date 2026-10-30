@@ -156,7 +156,9 @@ See [set_follow_up_mode](#set_follow_up_mode) for controlling how follow-up mess
 
 #### abort
 
-Abort the current agent operation.
+Abort the current agent operation. This also stops **every** running background agent of this session (like Esc in the TUI); to stop a single child, use [`abort_background_agent`](#abort_background_agent).
+
+Background agents are stopped gracefully: each child first receives an RPC `abort` so its own run (including any running tools — e.g. the bash tool kills its process group) unwinds, then it is terminated with SIGTERM, with a SIGKILL backstop if it is still alive. A child that does not finish within a short grace period is terminated anyway. Stopped agents report `status: "cancelled"` and `background_agent_end` with `cancelled: true`.
 
 ```json
 {"type": "abort"}
@@ -1149,7 +1151,7 @@ Each session has the same fields as `list_sessions`.
 
 #### list_background_agents
 
-List background subagents tracked by this process's registry — running and recently completed (finished entries are pruned after ~5 minutes). `sessionDir` is the concrete per-launch directory under the global-only configured `subagentSessionDir` (or the legacy default); `sessionFile` appears once the child process exits. On a resumed parent, startup rehydration scans the configured write root first and the legacy `<agent-dir>/subagent-sessions` root second when different, skips absent roots, and deduplicates canonical paths. Files are not migrated. Live transcripts are delivered via `background_agent_event` events (see Events), not by reading these paths.
+List background subagents tracked by this process's registry — running and recently completed (finished entries are pruned after ~5 minutes). `status` is `"running"`, `"completed"`, `"failed"` (the child errored), or `"cancelled"` (stopped by the user via `abort_background_agent`, `abort`, or Esc). Rehydrated children whose last assistant message was aborted are reported as `"cancelled"`. `sessionDir` is the concrete per-launch directory under the global-only configured `subagentSessionDir` (or the legacy default); `sessionFile` appears once the child process exits. On a resumed parent, startup rehydration scans the configured write root first and the legacy `<agent-dir>/subagent-sessions` root second when different, skips absent roots, and deduplicates canonical paths. Files are not migrated. Live transcripts are delivered via `background_agent_event` events (see Events), not by reading these paths.
 
 ```json
 {"type": "list_background_agents"}
@@ -1194,6 +1196,21 @@ Read the selected live child's authoritative pending queues and effective steeri
 ```
 
 The response data is `{ "steeringMode": "one-at-a-time" | "all", "pending": RpcPendingMessages }`. Multiple `steer_background_agent` commands therefore use the target child's existing queue semantics.
+
+#### abort_background_agent
+
+Stop exactly one running background agent (a user stop — e.g. the dashboard subagent view's ■ stop). The parent's run, its queues, and sibling agents are untouched. Works for a child that is executing, waiting for a concurrency slot (it settles immediately without taking a slot), or between chain steps; a chain is stopped as a whole and no later step starts. The child is stopped gracefully as described under [`abort`](#abort).
+
+```json
+{"type":"abort_background_agent","agentId":"a1b2c3d4e5f6"}
+```
+
+Response:
+```json
+{"type": "response", "command": "abort_background_agent", "success": true}
+```
+
+The response confirms the stop was initiated; completion arrives as `background_agent_end` with `cancelled: true`, and the agent's status becomes `"cancelled"` immediately. The parent receives a `<background-agent-complete> … cancelled` message (with any partial output) in its context **without** a new parent turn — if it was the last running agent the parent stays idle until prompted. If the parent is mid-run, that message is appended only after the run ends, so it never splits a tool call from its result. Any steering still queued in the child is discarded with it. The command fails (`success: false`) for unknown agents and agents that are no longer running (completed, failed, already cancelled, or rehydrated); it never falls back to the parent or another child.
 
 #### list_agent_types
 
@@ -1796,7 +1813,7 @@ Response:
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
 | `background_agent_start` | Background subagent launched (includes `sessionDir`) |
-| `background_agent_end` | Background subagent finished (canonical model/thinking, per-step chain metadata, and `sessionFile` when known) |
+| `background_agent_end` | Background subagent finished or was stopped (`cancelled`, canonical model/thinking, per-step chain metadata, and `sessionFile` when known) |
 | `background_agent_event` | Relayed event from a background subagent's own stream |
 | `parent_paused_for_background_agents` | Parent paused waiting on background agents |
 | `session_name_changed` | Session display name changed (manual rename, extension rename, or auto-title) |
@@ -2058,7 +2075,7 @@ When the global Dispatch Arbiter is enabled, `subagent_arbitration` fires after 
 
 The event is deliberately safe and programmatic: it never contains the task, guide, conversation context, prompt, raw response, or model reasoning. The parent session persists the same fields as a non-context `custom` entry. Consumers should update displayed background-agent identity from `final.agent` before child events arrive.
 
-`background_agent_end` fires after the result is delivered to the parent agent. For a single child it includes the canonical resolved `provider/model` and effective thinking level when reported; `sessionFile` is the child's session JSONL path when one was written:
+`background_agent_end` fires after the result is delivered to the parent agent. `cancelled` is `true` when the user stopped the agent (`abort_background_agent`, `abort`, or Esc); `success` is `true` only for a clean, non-cancelled finish. For a single child it includes the canonical resolved `provider/model` and effective thinking level when reported; `sessionFile` is the child's session JSONL path when one was written:
 
 ```json
 {
@@ -2066,6 +2083,7 @@ The event is deliberately safe and programmatic: it never contains the task, gui
   "agentId": "a1b2c3d4e5f6",
   "agentType": "Explore",
   "success": true,
+  "cancelled": false,
   "model": "anthropic/claude-sonnet-4-20250514",
   "thinking": "medium",
   "sessionFile": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6/2026-07-07T12-00-00-000Z_uuid.jsonl"
@@ -2080,6 +2098,7 @@ Chain completions omit ambiguous scalar model/thinking fields and instead includ
   "agentId": "a1b2c3d4e5f6",
   "agentType": "Explore",
   "success": true,
+  "cancelled": false,
   "steps": [
     {"step": 1, "agent": "Explore", "success": true, "model": "anthropic/claude-sonnet-4-6", "thinking": "low"},
     {"step": 2, "agent": "feature-dev", "success": true, "model": "openai/gpt-5.6-sol", "thinking": "high"}

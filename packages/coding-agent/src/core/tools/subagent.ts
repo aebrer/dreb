@@ -354,6 +354,14 @@ export function handleChildJsonlLine(line: string, sinks: ChildLineSinks): void 
 	}
 }
 
+/**
+ * How long a gracefully aborted (RPC `abort`) child may take to finish its run and
+ * emit `agent_end` before it is terminated with SIGTERM.
+ */
+export const SUBAGENT_ABORT_GRACE_MS = 5000;
+/** Delay between SIGTERM and the SIGKILL backstop for a child that is still alive. */
+export const SUBAGENT_SIGKILL_BACKSTOP_MS = 5000;
+
 async function spawnSubagent(
 	agentConfig: AgentTypeConfig,
 	task: string,
@@ -454,6 +462,7 @@ async function spawnSubagent(
 
 		let settled = false;
 		let killTimer: ReturnType<typeof setTimeout> | null = null;
+		let abortGraceTimer: ReturnType<typeof setTimeout> | null = null;
 		const collectedMessages: Array<{ role: string; content: any[] }> = [];
 		const stderrChunks: string[] = [];
 		let stderrSize = 0;
@@ -482,6 +491,26 @@ async function spawnSubagent(
 				} as RpcClient)
 			: undefined;
 
+		// Escalating termination: SIGTERM now, SIGKILL if the process is still alive
+		// after the backstop delay. Liveness is judged by exitCode/signalCode —
+		// `proc.killed` only reports that a signal was *sent*, so it is already true
+		// after the SIGTERM and cannot gate the SIGKILL escalation.
+		const forceKill = () => {
+			try {
+				proc.kill("SIGTERM");
+			} catch {
+				/* process already exited */
+			}
+			killTimer ??= setTimeout(() => {
+				if (proc.exitCode !== null || proc.signalCode !== null) return;
+				try {
+					proc.kill("SIGKILL");
+				} catch {
+					/* process already exited */
+				}
+			}, SUBAGENT_SIGKILL_BACKSTOP_MS);
+		};
+
 		// Terminally fail a controlled child: remember the first failure, reject all
 		// in-flight control requests, and stop the process (with the same SIGKILL
 		// backstop as the abort path) so the close handler settles instead of the
@@ -490,18 +519,7 @@ async function spawnSubagent(
 			if (!controlError) controlError = err;
 			for (const request of pendingRpc.values()) request.reject(err);
 			pendingRpc.clear();
-			try {
-				proc.kill("SIGTERM");
-			} catch {
-				/* process already exited */
-			}
-			killTimer ??= setTimeout(() => {
-				try {
-					if (!proc.killed) proc.kill("SIGKILL");
-				} catch {
-					/* process already exited */
-				}
-			}, 5000);
+			forceKill();
 		};
 
 		proc.stdin?.on("error", (err) => {
@@ -532,7 +550,7 @@ async function spawnSubagent(
 						const message = JSON.parse(line);
 						if (message?.type === "agent_end" && !rpcCompleted) {
 							rpcCompleted = true;
-							setImmediate(() => proc.kill("SIGTERM"));
+							setImmediate(forceKill);
 						}
 						if (message?.type === "response" && typeof message.id === "string") {
 							const pending = pendingRpc.get(message.id);
@@ -582,20 +600,26 @@ async function spawnSubagent(
 			});
 		}
 
-		// Handle abort signal (guard kill() against ESRCH race if process already exited)
+		// Handle abort signal (user stop / stop-all). A controlled child is stopped
+		// gracefully first: the RPC `abort` makes the child abort its own run, so its
+		// tools unwind — notably the bash tool kills its detached process group on its
+		// abort signal, which a bare SIGTERM to this child would orphan. The child's
+		// resulting agent_end triggers the normal SIGTERM above. If the abort cannot be
+		// delivered or the child does not finish within the grace period, escalate to
+		// SIGTERM and then the SIGKILL backstop.
 		const onAbort = () => {
-			try {
-				proc.kill("SIGTERM");
-			} catch {
-				/* process already exited */
+			if (!controlClient || rpcCompleted || controlError || !proc.stdin?.writable) {
+				forceKill();
+				return;
 			}
-			killTimer = setTimeout(() => {
-				try {
-					if (!proc.killed) proc.kill("SIGKILL");
-				} catch {
-					/* process already exited */
-				}
-			}, 5000);
+			abortGraceTimer ??= setTimeout(forceKill, SUBAGENT_ABORT_GRACE_MS);
+			sendRpc({ type: "abort" }).catch((err) => {
+				if (settled) return;
+				log.warn(
+					`[subagent] graceful abort failed (agent=${agentConfig.name}): ${err instanceof Error ? err.message : String(err)}; terminating child`,
+				);
+				forceKill();
+			});
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -606,6 +630,7 @@ async function spawnSubagent(
 			for (const request of pendingRpc.values()) request.reject(err);
 			pendingRpc.clear();
 			if (killTimer) clearTimeout(killTimer);
+			if (abortGraceTimer) clearTimeout(abortGraceTimer);
 			signal?.removeEventListener("abort", onAbort);
 			rejectPromise(new Error(`Subagent process error: ${err.message}`));
 		});
@@ -617,6 +642,7 @@ async function spawnSubagent(
 			for (const request of pendingRpc.values()) request.reject(new Error("Subagent process exited."));
 			pendingRpc.clear();
 			if (killTimer) clearTimeout(killTimer);
+			if (abortGraceTimer) clearTimeout(abortGraceTimer);
 			signal?.removeEventListener("abort", onAbort);
 			const exitCode = rpcCompleted ? 0 : (code ?? 1);
 			const stderr = stderrChunks.join("");
@@ -1148,10 +1174,22 @@ const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
  * running-child count even when its tool definitions are rebuilt (e.g. on `/reload`).
  */
 export interface SubagentConcurrencyGate {
-	/** Resolves immediately if a slot is free, otherwise queues until one is released. */
-	acquire(): Promise<void>;
+	/**
+	 * Resolves immediately if a slot is free, otherwise queues until one is released.
+	 * When `signal` aborts before a slot is granted, the waiter is removed and the
+	 * promise rejects without taking a slot (the caller must not `release()`).
+	 */
+	acquire(signal?: AbortSignal): Promise<void>;
 	/** Returns a slot and wakes the next waiter, if any. */
 	release(): void;
+}
+
+/** Thrown by {@link SubagentConcurrencyGate.acquire} when its signal aborts before a slot is granted. */
+export class SubagentSlotWaitAbortedError extends Error {
+	constructor() {
+		super("Cancelled while waiting for a subagent concurrency slot.");
+		this.name = "SubagentSlotWaitAbortedError";
+	}
 }
 
 /**
@@ -1166,16 +1204,25 @@ export function createSubagentConcurrencyGate(maxConcurrent: number): SubagentCo
 	let running = 0;
 	const waiters: Array<() => void> = [];
 	return {
-		acquire(): Promise<void> {
+		acquire(signal?: AbortSignal): Promise<void> {
+			if (signal?.aborted) return Promise.reject(new SubagentSlotWaitAbortedError());
 			if (running < maxConcurrent) {
 				running++;
 				return Promise.resolve();
 			}
-			return new Promise<void>((resolve) => {
-				waiters.push(() => {
+			return new Promise<void>((resolve, reject) => {
+				const grant = () => {
+					signal?.removeEventListener("abort", onAbort);
 					running++;
 					resolve();
-				});
+				};
+				const onAbort = () => {
+					const index = waiters.indexOf(grant);
+					if (index !== -1) waiters.splice(index, 1);
+					reject(new SubagentSlotWaitAbortedError());
+				};
+				waiters.push(grant);
+				signal?.addEventListener("abort", onAbort, { once: true });
 			});
 		},
 		release(): void {
@@ -1667,12 +1714,19 @@ function generateAgentId(): string {
 // Background agent registry — queryable by TUI / Telegram frontends
 // ---------------------------------------------------------------------------
 
+/**
+ * Lifecycle status of a background agent. `cancelled` means the user stopped it
+ * (a single-agent stop or a stop-all such as Esc / the parent stop control) —
+ * distinct from `failed`, which means the child itself errored.
+ */
+export type BackgroundAgentStatus = "running" | "completed" | "failed" | "cancelled";
+
 export interface BackgroundAgentInfo {
 	agentId: string;
 	agentType: string;
 	taskSummary: string;
 	startedAt: number;
-	status: "running" | "completed" | "failed";
+	status: BackgroundAgentStatus;
 	/** Directory containing the agent's session JSONL file (known at spawn time). */
 	sessionDir?: string;
 	/** Path to the agent's session JSONL file (discovered when the child exits). */
@@ -1876,7 +1930,12 @@ function findFirstUserMessageSummary(sessionFile: string): string | undefined {
 	return undefined;
 }
 
-function inferCompletedSessionStatus(sessionFile: string): "completed" | "failed" {
+/**
+ * Infer a finished child's status from the last assistant message in its session log.
+ * `aborted` only occurs when the parent gracefully cancelled the child (user stop), so it
+ * maps to `cancelled`; `error` maps to `failed`.
+ */
+function inferCompletedSessionStatus(sessionFile: string): Exclude<BackgroundAgentStatus, "running"> {
 	const tail = readFileTail(sessionFile, TAIL_READ_BYTES);
 	if (!tail) return "completed";
 
@@ -1888,7 +1947,8 @@ function inferCompletedSessionStatus(sessionFile: string): "completed" | "failed
 		if (entry.message.role !== "assistant") continue;
 
 		const stopReason = entry.message.stopReason;
-		return stopReason === "error" || stopReason === "aborted" ? "failed" : "completed";
+		if (stopReason === "aborted") return "cancelled";
+		return stopReason === "error" ? "failed" : "completed";
 	}
 	return "completed";
 }
@@ -2063,14 +2123,44 @@ export async function getBackgroundAgentPendingSteering(
 	return { steeringMode: state.steeringMode, pending };
 }
 
-/** Abort all running background agents. */
+/**
+ * Mark one registry entry cancelled and abort its controller. The status is set
+ * before aborting so anything reacting synchronously to the abort (and the
+ * lifecycle, which skips status updates once its signal is aborted) observes
+ * `cancelled` rather than `running`. The controller's abort listeners perform the
+ * graceful child shutdown (RPC abort first, then SIGTERM/SIGKILL backstops).
+ */
+function cancelBackgroundAgentEntry(agentId: string, controller: AbortController): void {
+	const entry = backgroundAgentRegistry.get(agentId);
+	if (entry && entry.status === "running") entry.status = "cancelled";
+	backgroundAbortControllers.delete(agentId);
+	backgroundControlClients.delete(agentId);
+	controller.abort();
+}
+
+/**
+ * Cancel exactly one running background agent (user stop). Siblings, the parent
+ * session, and their control channels are untouched. Works for agents that are
+ * executing, queued for a concurrency slot, or between chain steps; a chain is
+ * stopped as a whole. Completion is reported asynchronously through the normal
+ * background-complete path with `cancelled = true`.
+ *
+ * Throws for unknown agents and agents that are no longer running (completed,
+ * failed, cancelled, or rehydrated from disk) — never a silent no-op.
+ */
+export function abortBackgroundAgent(agentId: string): void {
+	const info = backgroundAgentRegistry.get(agentId);
+	if (!info) throw new Error(`Unknown background agent "${agentId}".`);
+	if (info.status !== "running") throw new Error(`Background agent "${agentId}" is no longer running.`);
+	const controller = backgroundAbortControllers.get(agentId);
+	if (!controller) throw new Error(`Background agent "${agentId}" has no abort controller; it cannot be stopped.`);
+	cancelBackgroundAgentEntry(agentId, controller);
+}
+
+/** Cancel all running background agents (Esc / parent stop). */
 export function abortBackgroundAgents(): void {
-	for (const [id, controller] of backgroundAbortControllers) {
-		controller.abort();
-		const entry = backgroundAgentRegistry.get(id);
-		if (entry && entry.status === "running") {
-			entry.status = "failed";
-		}
+	for (const [id, controller] of [...backgroundAbortControllers]) {
+		cancelBackgroundAgentEntry(id, controller);
 	}
 	backgroundAbortControllers.clear();
 	backgroundControlClients.clear();
@@ -2366,7 +2456,7 @@ export function createSubagentToolDefinition(
 	// supplied (external SDK callers, tests) the tool owns a fresh per-instance gate, which
 	// still keeps separately embedded sessions from coupling through module-global state.
 	const concurrencyGate = options?.concurrencyGate ?? createSubagentConcurrencyGate(maxConcurrentSubagents);
-	const acquireBackgroundSlot = (): Promise<void> => concurrencyGate.acquire();
+	const acquireBackgroundSlot = (signal: AbortSignal): Promise<void> => concurrencyGate.acquire(signal);
 	const releaseBackgroundSlot = (): void => concurrencyGate.release();
 
 	// Discover agents at definition time to build the prompt guidelines.
@@ -2525,8 +2615,12 @@ export function createSubagentToolDefinition(
 					};
 
 					const run = async () => {
-						await acquireBackgroundSlot();
+						// A stop while queued for a slot settles immediately (the gate rejects
+						// without taking a slot), so only release a slot this run acquired.
+						let slotAcquired = false;
 						try {
+							await acquireBackgroundSlot(bgSignal);
+							slotAcquired = true;
 							const result = await runFn(bgSignal, onChildEvent, onArbitrationRecord, onControlAvailable);
 							const entry = backgroundAgentRegistry.get(agentId);
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
@@ -2547,7 +2641,7 @@ export function createSubagentToolDefinition(
 							});
 						} finally {
 							backgroundControlClients.delete(agentId);
-							releaseBackgroundSlot();
+							if (slotAcquired) releaseBackgroundSlot();
 						}
 					};
 					run().catch((err) => {

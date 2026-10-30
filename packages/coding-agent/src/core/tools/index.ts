@@ -85,8 +85,10 @@ export {
 	type SkillToolOptions,
 } from "./skill.js";
 export {
+	abortBackgroundAgent,
 	abortBackgroundAgents,
 	type BackgroundAgentInfo,
+	type BackgroundAgentStatus,
 	createSubagentConcurrencyGate,
 	createSubagentTool,
 	createSubagentToolDefinition,
@@ -98,6 +100,7 @@ export {
 	type SubagentArbitrationEvent,
 	type SubagentConcurrencyGate,
 	type SubagentResult,
+	SubagentSlotWaitAbortedError,
 	type SubagentStepMetadata,
 	type SubagentToolDetails,
 	type SubagentToolInput,

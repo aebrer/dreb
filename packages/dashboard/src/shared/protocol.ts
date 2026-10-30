@@ -54,7 +54,8 @@ export interface BackgroundAgentDto {
 	agentType: string;
 	taskSummary: string;
 	startedAt: string;
-	status: "running" | "completed" | "failed";
+	/** `cancelled` = stopped by the user (single-agent stop or stop-all). */
+	status: "running" | "completed" | "failed" | "cancelled";
 	sessionDir?: string;
 	sessionFile?: string;
 	cwd?: string;

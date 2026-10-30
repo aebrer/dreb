@@ -658,6 +658,117 @@ describe("AgentSession background agent guardrails", () => {
 			appendSpy.mockRestore();
 		});
 
+		/** Flatten a message's text parts for assertions. */
+		function messageText(message: object): string {
+			const content = (message as { content?: unknown }).content;
+			if (typeof content === "string") return content;
+			if (!Array.isArray(content)) return "";
+			return content
+				.map((part: { type?: string; text?: string }) => (part.type === "text" ? part.text : ""))
+				.join("");
+		}
+
+		const cancelledResult = (output: string) => ({
+			agent: "worker",
+			task: "test task",
+			exitCode: 0,
+			output,
+			stderr: "",
+			errorMessage: null,
+		});
+
+		it("defers a cancellation notice that arrives mid-run until the parent run ends", async () => {
+			const sessionAny = session as any;
+			let release!: () => void;
+			const released = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			streamResponder = (stream) => {
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				void released.then(() =>
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("parent reply") }),
+				);
+			};
+			const running = session.prompt("parent task");
+			await vi.waitFor(() => expect(agent.state.isStreaming).toBe(true));
+
+			sessionAny._handleBackgroundComplete("bg-stop-1", cancelledResult("first partial"), true);
+			sessionAny._handleBackgroundComplete("bg-stop-2", cancelledResult("second partial"), true);
+
+			// Mid-run: nothing appended to context or the session log, nothing queued as a turn.
+			const stateTexts = () => agent.state.messages.map(messageText);
+			expect(stateTexts().some((text) => text.includes("bg-stop-1"))).toBe(false);
+			expect(steerCalls.length).toBe(0);
+			expect(followUpCalls.length).toBe(0);
+
+			release();
+			await running;
+			await vi.waitFor(() => expect(stateTexts().some((text) => text.includes("bg-stop-2"))).toBe(true));
+
+			// Appended after the run's assistant reply, in arrival order, and persisted the same way.
+			const texts = stateTexts();
+			const replyIndex = texts.findIndex((text) => text.includes("parent reply"));
+			const firstIndex = texts.findIndex((text) => text.includes("bg-stop-1"));
+			const secondIndex = texts.findIndex((text) => text.includes("bg-stop-2"));
+			expect(replyIndex).toBeGreaterThan(-1);
+			expect(firstIndex).toBeGreaterThan(replyIndex);
+			expect(secondIndex).toBe(firstIndex + 1);
+			expect(texts[firstIndex]).toContain("cancelled by the user");
+
+			const persisted = session.sessionManager
+				.getEntries()
+				.filter((entry) => entry.type === "message")
+				.map((entry) => messageText((entry as { message: { content?: unknown } }).message));
+			const persistedReply = persisted.findIndex((text) => text.includes("parent reply"));
+			expect(persisted.findIndex((text) => text.includes("bg-stop-1"))).toBeGreaterThan(persistedReply);
+
+			// Never triggered a response.
+			expect(steerCalls.length).toBe(0);
+			expect(followUpCalls.length).toBe(0);
+			expect(agent.state.isStreaming).toBe(false);
+		});
+
+		it("flushes deferred cancellation notices before a background completion prompts the parent", () => {
+			const sessionAny = session as any;
+			const appendSpy = vi.spyOn(agent, "appendMessage");
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+
+			Object.defineProperty(agent.state, "isStreaming", { value: true, configurable: true });
+			sessionAny._handleBackgroundComplete("bg-cancel", cancelledResult("partial"), true);
+			expect(appendSpy).not.toHaveBeenCalled();
+
+			Object.defineProperty(agent.state, "isStreaming", { value: false, configurable: true });
+			sessionAny._handleBackgroundComplete("bg-done", cancelledResult("finished"), false);
+
+			expect(appendSpy).toHaveBeenCalledTimes(1);
+			expect(messageText(appendSpy.mock.calls[0][0] as { content?: unknown })).toContain("bg-cancel");
+			expect(promptSpy).toHaveBeenCalledTimes(1);
+			expect(appendSpy.mock.invocationCallOrder[0]).toBeLessThan(promptSpy.mock.invocationCallOrder[0]);
+
+			appendSpy.mockRestore();
+			promptSpy.mockRestore();
+		});
+
+		it("emits background_agent_end with cancelled: true and success: false for a user stop", () => {
+			const sessionAny = session as any;
+			const events: Array<Record<string, unknown>> = [];
+			const unsubscribe = session.subscribe((event) => {
+				if (event.type === "background_agent_end") events.push(event as unknown as Record<string, unknown>);
+			});
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+
+			// A gracefully stopped child exits 0, but the stop must still read as cancelled.
+			sessionAny._handleBackgroundComplete("bg-stopped", cancelledResult("partial"), true);
+			sessionAny._handleBackgroundComplete("bg-finished", cancelledResult("done"), false);
+
+			expect(events).toMatchObject([
+				{ agentId: "bg-stopped", cancelled: true, success: false },
+				{ agentId: "bg-finished", cancelled: false, success: true },
+			]);
+			unsubscribe();
+			promptSpy.mockRestore();
+		});
+
 		it("does not reset bgTurnCounter for cancelled bg agents", () => {
 			const sessionAny = session as any;
 			sessionAny._bgTurnCounter = 3;

@@ -188,7 +188,10 @@ export type AgentSessionEvent =
 			type: "background_agent_end";
 			agentId: string;
 			agentType: string;
+			/** True only for a clean, non-cancelled finish (always false when `cancelled`). */
 			success: boolean;
+			/** True when the user stopped the agent (single-agent stop or stop-all). */
+			cancelled: boolean;
 			model?: string;
 			thinking?: ThinkingLevel;
 			steps?: SubagentStepMetadata[];
@@ -361,6 +364,13 @@ export class AgentSession {
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
+
+	/**
+	 * Background-agent cancellation notices that arrived while the parent was streaming.
+	 * Appending them mid-run could land a user message between an assistant tool call and
+	 * its result (in agent state and the session log), so they are held until the run ends.
+	 */
+	private _pendingCancellationNotices: Message[] = [];
 
 	// Extension system
 	private _extensionRunner: ExtensionRunner | undefined = undefined;
@@ -982,13 +992,14 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 		if (cancelled) {
-			// Cancelled by user (Esc) — add to context and render in chat,
-			// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
+			// Cancelled by the user (single-agent stop, Esc, or the parent stop) — add to
+			// context and render in chat, but do NOT trigger a response: the user chose to
+			// stop this work, and waking the parent could relaunch it behind their back.
+			// While the parent is streaming the notice is deferred until the run ends so it
+			// can never split an assistant tool call from its result.
+			this._pendingCancellationNotices.push(message);
 			try {
-				this.agent.appendMessage(message);
-				this.sessionManager.appendMessage(message);
-				this._emit({ type: "message_start", message });
-				this._emit({ type: "message_end", message });
+				this._flushPendingCancellationNotices();
 			} catch (err) {
 				log.warn(
 					`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1004,6 +1015,8 @@ export class AgentSession {
 			if (this.agent.state.isStreaming) {
 				this.agent.steer(message);
 			} else {
+				// Earlier deferred cancellation notices precede this completion in context.
+				this._flushPendingCancellationNotices();
 				// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
 				this.agent.prompt(message).catch((promptErr) => {
 					log.warn(
@@ -1025,7 +1038,8 @@ export class AgentSession {
 				type: "background_agent_end",
 				agentId,
 				agentType: result.agent,
-				success: result.exitCode === 0,
+				success: !cancelled && result.exitCode === 0,
+				cancelled,
 				model: result.model,
 				thinking: result.thinking,
 				steps: result.steps,
@@ -1276,18 +1290,25 @@ export class AgentSession {
 		}
 
 		// Check auto-retry and auto-compaction after agent completes
-		if (event.type === "agent_end" && this._lastAssistantMessage) {
-			const msg = this._lastAssistantMessage;
-			this._lastAssistantMessage = undefined;
+		if (event.type === "agent_end") {
+			if (this._lastAssistantMessage) {
+				const msg = this._lastAssistantMessage;
+				this._lastAssistantMessage = undefined;
 
-			// Check for retryable errors first (overloaded, rate limit, server errors)
-			if (this._isRetryableError(msg)) {
-				const didRetry = await this._handleRetryableError(msg);
-				if (didRetry) return; // Retry was initiated, don't proceed to compaction
+				// Check for retryable errors first (overloaded, rate limit, server errors)
+				if (this._isRetryableError(msg)) {
+					const didRetry = await this._handleRetryableError(msg);
+					// Retry was initiated, don't proceed to compaction; deferred cancellation
+					// notices wait for the retried run's agent_end.
+					if (didRetry) return;
+				}
+
+				this._resolveRetry();
+				await this._checkCompaction(msg);
 			}
-
-			this._resolveRetry();
-			await this._checkCompaction(msg);
+			// The run is over: deliver cancellation notices deferred while it streamed
+			// (stays queued if compaction recovery already restarted the agent).
+			this._flushPendingCancellationNotices();
 		}
 	}
 
@@ -1793,8 +1814,9 @@ export class AgentSession {
 			return;
 		}
 
-		// Flush any pending bash messages before the new prompt
+		// Flush any pending bash messages and cancellation notices before the new prompt
 		this._flushPendingBashMessages();
+		this._flushPendingCancellationNotices();
 
 		// Validate model
 		if (!this.model) {
@@ -2226,6 +2248,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
+		this._pendingCancellationNotices = [];
 
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel);
 
@@ -3807,6 +3830,22 @@ export class AgentSession {
 	}
 
 	/**
+	 * Append deferred background-agent cancellation notices to agent state and the session
+	 * log, in arrival order, and render them. No-op while the parent is streaming (they stay
+	 * queued for the end of the run). Never triggers a response.
+	 */
+	private _flushPendingCancellationNotices(): void {
+		if (this.agent.state.isStreaming) return;
+		while (this._pendingCancellationNotices.length > 0) {
+			const message = this._pendingCancellationNotices.shift()!;
+			this.agent.appendMessage(message);
+			this.sessionManager.appendMessage(message);
+			this._emit({ type: "message_start", message });
+			this._emit({ type: "message_end", message });
+		}
+	}
+
+	/**
 	 * Flush pending bash messages to agent state and session.
 	 * Called after agent turn completes to maintain proper message ordering.
 	 */
@@ -3869,6 +3908,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
+		this._pendingCancellationNotices = [];
 		this._dispatchArbiter.clearContext();
 
 		// Set new session
@@ -4025,6 +4065,7 @@ export class AgentSession {
 
 		// Clear pending messages (bound to old session state)
 		this._pendingNextTurnMessages = [];
+		this._pendingCancellationNotices = [];
 
 		branch(previousSessionFile);
 		this.agent.sessionId = this.sessionManager.getSessionId();

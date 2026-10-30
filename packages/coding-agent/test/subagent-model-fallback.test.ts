@@ -24,6 +24,8 @@ import {
 	resolveModelForSubagentSpawn,
 	resolveModelStringSingle,
 	resolveModelWithFallbacks,
+	SUBAGENT_ABORT_GRACE_MS,
+	SUBAGENT_SIGKILL_BACKSTOP_MS,
 	type SubagentResult,
 	setSubagentRpcFullMessageUpdates,
 	subagentToolDefinition,
@@ -635,7 +637,19 @@ function makeAgents(model: string | string[]): Map<string, AgentTypeConfig> {
 	]);
 }
 
-function mockControlledSubagent(options: { promptBehavior?: "reject" | "late-error" } = {}) {
+function mockControlledSubagent(
+	options: {
+		promptBehavior?: "reject" | "late-error";
+		/**
+		 * How the child reacts to an RPC `abort`: "end" emits an aborted assistant message
+		 * and agent_end before acknowledging (a well-behaved child); "reject" answers with a
+		 * failure; "exit" closes without answering; default acknowledges without ending.
+		 */
+		abortBehavior?: "end" | "reject" | "exit";
+		/** Ignore SIGTERM so only SIGKILL closes the process. */
+		ignoreSigterm?: boolean;
+	} = {},
+) {
 	const stdin = new PassThrough();
 	const stdout = new PassThrough();
 	const stderr = new PassThrough();
@@ -650,13 +664,20 @@ function mockControlledSubagent(options: { promptBehavior?: "reject" | "late-err
 	proc.stdout = stdout;
 	proc.stderr = stderr;
 	proc.killed = false;
+	(proc as { exitCode: number | null }).exitCode = null;
+	(proc as { signalCode: NodeJS.Signals | null }).signalCode = null;
 	let closed = false;
-	proc.kill = vi.fn(() => {
+	const close = (signal: NodeJS.Signals | null) => {
+		if (closed) return;
+		closed = true;
+		(proc as { signalCode: NodeJS.Signals | null }).signalCode = signal;
+		process.nextTick(() => proc.emit("close", null));
+	};
+	proc.kill = vi.fn((signal?: NodeJS.Signals | number) => {
 		proc.killed = true;
-		if (!closed) {
-			closed = true;
-			process.nextTick(() => proc.emit("close", null));
-		}
+		const name = (signal ?? "SIGTERM") as NodeJS.Signals;
+		if (options.ignoreSigterm && name === "SIGTERM") return true;
+		close(name);
 		return true;
 	}) as ReturnType<typeof spawn>["kill"];
 
@@ -669,6 +690,29 @@ function mockControlledSubagent(options: { promptBehavior?: "reject" | "late-err
 			buffered = buffered.slice(newline + 1);
 			commands.push(command);
 			process.nextTick(() => {
+				if (command.type === "abort" && options.abortBehavior === "exit") {
+					close(null);
+					return;
+				}
+				if (command.type === "abort" && options.abortBehavior === "reject") {
+					stdout.write(
+						`${JSON.stringify({ type: "response", id: command.id, command: "abort", success: false, error: "abort refused" })}\n`,
+					);
+					return;
+				}
+				if (command.type === "abort" && options.abortBehavior === "end") {
+					stdout.write(
+						`${JSON.stringify({
+							type: "message_end",
+							message: {
+								role: "assistant",
+								content: [{ type: "text", text: "partial work" }],
+								stopReason: "aborted",
+							},
+						})}\n`,
+					);
+					stdout.write(`${JSON.stringify({ type: "agent_end" })}\n`);
+				}
 				if (command.type === "prompt" && options.promptBehavior === "reject") {
 					stdout.write(
 						`${JSON.stringify({
@@ -1018,6 +1062,124 @@ describe("controlled subagent RPC lifecycle", () => {
 		});
 		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
 		expect(controls.at(-1)).toBeUndefined();
+	});
+
+	/** Start a controlled child under `signal`, wait for its initial prompt, and return its result promise. */
+	async function startControlled(child: ReturnType<typeof mockControlledSubagent>, signal: AbortSignal) {
+		const resultPromise = executeSingle(
+			makeAgents("controlled-model"),
+			"test-agent",
+			"Long-running task",
+			process.cwd(),
+			signal,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => {},
+		);
+		await vi.waitFor(() => expect(child.commands[0]).toMatchObject({ type: "prompt" }));
+		// Wrapped so awaiting this helper does not also await the child's completion.
+		return { resultPromise };
+	}
+
+	/** Let queued nextTick/immediate work (stream reads, mock replies) run without touching fake timers. */
+	async function settleIo(): Promise<void> {
+		for (let i = 0; i < 10; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+
+	test("abort is graceful: sends an RPC abort before any kill, then terminates after the child's agent_end", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "end" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+
+		controller.abort();
+		// No signal is sent synchronously: the child must first abort its own run so its
+		// tools (e.g. a detached bash process group) are torn down.
+		expect(child.proc.kill).not.toHaveBeenCalled();
+		await vi.waitFor(() => expect(child.commands.some((command) => command.type === "abort")).toBe(true));
+
+		const result = await resultPromise;
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+		expect(result).toMatchObject({ exitCode: 0, output: "partial work" });
+	});
+
+	test("abort escalates to SIGTERM after the grace period, then SIGKILL while the child stays alive", async () => {
+		const child = mockControlledSubagent({ ignoreSigterm: true });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+		controller.abort();
+		await settleIo();
+		expect(child.commands.some((command) => command.type === "abort")).toBe(true);
+		expect(child.proc.kill).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(SUBAGENT_ABORT_GRACE_MS - 1);
+		expect(child.proc.kill).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+
+		vi.advanceTimersByTime(SUBAGENT_SIGKILL_BACKSTOP_MS);
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGKILL");
+		await expect(resultPromise).resolves.toMatchObject({ exitCode: 1 });
+	});
+
+	test("the SIGKILL backstop is skipped once the child has exited", async () => {
+		const child = mockControlledSubagent();
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+		controller.abort();
+		await settleIo();
+		vi.advanceTimersByTime(SUBAGENT_ABORT_GRACE_MS);
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		await resultPromise;
+		vi.advanceTimersByTime(SUBAGENT_SIGKILL_BACKSTOP_MS);
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+	});
+
+	test("abort goes straight to SIGTERM when the control channel is unwritable", async () => {
+		const child = mockControlledSubagent();
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		child.proc.stdin.destroy();
+
+		controller.abort();
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		await resultPromise;
+		expect(child.commands.some((command) => command.type === "abort")).toBe(false);
+	});
+
+	test("a refused graceful abort escalates immediately and is logged", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "reject" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+
+		controller.abort();
+		await vi.waitFor(() => expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM"));
+		await resultPromise;
+		expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("graceful abort failed"));
+	});
+
+	test("a child that exits before answering the abort settles without a warning or unhandled rejection", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "exit" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+
+		controller.abort();
+		await expect(resultPromise).resolves.toMatchObject({ exitCode: 1 });
+		expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("graceful abort failed"));
 	});
 });
 

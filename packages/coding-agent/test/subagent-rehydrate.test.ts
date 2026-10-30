@@ -25,6 +25,7 @@ function writeChildSession(
 	name: string,
 	parentSessionFile: string,
 	task: string,
+	stopReason = "stop",
 ): { childDir: string; sessionFile: string } {
 	const childDir = join(baseDir, name);
 	mkdirSync(childDir, { recursive: true });
@@ -51,7 +52,7 @@ function writeChildSession(
 			id: `${name}-assistant`,
 			parentId: `${name}-user`,
 			timestamp: "2026-01-02T03:05:02.000Z",
-			message: { role: "assistant", content: [{ type: "text", text: "Done" }], stopReason: "stop" },
+			message: { role: "assistant", content: [{ type: "text", text: "Done" }], stopReason },
 		},
 	]);
 	return { childDir, sessionFile };
@@ -195,6 +196,19 @@ describe("rehydrateBackgroundAgentsFromDisk", () => {
 			sessionFile: step1SessionFile,
 			cwd: tempDir,
 		});
+	});
+
+	test("infers status from the child's final stop reason: aborted → cancelled, error → failed", () => {
+		const cancelled = writeChildSession(subagentSessionsBase, "stopped-child", parentSessionFile, "t1", "aborted");
+		const failed = writeChildSession(subagentSessionsBase, "errored-child", parentSessionFile, "t2", "error");
+		const completed = writeChildSession(subagentSessionsBase, "finished-child", parentSessionFile, "t3", "stop");
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(3);
+		const statusFor = (sessionFile: string) =>
+			getBackgroundAgents().find((agent) => agent.sessionFile === sessionFile)?.status;
+		expect(statusFor(cancelled.sessionFile)).toBe("cancelled");
+		expect(statusFor(failed.sessionFile)).toBe("failed");
+		expect(statusFor(completed.sessionFile)).toBe("completed");
 	});
 
 	test("discovers matching sessions from configured and legacy roots in order", () => {
