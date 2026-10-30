@@ -419,15 +419,17 @@ Browser (SolidJS, hash-routed SPA)
   terminates the lazy image-preview worker without requiring access to the
   internally created image service.
 - The visual language is `tokens.css` (`src/client/styles/tokens.css`),
-  the dashboard's design system. Its defaults are unchanged; `themes.css` is
-  an **additive layer** on top that overrides the design tokens only when a
-  curated theme or a forced color mode is active.
+  the dashboard's design system. `themes.css` is an **additive layer** on top
+  that overrides the design tokens only when a curated theme or a forced color
+  mode is active.
 - **Appearance system** (`src/client/state/appearance.ts` + `styles/themes.css`
   + `components/theme-gallery.tsx`) — a dashboard-native theming surface,
   independent of the TUI themes. Eight curated themes (entropist.ca, Dim,
   Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito
   and Paul Tol palettes), each with light and dark palettes, plus a
-  system/light/dark mode.
+  system/light/dark mode. User-message bubbles have a fill that follows the
+  dashboard theme and mode; assistant and tool backgrounds stay unchanged.
+  There is no extra preference or terminal-theme color linkage.
   A settings theme gallery renders live preview cards beside mode and font
   selectors; selections persist per browser in `localStorage` (a pristine
   entropist.ca + system + Theme default install leaves no keys and matches the

@@ -612,6 +612,15 @@ TUI theme system** — dashboard themes intentionally do not map to TUI themes.
   color vision. A separate mode toggle (system / light / dark) picks which
   variant renders; forced light/dark works for every theme, including
   entropist.ca. `system` follows the OS via `prefers-color-scheme`.
+- **User-message backgrounds.** User-message bubbles use the dashboard's
+  `--user-message-bg` color, with a distinct opaque fill for each theme's light
+  and dark palettes. The fill follows the selected theme and mode: forced
+  light/dark overrides the OS, while system mode responds to OS changes without
+  reloading. Normal user-message text meets WCAG AA contrast (at least 4.5:1)
+  on these fills. Only the text bubble is filled; attached images remain outside
+  it, and assistant and tool backgrounds are unchanged. There is no additional
+  preference or custom-color editor, and the terminal theme's `userMessageBg`
+  token does not control this dashboard color.
 - **Theme gallery and font selection.** The settings appearance section shows
   mode and font selectors plus a grid of live preview cards (one per theme).
   Each card previews its palette locally without touching the page until you
@@ -642,8 +651,8 @@ TUI theme system** — dashboard themes intentionally do not map to TUI themes.
 - **Per-browser persistence.** Selections are stored in per-browser
   `localStorage` (`dreb.dashboard.theme`, `dreb.dashboard.colorMode`, and
   `dreb.dashboard.font`), with a cross-tab sync listener; a pristine install
-  (entropist.ca + system + Theme default font) leaves no keys behind and renders
-  byte-for-byte identically to the `tokens.css` baseline. No server/RPC
+  (entropist.ca + system + Theme default font) leaves no keys behind and matches
+  the current `tokens.css` baseline, including user-message fills. No server/RPC
   involvement, no runtime dependencies.
 - **No wrong-appearance flash.** A synchronous bootstrap in `index.html` paints
   the correct theme, mode, and explicit font before any CSS loads, and keeps a
