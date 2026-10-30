@@ -409,7 +409,9 @@ While the agent is streaming, the send button becomes mode-aware:
 - **steer** — deliver now: injected into the running turn after the current
   tool call completes.
 - **follow-up** — queued; delivered after the agent finishes the current work.
-- **■ stop** — abort the current turn. Only visible while streaming. This also
+- **■ stop** — abort the current turn. Visible whenever something can be
+  stopped: while the agent is streaming or compacting, and while any subagent is
+  still running (including when the parent is paused waiting on them). This also
   stops all running subagents; to stop just one, use the ■ stop in its
   [subagent view](#stopping-a-subagent).
 
