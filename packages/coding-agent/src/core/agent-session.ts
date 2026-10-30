@@ -124,6 +124,7 @@ import {
 	createAllToolDefinitions,
 	createSubagentConcurrencyGate,
 	discoverAgentTypes,
+	formatAgentOutputBlock,
 	getRunningBackgroundAgents,
 	type SessionTask,
 	type SubagentArbitrationEvent,
@@ -188,7 +189,10 @@ export type AgentSessionEvent =
 			type: "background_agent_end";
 			agentId: string;
 			agentType: string;
+			/** True only for a clean, non-cancelled finish (always false when `cancelled`). */
 			success: boolean;
+			/** True when the user stopped the agent (single-agent stop or stop-all). */
+			cancelled: boolean;
 			model?: string;
 			thinking?: ThinkingLevel;
 			steps?: SubagentStepMetadata[];
@@ -332,6 +336,11 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _agentEventQueue: Promise<void> = Promise.resolve();
+	/**
+	 * Agent events queued on `_agentEventQueue` that haven't finished processing yet.
+	 * Persistence happens there, so the session log lags agent state until this is 0.
+	 */
+	private _agentEventsInFlight = 0;
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
 	private _steeringMessages: Array<{ text: string; images?: ImageContent[] }> = [];
@@ -361,6 +370,15 @@ export class AgentSession {
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
+
+	/**
+	 * Background-agent cancellation notices that arrived while the parent was busy (see
+	 * `_canDeliverCancellationNotices`). Appending them then could land a user message
+	 * between an assistant tool call and its result, or ahead of messages not yet persisted.
+	 * They are held until the parent is idle again, or are persisted to their session before
+	 * it is replaced.
+	 */
+	private _pendingCancellationNotices: Message[] = [];
 
 	// Extension system
 	private _extensionRunner: ExtensionRunner | undefined = undefined;
@@ -954,11 +972,19 @@ export class AgentSession {
 		if (cancelled) {
 			parts.push("This agent was cancelled by the user.");
 		}
-		if (!cancelled && (result.exitCode !== 0 || result.errorMessage)) {
+		const failed = !cancelled && (result.exitCode !== 0 || !!result.errorMessage);
+		if (failed) {
 			parts.push(`Error: ${result.errorMessage || "unknown"}`);
 		}
+		if (result.notes && result.notes.length > 0) {
+			parts.push(...result.notes);
+		}
 		if (result.output) {
-			parts.push(result.output);
+			// The agent's own words are delimited from the system lines around them. A chain's
+			// output is already a per-step report with each step's output delimited
+			// (formatSingleResult), so it is not wrapped again.
+			const isChain = result.steps !== undefined;
+			parts.push(isChain ? result.output : formatAgentOutputBlock(result.output, cancelled || failed));
 		}
 		if (result.sessionFile) {
 			parts.push(`Session log: ${result.sessionFile}`);
@@ -982,13 +1008,15 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 		if (cancelled) {
-			// Cancelled by user (Esc) — add to context and render in chat,
-			// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
+			// Cancelled by the user (single-agent stop, Esc, or the parent stop) — add to
+			// context and render in chat, but do NOT trigger a response: the user chose to
+			// stop this work, and waking the parent could relaunch it behind their back.
+			// While the parent is busy (streaming, still persisting the run, retrying, or
+			// compacting) the notice is deferred, so it can never split an assistant tool call
+			// from its result.
+			this._pendingCancellationNotices.push(message);
 			try {
-				this.agent.appendMessage(message);
-				this.sessionManager.appendMessage(message);
-				this._emit({ type: "message_start", message });
-				this._emit({ type: "message_end", message });
+				this._flushPendingCancellationNotices();
 			} catch (err) {
 				log.warn(
 					`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1004,6 +1032,8 @@ export class AgentSession {
 			if (this.agent.state.isStreaming) {
 				this.agent.steer(message);
 			} else {
+				// Earlier deferred cancellation notices precede this completion in context.
+				this._flushPendingCancellationNotices();
 				// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
 				this.agent.prompt(message).catch((promptErr) => {
 					log.warn(
@@ -1025,7 +1055,8 @@ export class AgentSession {
 				type: "background_agent_end",
 				agentId,
 				agentType: result.agent,
-				success: result.exitCode === 0,
+				success: !cancelled && result.exitCode === 0,
+				cancelled,
 				model: result.model,
 				thinking: result.thinking,
 				steps: result.steps,
@@ -1061,6 +1092,7 @@ export class AgentSession {
 		// and waitForRetry() can miss the in-flight retry.
 		this._createRetryPromiseForAgentEnd(event);
 
+		this._agentEventsInFlight++;
 		this._agentEventQueue = this._agentEventQueue.then(
 			() => this._processAgentEvent(event),
 			() => {
@@ -1177,117 +1209,134 @@ export class AgentSession {
 	}
 
 	private async _processAgentEvent(event: AgentEvent): Promise<void> {
-		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
-		// This ensures the UI sees the updated queue state
-		if (event.type === "message_start" && event.message.role === "user") {
-			this._overflowRecoveryAttempted = false;
-			const messageText = this._getUserMessageText(event.message);
-			if (messageText) {
-				// Check steering queue first
-				const steeringIndex = this._steeringMessages.findIndex((message) => message.text === messageText);
-				if (steeringIndex !== -1) {
-					this._steeringMessages.splice(steeringIndex, 1);
-				} else {
-					// Check follow-up queue
-					const followUpIndex = this._followUpMessages.findIndex((message) => message.text === messageText);
-					if (followUpIndex !== -1) {
-						this._followUpMessages.splice(followUpIndex, 1);
+		// The finally runs inline: an extra async wrapper here would add microtask hops to every
+		// queued event and delay event delivery relative to prompt() resolution.
+		try {
+			// When a user message starts, check if it's from either queue and remove it BEFORE emitting
+			// This ensures the UI sees the updated queue state
+			if (event.type === "message_start" && event.message.role === "user") {
+				this._overflowRecoveryAttempted = false;
+				const messageText = this._getUserMessageText(event.message);
+				if (messageText) {
+					// Check steering queue first
+					const steeringIndex = this._steeringMessages.findIndex((message) => message.text === messageText);
+					if (steeringIndex !== -1) {
+						this._steeringMessages.splice(steeringIndex, 1);
+					} else {
+						// Check follow-up queue
+						const followUpIndex = this._followUpMessages.findIndex((message) => message.text === messageText);
+						if (followUpIndex !== -1) {
+							this._followUpMessages.splice(followUpIndex, 1);
+						}
 					}
 				}
 			}
-		}
 
-		// Emit to extensions first
-		await this._emitExtensionEvent(event);
+			// Emit to extensions first
+			await this._emitExtensionEvent(event);
 
-		// Notify all listeners
-		this._emit(event);
+			// Notify all listeners
+			this._emit(event);
 
-		// Keep a small, mode-independent rolling context for the headless arbiter.
-		if (event.type === "message_end") {
-			this._dispatchArbiter.onMessageEnd(event.message);
-		} else if (event.type === "tool_execution_end") {
-			this._dispatchArbiter.onToolEnd({
-				toolName: event.toolName,
-				isError: event.isError,
-				result: event.result,
-			});
-		}
-
-		// Handle session persistence
-		if (event.type === "message_end") {
-			// Check if this is a custom message from extensions
-			if (event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-				);
-			} else if (
-				event.message.role === "user" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult"
-			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+			// Keep a small, mode-independent rolling context for the headless arbiter.
+			if (event.type === "message_end") {
+				this._dispatchArbiter.onMessageEnd(event.message);
+			} else if (event.type === "tool_execution_end") {
+				this._dispatchArbiter.onToolEnd({
+					toolName: event.toolName,
+					isError: event.isError,
+					result: event.result,
+				});
 			}
-			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			// Track assistant message for auto-compaction (checked on agent_end)
-			if (event.message.role === "assistant") {
-				this._lastAssistantMessage = event.message;
-
-				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "error") {
-					this._overflowRecoveryAttempted = false;
-				}
-
-				// Reset retry counter immediately on successful assistant response
-				// This prevents accumulation across multiple LLM calls within a turn
-				if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
-					this._emit({
-						type: "auto_retry_end",
-						success: true,
-						attempt: this._retryAttempt,
-					});
-					this._retryAttempt = 0;
-				}
-
-				const durationMs = assistantMsg.durationMs ?? 0;
-				if (
-					assistantMsg.stopReason !== "error" &&
-					assistantMsg.stopReason !== "aborted" &&
-					assistantMsg.usage.output > 0 &&
-					durationMs >= MIN_PERFORMANCE_DURATION_MS
+			// Handle session persistence
+			if (event.type === "message_end") {
+				// Check if this is a custom message from extensions
+				if (event.message.role === "custom") {
+					// Persist as CustomMessageEntry
+					this.sessionManager.appendCustomMessageEntry(
+						event.message.customType,
+						event.message.content,
+						event.message.display,
+						event.message.details,
+					);
+				} else if (
+					event.message.role === "user" ||
+					event.message.role === "assistant" ||
+					event.message.role === "toolResult"
 				) {
-					this.performanceTracker.record({
-						timestamp: new Date().toISOString(),
-						sessionId: this.sessionId,
-						provider: assistantMsg.provider,
-						modelId: assistantMsg.model,
-						outputTokens: assistantMsg.usage.output,
-						durationMs,
-						tps: (assistantMsg.usage.output * 1000) / durationMs,
-					});
+					// Regular LLM message - persist as SessionMessageEntry
+					this.sessionManager.appendMessage(event.message);
+				}
+				// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
+
+				// Track assistant message for auto-compaction (checked on agent_end)
+				if (event.message.role === "assistant") {
+					this._lastAssistantMessage = event.message;
+
+					const assistantMsg = event.message as AssistantMessage;
+					if (assistantMsg.stopReason !== "error") {
+						this._overflowRecoveryAttempted = false;
+					}
+
+					// Reset retry counter immediately on successful assistant response
+					// This prevents accumulation across multiple LLM calls within a turn
+					if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
+						this._emit({
+							type: "auto_retry_end",
+							success: true,
+							attempt: this._retryAttempt,
+						});
+						this._retryAttempt = 0;
+					}
+
+					const durationMs = assistantMsg.durationMs ?? 0;
+					if (
+						assistantMsg.stopReason !== "error" &&
+						assistantMsg.stopReason !== "aborted" &&
+						assistantMsg.usage.output > 0 &&
+						durationMs >= MIN_PERFORMANCE_DURATION_MS
+					) {
+						this.performanceTracker.record({
+							timestamp: new Date().toISOString(),
+							sessionId: this.sessionId,
+							provider: assistantMsg.provider,
+							modelId: assistantMsg.model,
+							outputTokens: assistantMsg.usage.output,
+							durationMs,
+							tps: (assistantMsg.usage.output * 1000) / durationMs,
+						});
+					}
 				}
 			}
-		}
 
-		// Check auto-retry and auto-compaction after agent completes
-		if (event.type === "agent_end" && this._lastAssistantMessage) {
-			const msg = this._lastAssistantMessage;
-			this._lastAssistantMessage = undefined;
+			// Check auto-retry and auto-compaction after agent completes
+			if (event.type === "agent_end") {
+				if (this._lastAssistantMessage) {
+					const msg = this._lastAssistantMessage;
+					this._lastAssistantMessage = undefined;
 
-			// Check for retryable errors first (overloaded, rate limit, server errors)
-			if (this._isRetryableError(msg)) {
-				const didRetry = await this._handleRetryableError(msg);
-				if (didRetry) return; // Retry was initiated, don't proceed to compaction
+					// Check for retryable errors first (overloaded, rate limit, server errors)
+					if (this._isRetryableError(msg)) {
+						const didRetry = await this._handleRetryableError(msg);
+						// Retry was initiated, don't proceed to compaction. Deferred cancellation
+						// notices stay held while the retry is pending (isRetrying) and are delivered
+						// after the retried run's agent_end.
+						if (didRetry) return;
+					}
+
+					this._resolveRetry();
+					await this._checkCompaction(msg);
+				}
+				// Deferred cancellation notices are delivered in the finally below once this
+				// agent_end has finished processing (after any retry decision or compaction above).
 			}
-
-			this._resolveRetry();
-			await this._checkCompaction(msg);
+		} finally {
+			this._agentEventsInFlight--;
+			// This event is handled and persisted. If the parent is now idle, deliver cancellation
+			// notices deferred while it was busy. After a run's final agent_end, that places them
+			// after everything the run persisted.
+			this._flushPendingCancellationNotices();
 		}
 	}
 
@@ -1793,8 +1842,9 @@ export class AgentSession {
 			return;
 		}
 
-		// Flush any pending bash messages before the new prompt
+		// Flush any pending bash messages and cancellation notices before the new prompt
 		this._flushPendingBashMessages();
+		this._flushPendingCancellationNotices();
 
 		// Validate model
 		if (!this.model) {
@@ -2219,6 +2269,7 @@ export class AgentSession {
 
 		this._disconnectFromAgent();
 		await this.abort();
+		await this._persistPendingCancellationNoticesBeforeSessionChange();
 		this.agent.reset();
 		this._dispatchArbiter.clearContext();
 		this.sessionManager.newSession({ parentSession: options?.parentSession, cwd: this.cwd });
@@ -2639,6 +2690,9 @@ export class AgentSession {
 		} finally {
 			this._compactionAbortController = undefined;
 			this._reconnectToAgent();
+			// Cancellation notices that arrived while compacting were held back; deliver them
+			// now that the compacted context is in place.
+			this._flushPendingCancellationNotices();
 		}
 	}
 
@@ -3807,6 +3861,62 @@ export class AgentSession {
 	}
 
 	/**
+	 * Whether deferred cancellation notices can be appended now without landing inside
+	 * work that is still changing the transcript. Not while the agent streams, while
+	 * earlier agent events are still being processed or persisted (the session log would
+	 * get the notice ahead of them), while an auto-retry is pending (its backoff or the
+	 * retried run), or while compaction or branch summarization runs.
+	 */
+	private _canDeliverCancellationNotices(): boolean {
+		return !this.agent.state.isStreaming && this._agentEventsInFlight === 0 && !this.isRetrying && !this.isCompacting;
+	}
+
+	/**
+	 * Append deferred background-agent cancellation notices to agent state and the session
+	 * log, in arrival order, and render them, if the parent is idle (see
+	 * `_canDeliverCancellationNotices`). Otherwise they stay queued. They are retried after
+	 * each processed agent event (`_processAgentEvent`), before the next prompt, and after manual compaction or
+	 * branch navigation. Never triggers a response.
+	 */
+	private _flushPendingCancellationNotices(): void {
+		if (this._pendingCancellationNotices.length === 0 || !this._canDeliverCancellationNotices()) return;
+		this._appendPendingCancellationNotices();
+	}
+
+	private _appendPendingCancellationNotices(): void {
+		while (this._pendingCancellationNotices.length > 0) {
+			const message = this._pendingCancellationNotices.shift()!;
+			this.agent.appendMessage(message);
+			this.sessionManager.appendMessage(message);
+			this._emit({ type: "message_start", message });
+			this._emit({ type: "message_end", message });
+		}
+	}
+
+	/**
+	 * Persist cancellation notices still deferred for the current session before it is replaced
+	 * (new session, resume/switch, fork). The run they wait on will never end in this
+	 * session, so they are written now instead of being dropped. First every event that session
+	 * already produced is processed, so the notices land after the last message it persisted.
+	 *
+	 * Callers that abort the run first (new session, switch) get a normal append to agent state
+	 * and the log. A fork keeps the run going, so if it is still streaming the notices are only
+	 * written to the outgoing session's log. Live context is rebuilt from the fork, and must
+	 * not get a user message between a tool call and its result.
+	 */
+	private async _persistPendingCancellationNoticesBeforeSessionChange(): Promise<void> {
+		if (this._pendingCancellationNotices.length === 0) return;
+		await this._agentEventQueue.catch(() => undefined);
+		if (this.agent.state.isStreaming) {
+			for (const message of this._pendingCancellationNotices.splice(0)) {
+				this.sessionManager.appendMessage(message);
+			}
+			return;
+		}
+		this._appendPendingCancellationNotices();
+	}
+
+	/**
 	 * Flush pending bash messages to agent state and session.
 	 * Called after agent turn completes to maintain proper message ordering.
 	 */
@@ -3866,6 +3976,7 @@ export class AgentSession {
 
 		this._disconnectFromAgent();
 		await this.abort();
+		await this._persistPendingCancellationNoticesBeforeSessionChange();
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
@@ -4022,6 +4133,9 @@ export class AgentSession {
 			}
 			skipConversationRestore = result?.skipConversationRestore ?? false;
 		}
+
+		// Cancellation notices belong to the outgoing session: persist them there.
+		await this._persistPendingCancellationNoticesBeforeSessionChange();
 
 		// Clear pending messages (bound to old session state)
 		this._pendingNextTurnMessages = [];
@@ -4278,6 +4392,8 @@ export class AgentSession {
 			return { editorText, cancelled: false, summaryEntry };
 		} finally {
 			this._branchSummaryAbortController = undefined;
+			// Deliver cancellation notices held back while the branch summary was generated.
+			this._flushPendingCancellationNotices();
 		}
 	}
 

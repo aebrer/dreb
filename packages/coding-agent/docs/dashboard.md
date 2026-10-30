@@ -140,7 +140,7 @@ networking window above.
 |---|---|
 | **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Live cards keep a deterministic order by project path, then session start time; needs-attention cards badge the browser tab without jumping around. Below the grid: past sessions grouped by their historical project, three compact rows per group with an "all N on disk" expander, resume and delete. Sessions remain visible when that historical directory is missing; resume opens an explicit runtime-directory chooser instead of mutating or hiding the session. |
 | **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, a shared dismissible banner region for model fallback, extension notices, retry/compaction/paused/provider status, and local action results, a controls-only dock line with elapsed time plus ■ stop and explicitly labelled retry/compaction aborts, a persistent session-header live indicator, and an info bar with cwd, original-session provenance when a historical session is resumed in a different runtime directory, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, a TUI-parity latest-100 median TPS indicator (`~31 tok/s [100] · 10% ↑ median [10000]`), and a stats popover. A fleet sidebar lists every other live session beside the transcript with the fleet cards' project, status/reasons, activity/latest-assistant preview, running/done subagent summaries, task progress, model, context, cost, message count, last activity, and any original-session provenance, deterministically ordered by project path then session start time (the fleet page's comparator), so needs-attention/error entries are emphasized — a filled attention chip or outlined error chip plus an entry border — without moving position; clicking an entry navigates to that session, desktop collapse and pointer/keyboard-resizable width persist browser-locally (default expanded, 260px), the hidden toggle border reflects the highest-priority other-session status, and neither sidebar nor toggle renders when no other live sessions exist. The subagent drill-in shows the same sidebar with its parent session excluded. Closed-session banners offer direct resume when the captured runtime directory still exists and an explicit directory chooser when the historical directory is missing or should be replaced. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. Registered built-in slash commands are discovered generically, deduplicated ahead of colliding resource commands, and intercepted before prompting: dashboard actions cover settings, model, scoped-models, export/import, name/session stats, fork/tree, new/compact/dream, resume/reload, and quit. `/scoped-models` deep-links to the Settings editor with the session's current cwd as project context; login/logout show an explicit not-yet-implemented notice, while copy/hotkeys/buddy give terminal-only guidance. Future built-ins are intercepted automatically. The RPC prompt boundary rejects any built-in that reaches it during command-loading races or failures, so slash text cannot leak to the model. Attachments are retained and the command is visibly rejected rather than silently discarded. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications for the viewed session render in its banner region; other sessions' and app-global notices use the fixed top-center toast stack. |
-| **Subagent view** | Transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. While the child is running, a composer sends the user's text unchanged to that specific child as steering input, displays its pending steering queue, and reports its effective `one-at-a-time` or `all` delivery mode. Completed, failed, rehydrated, and unavailable children remain read-only. |
+| **Subagent view** | Transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. While the child is running, a composer sends the user's text unchanged to that specific child as steering input, displays its pending steering queue, and reports its effective `one-at-a-time` or `all` delivery mode, and the dock shows a **■ stop** (styled like the session view's) that stops only that child — see [Stopping a subagent](#stopping-a-subagent). Completed, failed, cancelled, rehydrated, and unavailable children remain read-only. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
 | **Memories** | Dreb-only memory management for `~/.dreb/memory` and `.dreb/memory` under active/disk project roots. It lists existing `MEMORY.md` indexes and direct child `.md` entries only (no Claude paths, create, or rename), shows entry frontmatter or metadata errors so malformed files can be repaired, renders sanitized Markdown preview beside a raw editor, and uses exact SHA-256 revisions so stale saves/deletes return conflicts while preserving drafts. The index view is complete, not truncated, and warns when it exceeds the 200-line memory-index convention. Entry deletion requires both entry and index revisions, removes only matching safe Markdown-link index lines (`file.md` / `./file.md`), writes the cleaned index atomically before unlinking the entry, and rolls back loudly if the unlink fails. |
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, opt-in continuation of pending work after successful automatic compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The continuation option is off by default, can keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. The tab-title card exposes the default-enabled generator toggle and an exact authenticated `provider/model` picker; an unset model clearly retains Explore-agent routing, a pinned model can be cleared back to that route, and edits apply to new unnamed sessions. The scoped-models editor controls model cycling for new sessions only: grouped search, model/provider/all toggles, responsive controls, accessible up/down partial-scope ordering, and save/reset. An absent `enabledModels` is future-inclusive all models in registry order and cannot be reordered; a partial scope is a non-empty ordered list of canonical `provider/model` references. Editing legacy glob, fuzzy, or thinking-suffix values saves normalized exact references. The selected context reads effective global + project settings but writes global; a project-level `enabledModels` shadow is warned. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions, including **Max concurrent subagents** (default 4). Setting it to 0 starts new parents without the subagent tool and tells the parent model to perform normally delegated work itself; positive values cap running children per parent session. Context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards plus system/light/dark mode and a font picker with 36 explicit choices plus Theme default (the existing IBM Plex Mono/JetBrains Mono/Fira Code/Iosevka/OpenDyslexic/Atkinson Hyperlegible plus 15 sans-serif and 15 serif families), regular-face previews in the open listbox, saved per browser. Shows the current rotating pairing code on the host/local dashboard, the 1–3650 day lifetime used only for future pairings (180-day default), and paired-device expiry dates with unpair. |
@@ -409,7 +409,11 @@ While the agent is streaming, the send button becomes mode-aware:
 - **steer** — deliver now: injected into the running turn after the current
   tool call completes.
 - **follow-up** — queued; delivered after the agent finishes the current work.
-- **■ stop** — abort the current turn. Only visible while streaming.
+- **■ stop** — abort the current turn. Visible whenever something can be
+  stopped: while the agent is streaming or compacting, and while any subagent is
+  still running (including when the parent is paused waiting on them). This also
+  stops all running subagents; to stop just one, use the ■ stop in its
+  [subagent view](#stopping-a-subagent).
 
 When the agent is idle, send is a plain prompt.
 
@@ -531,6 +535,45 @@ Background subagents are first-class:
   `background_agent_event` relay (see [RPC events](rpc.md#event-types)) and
   hydrates from the agent's on-disk session log on mount, so transcripts
   survive browser reloads and remain viewable after the agent finishes.
+- Each agent reports `running`, `completed`, `failed` (the child errored), or
+  `cancelled` (stopped by the user). The session panel marks cancelled agents
+  with `■` (failed ones keep `✕`) and the drill-in header chip reads
+  `cancelled`.
+
+### Stopping a subagent
+
+While a child is running — streaming, executing a tool, waiting for a
+concurrency slot, or between chain steps — the drill-in dock shows a
+**■ stop** button. It calls
+[`abort_background_agent`](rpc.md#abort_background_agent) for that one child:
+
+- Only that subagent stops. The parent session's run and queue, and every other
+  subagent (including its steering), keep running. The parent session's own
+  ■ stop (and Esc in the TUI) still stops everything.
+- The child is stopped gracefully: it aborts its own run first, so a hung tool
+  such as a long bash command is killed with its process group instead of being
+  orphaned, then it is terminated (SIGTERM, with a SIGKILL backstop). A child
+  stopped while it is still starting up is aborted as soon as its run begins,
+  before it can run any tool.
+- A queued child settles immediately without taking a concurrency slot. A chain
+  is stopped as a whole; no later step starts.
+- The parent receives a "cancelled by the user" notice in its context. Any
+  partial output sits between `--- agent output (partial) ---` and
+  `--- end of agent output ---` lines, apart from the notice's own lines. The
+  parent is **not** woken — nothing relaunches work you just
+  stopped. If the stopped agent was the last one running, the parent stays idle
+  until you prompt it. While the parent is busy (mid-run, retrying, or
+  compacting) the notice waits until it is idle again, so it never lands between
+  a tool call and its result. If you switch, start, or fork a session first, the
+  notice is still saved to the session it belongs to.
+- The stop is recorded in the agent's session directory, so it still shows as
+  cancelled after a reload or runtime restart. This includes a chain stopped
+  between steps, and an agent stopped while queued (which then has an empty
+  transcript).
+- Steering messages still queued in the stopped child are discarded with it.
+- While the stop is in flight the button reads `stopping…` and steering is
+  disabled; the view turns read-only when the cancellation arrives. A failed
+  stop request is shown in the view and the button re-enables for a retry.
 
 ## Responsive behavior
 
@@ -743,7 +786,7 @@ persistence and licensing handling; it remains separate from this catalog.
 ## Limitations (deliberate, sequenced later)
 
 - No shell passthrough from the browser.
-- Completed, failed, rehydrated, and otherwise unavailable subagent transcripts are read-only; only a live controllable child accepts steering.
+- Completed, failed, cancelled, rehydrated, and otherwise unavailable subagent transcripts are read-only; only a live controllable child accepts steering, and only a running child can be stopped.
 
 ## Background service / auto-restart
 

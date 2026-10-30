@@ -196,6 +196,7 @@ export function makeFakeClient() {
 		prompt: vi.fn(async () => {}),
 		steer: vi.fn(async () => {}),
 		followUp: vi.fn(async () => {}),
+		abortBackgroundAgent: vi.fn(async (_agentId: string) => {}),
 		abortCompaction: vi.fn(async () => {}),
 		abortRetry: vi.fn(async () => {}),
 		emit: (event: Record<string, unknown>) => emitter.emit("event", event),
@@ -903,6 +904,19 @@ describe("RuntimePool", () => {
 		clients[0].emit({ type: "background_agent_end", agentId: "bg1", success: true, sessionFile: "/s/bg1.jsonl" });
 		expect(handle.backgroundAgents.get("bg1")?.status).toBe("completed");
 		expect(handle.backgroundAgents.get("bg1")?.sessionFile).toBe("/s/bg1.jsonl");
+	});
+
+	it("records a user-stopped background agent as cancelled, not failed", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		clients[0].emit({ type: "background_agent_start", agentId: "stopped", agentType: "Explore", taskSummary: "t" });
+		clients[0].emit({ type: "background_agent_start", agentId: "crashed", agentType: "Explore", taskSummary: "t" });
+
+		clients[0].emit({ type: "background_agent_end", agentId: "stopped", success: false, cancelled: true });
+		clients[0].emit({ type: "background_agent_end", agentId: "crashed", success: false, cancelled: false });
+
+		expect(handle.backgroundAgents.get("stopped")?.status).toBe("cancelled");
+		expect(handle.backgroundAgents.get("crashed")?.status).toBe("failed");
 	});
 
 	it("projects failed arbitration records without replacing the requested identity", async () => {

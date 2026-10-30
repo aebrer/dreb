@@ -56,6 +56,7 @@ import { TabTitleGenerator } from "../../core/tab-title.js";
 import { validateThinkingLevelForModel } from "../../core/thinking.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
 import {
+	abortBackgroundAgent,
 	type BackgroundAgentInfo,
 	discoverAgentTypes,
 	getBackgroundAgentPendingSteering,
@@ -2389,6 +2390,13 @@ export async function runRpcMode(
 					"get_background_agent_pending",
 					await getBackgroundAgentPendingSteering(command.agentId),
 				);
+			}
+
+			case "abort_background_agent": {
+				// Cancels only the selected child; the parent run and siblings are untouched.
+				// Completion arrives later as background_agent_end with cancelled: true.
+				abortBackgroundAgent(command.agentId);
+				return success(id, "abort_background_agent");
 			}
 
 			case "list_agent_types": {

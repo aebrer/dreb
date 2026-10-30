@@ -61,6 +61,7 @@ vi.mock("../../src/client/api.js", () => ({
 			pending: { steering: [], followUp: [] },
 		})),
 		steerSubagent: vi.fn(async () => ({ ok: true })),
+		abortSubagent: vi.fn(async () => ({ ok: true })),
 		models: vi.fn(async () => ({ models: [] })),
 		settingsModels: vi.fn(async () => ({ models: [] })),
 		agentTypes: vi.fn(async () => ({ agentTypes: [] })),
@@ -3390,6 +3391,189 @@ describe("screen smoke tests", () => {
 
 		(chips[0] as HTMLButtonElement).click();
 		expect(navigate).toHaveBeenCalledWith({ screen: "subagent", key: "k-submany", agentId: "bg6" });
+	});
+
+	/** A session whose `bg-live` child is running (and not streaming) plus a fake store around it. */
+	function liveSubagentStore(key: string) {
+		const store = makeStore() as any;
+		const session = populatedSession(key);
+		applySessionEvent(session, {
+			type: "background_agent_start",
+			agentId: "bg-live",
+			agentType: "Explore",
+			taskSummary: "scan things",
+		});
+		return {
+			session,
+			fakeStore: { ...store, sessions: { [key]: session }, fleet: () => ({ runtimes: [], diskSessions: [] }) },
+		};
+	}
+
+	function subagentStopButton(el: HTMLElement): HTMLButtonElement | undefined {
+		return [...el.querySelectorAll(".dock .status-line button")].find((button) =>
+			/■ stop|stopping…/.test(button.textContent ?? ""),
+		) as HTMLButtonElement | undefined;
+	}
+
+	it("subagent drill-in shows ■ stop for a running child even when it is not streaming", async () => {
+		const { session, fakeStore } = liveSubagentStore("k-stop-visible");
+		expect(session.subagents["bg-live"]?.streaming).toBeFalsy();
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-stop-visible" agentId="bg-live" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const stop = subagentStopButton(el);
+		expect(stop).toBeDefined();
+		expect(stop?.textContent).toBe("■ stop");
+		// Same style as the session view's controls-dock stop.
+		expect(stop?.className).toContain("btn-small");
+		expect(stop?.className).toContain("btn-danger");
+		expect(el.textContent).not.toContain("● working");
+	});
+
+	it("subagent drill-in shows ■ stop alongside ● working while the child is streaming", async () => {
+		const { session, fakeStore } = liveSubagentStore("k-stop-streaming");
+		applySessionEvent(session, {
+			type: "background_agent_event",
+			agentId: "bg-live",
+			event: { type: "agent_start" },
+		});
+		expect(session.subagents["bg-live"]?.streaming).toBe(true);
+		vi.mocked(api.abortSubagent).mockClear();
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-stop-streaming" agentId="bg-live" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(el.querySelector(".dock .status-line .working")?.textContent).toBe("● working");
+		const stop = subagentStopButton(el);
+		expect(stop?.textContent).toBe("■ stop");
+		expect(stop?.disabled).toBe(false);
+		stop!.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.abortSubagent).toHaveBeenCalledWith("k-stop-streaming", "bg-live");
+	});
+
+	it("subagent ■ stop stops only that child and locks steering while the stop is in flight", async () => {
+		const { fakeStore } = liveSubagentStore("k-stop-one");
+		vi.mocked(api.abortSubagent).mockClear();
+		vi.mocked(api.abort).mockClear();
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-stop-one" agentId="bg-live" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		subagentStopButton(el)!.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(api.abortSubagent).toHaveBeenCalledTimes(1);
+		expect(api.abortSubagent).toHaveBeenCalledWith("k-stop-one", "bg-live");
+		expect(api.abort).not.toHaveBeenCalled();
+		const stop = subagentStopButton(el)!;
+		expect(stop.textContent).toBe("stopping…");
+		expect(stop.disabled).toBe(true);
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).disabled).toBe(true);
+		expect((el.querySelector("button.send") as HTMLButtonElement).disabled).toBe(true);
+
+		// A second click while stopping does not issue another request.
+		stop.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.abortSubagent).toHaveBeenCalledTimes(1);
+	});
+
+	it("subagent stop failures stay visible and the button re-enables for a retry", async () => {
+		const { fakeStore } = liveSubagentStore("k-stop-fail");
+		vi.mocked(api.abortSubagent).mockClear();
+		vi.mocked(api.abortSubagent).mockRejectedValueOnce(new Error("runtime unreachable"));
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-stop-fail" agentId="bg-live" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		subagentStopButton(el)!.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(el.querySelector(".pair-error")?.textContent).toContain("runtime unreachable");
+		const stop = subagentStopButton(el)!;
+		expect(stop.textContent).toBe("■ stop");
+		expect(stop.disabled).toBe(false);
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).disabled).toBe(false);
+
+		stop.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.abortSubagent).toHaveBeenCalledTimes(2);
+		expect(el.querySelector(".pair-error")).toBeNull();
+	});
+
+	it("subagent ■ stop is hidden for completed, failed, cancelled, and closed children", () => {
+		const cases: Array<{ key: string; end?: Record<string, unknown>; closed?: boolean; note: string }> = [
+			{ key: "k-done", end: { success: true, cancelled: false }, note: "no longer running" },
+			{ key: "k-failed", end: { success: false, cancelled: false }, note: "no longer running" },
+			{ key: "k-cancelled", end: { success: false, cancelled: true }, note: "This subagent was stopped" },
+			{ key: "k-closed", closed: true, note: "This session is closed" },
+		];
+		for (const testCase of cases) {
+			const { session, fakeStore } = liveSubagentStore(testCase.key);
+			if (testCase.end) {
+				applySessionEvent(session, {
+					type: "background_agent_end",
+					agentId: "bg-live",
+					agentType: "Explore",
+					...testCase.end,
+				});
+			}
+			if (testCase.closed) session.closed = { cwd: "/repo", sessionFile: "/sessions/closed.jsonl" };
+			const el = mount(() => <SubagentScreen store={fakeStore} sessionKey={testCase.key} agentId="bg-live" />);
+			expect(subagentStopButton(el), testCase.key).toBeUndefined();
+			expect(el.textContent, testCase.key).toContain(testCase.note);
+		}
+	});
+
+	it("a cancelled subagent shows a cancelled status chip, not an error", () => {
+		const { session, fakeStore } = liveSubagentStore("k-cancel-chip");
+		applySessionEvent(session, {
+			type: "background_agent_end",
+			agentId: "bg-live",
+			agentType: "Explore",
+			success: false,
+			cancelled: true,
+		});
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-cancel-chip" agentId="bg-live" />);
+		const chip = el.querySelector(".session-header-actions .chip");
+		expect(chip?.textContent).toContain("cancelled");
+		expect(chip?.className).toContain("chip-idle");
+		expect(chip?.className).not.toContain("chip-error");
+	});
+
+	it("the session subagent panel marks cancelled agents distinctly from failed ones", () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-panel-cancel");
+		for (const agentId of ["bg-failed", "bg-cancelled"]) {
+			applySessionEvent(session, {
+				type: "background_agent_start",
+				agentId,
+				agentType: "Explore",
+				taskSummary: agentId,
+			});
+		}
+		applySessionEvent(session, {
+			type: "background_agent_end",
+			agentId: "bg-failed",
+			success: false,
+			cancelled: false,
+		});
+		applySessionEvent(session, {
+			type: "background_agent_end",
+			agentId: "bg-cancelled",
+			success: false,
+			cancelled: true,
+		});
+		const fakeStore = {
+			...store,
+			sessions: { "k-panel-cancel": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-panel-cancel" />);
+		const chips = [...el.querySelectorAll(".subagent-list .agent-chip")];
+		const glyphFor = (agentId: string) =>
+			chips.find((chip) => chip.textContent?.includes(agentId))?.querySelector("span")?.textContent;
+		expect(glyphFor("bg-failed")).toBe("✕");
+		expect(glyphFor("bg-cancelled")).toBe("■");
+		expect(el.textContent).toContain("subagents — 0 running · 2 done");
 	});
 
 	it("subagent drill-in renders completed transcripts read-only", () => {

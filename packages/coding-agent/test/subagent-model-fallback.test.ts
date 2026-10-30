@@ -19,11 +19,12 @@ import {
 	formatSingleResult,
 	isRuntimeUnavailableError,
 	parseAgentFrontmatter,
-	prependModelFallbackSummary,
 	probeModelAvailability,
 	resolveModelForSubagentSpawn,
 	resolveModelStringSingle,
 	resolveModelWithFallbacks,
+	SUBAGENT_ABORT_GRACE_MS,
+	SUBAGENT_SIGKILL_BACKSTOP_MS,
 	type SubagentResult,
 	setSubagentRpcFullMessageUpdates,
 	subagentToolDefinition,
@@ -635,7 +636,19 @@ function makeAgents(model: string | string[]): Map<string, AgentTypeConfig> {
 	]);
 }
 
-function mockControlledSubagent(options: { promptBehavior?: "reject" | "late-error" } = {}) {
+function mockControlledSubagent(
+	options: {
+		promptBehavior?: "reject" | "late-error";
+		/**
+		 * How the child reacts to an RPC `abort`: "end" emits an aborted assistant message
+		 * and agent_end before acknowledging (a well-behaved child); "reject" answers with a
+		 * failure; "exit" closes without answering; default acknowledges without ending.
+		 */
+		abortBehavior?: "end" | "reject" | "exit";
+		/** Ignore SIGTERM so only SIGKILL closes the process. */
+		ignoreSigterm?: boolean;
+	} = {},
+) {
 	const stdin = new PassThrough();
 	const stdout = new PassThrough();
 	const stderr = new PassThrough();
@@ -650,13 +663,20 @@ function mockControlledSubagent(options: { promptBehavior?: "reject" | "late-err
 	proc.stdout = stdout;
 	proc.stderr = stderr;
 	proc.killed = false;
+	(proc as { exitCode: number | null }).exitCode = null;
+	(proc as { signalCode: NodeJS.Signals | null }).signalCode = null;
 	let closed = false;
-	proc.kill = vi.fn(() => {
+	const close = (signal: NodeJS.Signals | null) => {
+		if (closed) return;
+		closed = true;
+		(proc as { signalCode: NodeJS.Signals | null }).signalCode = signal;
+		process.nextTick(() => proc.emit("close", null));
+	};
+	proc.kill = vi.fn((signal?: NodeJS.Signals | number) => {
 		proc.killed = true;
-		if (!closed) {
-			closed = true;
-			process.nextTick(() => proc.emit("close", null));
-		}
+		const name = (signal ?? "SIGTERM") as NodeJS.Signals;
+		if (options.ignoreSigterm && name === "SIGTERM") return true;
+		close(name);
 		return true;
 	}) as ReturnType<typeof spawn>["kill"];
 
@@ -669,6 +689,29 @@ function mockControlledSubagent(options: { promptBehavior?: "reject" | "late-err
 			buffered = buffered.slice(newline + 1);
 			commands.push(command);
 			process.nextTick(() => {
+				if (command.type === "abort" && options.abortBehavior === "exit") {
+					close(null);
+					return;
+				}
+				if (command.type === "abort" && options.abortBehavior === "reject") {
+					stdout.write(
+						`${JSON.stringify({ type: "response", id: command.id, command: "abort", success: false, error: "abort refused" })}\n`,
+					);
+					return;
+				}
+				if (command.type === "abort" && options.abortBehavior === "end") {
+					stdout.write(
+						`${JSON.stringify({
+							type: "message_end",
+							message: {
+								role: "assistant",
+								content: [{ type: "text", text: "partial work" }],
+								stopReason: "aborted",
+							},
+						})}\n`,
+					);
+					stdout.write(`${JSON.stringify({ type: "agent_end" })}\n`);
+				}
 				if (command.type === "prompt" && options.promptBehavior === "reject") {
 					stdout.write(
 						`${JSON.stringify({
@@ -1019,6 +1062,175 @@ describe("controlled subagent RPC lifecycle", () => {
 		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
 		expect(controls.at(-1)).toBeUndefined();
 	});
+
+	/** Start a controlled child under `signal`, wait for its initial prompt, and return its result promise. */
+	async function startControlled(child: ReturnType<typeof mockControlledSubagent>, signal: AbortSignal) {
+		const resultPromise = executeSingle(
+			makeAgents("controlled-model"),
+			"test-agent",
+			"Long-running task",
+			process.cwd(),
+			signal,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => {},
+		);
+		await vi.waitFor(() => expect(child.commands[0]).toMatchObject({ type: "prompt" }));
+		// Wrapped so awaiting this helper does not also await the child's completion.
+		return { resultPromise };
+	}
+
+	/** Let queued nextTick/immediate work (stream reads, mock replies) run without touching fake timers. */
+	async function settleIo(): Promise<void> {
+		for (let i = 0; i < 10; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+
+	test("abort is graceful: sends an RPC abort before any kill, then terminates after the child's agent_end", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "end" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+
+		controller.abort();
+		// No signal is sent synchronously: the child must first abort its own run so its
+		// tools (e.g. a detached bash process group) are torn down.
+		expect(child.proc.kill).not.toHaveBeenCalled();
+		await vi.waitFor(() => expect(child.commands.some((command) => command.type === "abort")).toBe(true));
+
+		const result = await resultPromise;
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+		expect(result).toMatchObject({ exitCode: 0, output: "partial work" });
+	});
+
+	test("abort escalates to SIGTERM after the grace period, then SIGKILL while the child stays alive", async () => {
+		const child = mockControlledSubagent({ ignoreSigterm: true });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+		controller.abort();
+		await settleIo();
+		expect(child.commands.some((command) => command.type === "abort")).toBe(true);
+		expect(child.proc.kill).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(SUBAGENT_ABORT_GRACE_MS - 1);
+		expect(child.proc.kill).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+
+		vi.advanceTimersByTime(SUBAGENT_SIGKILL_BACKSTOP_MS);
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGKILL");
+		await expect(resultPromise).resolves.toMatchObject({ exitCode: 1 });
+	});
+
+	test("the SIGKILL backstop is skipped once the child has exited", async () => {
+		const child = mockControlledSubagent();
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+		controller.abort();
+		await settleIo();
+		vi.advanceTimersByTime(SUBAGENT_ABORT_GRACE_MS);
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		await resultPromise;
+		vi.advanceTimersByTime(SUBAGENT_SIGKILL_BACKSTOP_MS);
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+	});
+
+	test("abort goes straight to SIGTERM when the control channel is unwritable", async () => {
+		const child = mockControlledSubagent();
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		child.proc.stdin.destroy();
+
+		controller.abort();
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		await resultPromise;
+		expect(child.commands.some((command) => command.type === "abort")).toBe(false);
+	});
+
+	test("a refused graceful abort escalates immediately and is logged", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "reject" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+
+		controller.abort();
+		await vi.waitFor(() => expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM"));
+		await resultPromise;
+		expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("graceful abort failed"));
+	});
+
+	test("a child that exits before answering the abort settles without a warning or unhandled rejection", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "exit" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+
+		controller.abort();
+		await expect(resultPromise).resolves.toMatchObject({ exitCode: 1 });
+		expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("graceful abort failed"));
+	});
+
+	test("a stop handled before the child's run started is re-sent when the run starts, not left to the grace timer", async () => {
+		// Default abort behavior: the child acknowledges without ending anything, which is what a
+		// real child does when the abort lands while its prompt is still in the pre-run preamble.
+		const child = mockControlledSubagent();
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		const aborts = () => child.commands.filter((command) => command.type === "abort").length;
+
+		controller.abort();
+		await vi.waitFor(() => expect(aborts()).toBe(1));
+		await settleIo();
+		expect(aborts()).toBe(1);
+
+		// The prompt's run starts only now; it must be aborted before it can run tools.
+		child.proc.stdout.write(`${JSON.stringify({ type: "agent_start" })}\n`);
+		await vi.waitFor(() => expect(aborts()).toBe(2));
+		expect(child.proc.kill).not.toHaveBeenCalled();
+
+		child.proc.stdout.write(
+			`${JSON.stringify({
+				type: "message_end",
+				message: { role: "assistant", content: [{ type: "text", text: "stopped early" }], stopReason: "aborted" },
+			})}\n`,
+		);
+		child.proc.stdout.write(`${JSON.stringify({ type: "agent_end" })}\n`);
+		const result = await resultPromise;
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+		expect(result).toMatchObject({ exitCode: 0, output: "stopped early" });
+	});
+
+	test("a run that was already going when stopped gets a single abort", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "end" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		child.proc.stdout.write(`${JSON.stringify({ type: "agent_start" })}\n`);
+		await settleIo();
+
+		controller.abort();
+		await resultPromise;
+		expect(child.commands.filter((command) => command.type === "abort")).toHaveLength(1);
+	});
+
+	test("agent_start without a stop never sends an abort", async () => {
+		const child = mockControlledSubagent();
+		const { resultPromise } = await startControlled(child, new AbortController().signal);
+		child.finish("normal output");
+		await expect(resultPromise).resolves.toMatchObject({ exitCode: 0, output: "normal output" });
+		expect(child.commands.some((command) => command.type === "abort")).toBe(false);
+	});
 });
 
 describe("spawn-time model availability probing", () => {
@@ -1328,20 +1540,16 @@ describe("spawn-time model availability probing", () => {
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
-	test("fallback summary formatting and prepending are visible in output", () => {
+	test("fallback summary formatting", () => {
 		const skipped = [{ model: "primary-model", reason: "429 rate limit" }];
 
 		expect(formatModelFallbackSummary([], "fallback-model")).toBeUndefined();
 		expect(formatModelFallbackSummary(skipped, "fallback-model")).toBe(
 			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit',
 		);
-		expect(prependModelFallbackSummary("child output", skipped, "fallback-model")).toBe(
-			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit\n\nchild output',
-		);
 		expect(formatModelFallbackSummary(skipped, "proposal-model", "final-model")).toBe(
 			'[MODEL FALLBACK: skipped 1 unavailable model(s); proposal resolved to "proposal-model" before arbitration selected "final-model".]\n- primary-model: 429 rate limit',
 		);
-		expect(prependModelFallbackSummary("child output", [], "fallback-model")).toBe("child output");
 	});
 
 	test("executeSingle prepends warning before fallback summary when parent model is used", async () => {
@@ -1366,13 +1574,14 @@ describe("spawn-time model availability probing", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.model).toBe("parent-model");
-		expect(result.output).toBe(
-			'[WARNING: Agent preferred models were unavailable. Falling back to parent model "parent-model".]\n\n' +
-				'[MODEL FALLBACK: skipped 2 unavailable model(s); using "parent-model".]\n' +
+		// Routing diagnostics are system notes (warning first), kept out of the child's own output.
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([
+			'[WARNING: Agent preferred models were unavailable. Falling back to parent model "parent-model".]',
+			'[MODEL FALLBACK: skipped 2 unavailable model(s); using "parent-model".]\n' +
 				"- primary-model: primary quota exhausted\n" +
-				"- fallback-model: fallback auth revoked\n\n" +
-				"child output",
-		);
+				"- fallback-model: fallback auth revoked",
+		]);
 		expect(spawn).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(spawn).mock.calls[0][1]).toContain("parent-model");
 	});
@@ -1624,7 +1833,7 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		'The user has enabled "single model mode" in the settings, so the model selection for this subagent ' +
 		`was ignored. Using parent model "${parentProvider}/${parentModel}".`;
 
-	test("modelOverride is ignored — parent model runs and the output carries the warning", async () => {
+	test("modelOverride is ignored — parent model runs and the result carries the warning note", async () => {
 		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
 
 		const result = await executeSingle(
@@ -1655,12 +1864,13 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("override-model");
 		expect(spawnArgs).not.toContain("agent-model");
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 		// No spawn-time availability probing.
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
-	test("agentModels fallback list is ignored — parent model runs and the output carries the warning", async () => {
+	test("agentModels fallback list is ignored — parent model runs and the result carries the warning note", async () => {
 		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
 
 		const result = await executeSingle(
@@ -1690,11 +1900,12 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("override-model");
 		expect(spawnArgs).not.toContain("fallback-model");
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
-	test("agent-definition model is ignored — parent model runs and the output carries the warning", async () => {
+	test("agent-definition model is ignored — parent model runs and the result carries the warning note", async () => {
 		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
 
 		const result = await executeSingle(
@@ -1723,7 +1934,8 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("agent-model");
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 	});
 
 	test("no model spec anywhere — parent model runs without a warning", async () => {
@@ -1754,7 +1966,8 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		expect(result.exitCode).toBe(0);
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain(parentModel);
-		expect(result.output).not.toContain("[WARNING:");
+		expect(result.output).toBe("child output");
+		expect(result.notes).toBeUndefined();
 	});
 
 	test("warning is emitted even when the requested spec equals the parent model", async () => {
@@ -1783,7 +1996,8 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 	});
 
 	test("fails loudly when the parent session's model is unavailable", async () => {
@@ -2310,7 +2524,8 @@ describe("formatSingleResult", () => {
 			output: "partial text",
 		});
 		expect(text).toContain("**Error**: Response truncated at token limit.\n");
-		expect(text).toContain("partial text");
+		// Truncated output did not finish cleanly, so its block is marked partial.
+		expect(text).toContain("--- agent output (partial) ---\n\npartial text\n\n--- end of agent output ---");
 		expect(text).not.toContain("(No output)");
 		// Should NOT use the exit-code error format reserved for non-zero exits.
 		expect(text).not.toContain("**Error** (exit");
@@ -2332,9 +2547,50 @@ describe("formatSingleResult", () => {
 			errorMessage: null,
 			output: "hello",
 		});
-		expect(text).toContain("\nhello");
+		expect(text).toBe("## Agent: explore\n\n--- agent output ---\n\nhello\n\n--- end of agent output ---");
 		expect(text).not.toContain("**Error**");
 		expect(text).not.toContain("(No output)");
+	});
+
+	test("a failed step's output is delimited as partial, after the error and stderr", () => {
+		const text = formatSingleResult({
+			...base,
+			exitCode: 1,
+			stderr: "boom",
+			errorMessage: "Subagent exited with code 1",
+			output: "half done",
+		});
+		const block = "--- agent output (partial) ---\n\nhalf done\n\n--- end of agent output ---";
+		expect(text).toContain(block);
+		expect(text.indexOf("**Error** (exit 1)")).toBeLessThan(text.indexOf(block));
+		expect(text.indexOf("Stderr:\nboom")).toBeLessThan(text.indexOf(block));
+	});
+
+	test("a step stopped by the user is delimited as partial even after a clean exit", () => {
+		const text = formatSingleResult({ ...base, errorMessage: null, output: "started" }, true);
+		expect(text).toContain("--- agent output (partial) ---\n\nstarted\n\n--- end of agent output ---");
+	});
+
+	test("system notes and the session log stay outside the agent output block", () => {
+		const text = formatSingleResult({
+			...base,
+			errorMessage: null,
+			output: "hello",
+			notes: ["[WARNING: model ignored]", "[MODEL FALLBACK: skipped 1]\n- a: down"],
+			sessionFile: "/tmp/step.jsonl",
+		});
+		expect(text).toBe(
+			"## Agent: explore\n\n" +
+				"[WARNING: model ignored]\n\n[MODEL FALLBACK: skipped 1]\n- a: down\n\n" +
+				"--- agent output ---\n\nhello\n\n--- end of agent output ---\n\n" +
+				"Session log: /tmp/step.jsonl",
+		);
+	});
+
+	test("no agent output block is rendered without output", () => {
+		const text = formatSingleResult({ ...base, exitCode: 1, errorMessage: "Aborted before spawn", output: "" }, true);
+		expect(text).not.toContain("--- agent output");
+		expect(text).toContain("**Error** (exit 1): Aborted before spawn");
 	});
 
 	test("renders effective model and thinking metadata", () => {
@@ -2668,8 +2924,8 @@ describe("subagent tool singleModelMode wiring (issue 517)", () => {
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("config/feature-model");
-		expect(result.output).toContain(warningText);
-		expect(result.output).not.toContain("[MODEL FALLBACK");
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([warningText]);
 		// Registry-less parent resolution skips probing entirely.
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
@@ -2692,7 +2948,8 @@ describe("subagent tool singleModelMode wiring (issue 517)", () => {
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain("config/feature-model");
 		expect(spawnArgs).not.toContain(parentModel);
-		expect(result.output).not.toContain("[WARNING:");
+		expect(result.output).toBe("child output");
+		expect(result.notes).toBeUndefined();
 	});
 
 	test("chain: the setting is re-read per step, so a flipped value applies from the next step", async () => {
@@ -2737,6 +2994,9 @@ describe("subagent tool singleModelMode wiring (issue 517)", () => {
 		const [step1Section, step2Section] = result.output.split("### Step 2");
 		expect(step1Section).not.toContain("[WARNING:");
 		expect(step2Section).toContain(warningText);
+		// The warning is a system note: rendered before, and outside, the step's output block.
+		expect(step2Section.indexOf(warningText)).toBeLessThan(step2Section.indexOf("--- agent output ---"));
+		expect(step2Section).toContain("--- agent output ---\n\nstep 2 output\n\n--- end of agent output ---");
 	});
 
 	test("parallel tasks: each task re-reads the setting and runs on the parent model", async () => {

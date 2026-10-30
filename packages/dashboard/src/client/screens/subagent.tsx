@@ -40,6 +40,8 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	const [composerText, setComposerText] = createSignal("");
 	const [sending, setSending] = createSignal(false);
 	const [steerError, setSteerError] = createSignal<string>();
+	const [stopping, setStopping] = createSignal(false);
+	const [stopError, setStopError] = createSignal<string>();
 	const [steeringMode, setSteeringMode] = createSignal<"all" | "one-at-a-time">();
 	const [pending, setPending] = createSignal<PendingMessagesDto>({ steering: [], followUp: [] });
 	const [showClosedResumeModal, setShowClosedResumeModal] = createSignal(false);
@@ -133,7 +135,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 
 	async function sendSteer(): Promise<void> {
 		const message = composerText();
-		if (!message.trim() || sending() || !isRunning()) return;
+		if (!message.trim() || sending() || stopping() || !isRunning()) return;
 		setSending(true);
 		setSteerError(undefined);
 		try {
@@ -144,6 +146,21 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 			if (!closed()) setSteerError(err instanceof Error ? err.message : String(err));
 		} finally {
 			setSending(false);
+		}
+	}
+
+	// Stop only this subagent. On success "stopping…" stays until the child's
+	// background_agent_end (cancelled) arrives and the view turns read-only; on
+	// failure the reason is shown and the button re-enables for a retry.
+	async function stop(): Promise<void> {
+		if (stopping() || !isRunning()) return;
+		setStopping(true);
+		setStopError(undefined);
+		try {
+			await api.abortSubagent(props.sessionKey, props.agentId);
+		} catch (err) {
+			if (!disposed && !closed()) setStopError(err instanceof Error ? err.message : String(err));
+			setStopping(false);
 		}
 	}
 
@@ -298,9 +315,22 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 
 					<footer class="dock">
 						<div class="dock-inner">
-							<Show when={sub()?.streaming}>
+							<Show when={sub()?.streaming || isRunning()}>
 								<div class="status-line">
-									<span class="working">● working</span>
+									<Show when={sub()?.streaming}>
+										<span class="working">● working</span>
+									</Show>
+									<Show when={isRunning()}>
+										<button
+											type="button"
+											class="btn btn-small btn-danger"
+											title="Stop only this subagent — the parent session and other subagents keep running"
+											disabled={stopping()}
+											onClick={() => void stop()}
+										>
+											{stopping() ? "stopping…" : "■ stop"}
+										</button>
+									</Show>
 								</div>
 							</Show>
 							<Show
@@ -309,10 +339,15 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 									<div class="readonly-note">
 										{closed()
 											? "This session is closed; the subagent transcript is read-only."
-											: "This subagent is no longer running; its transcript is read-only."}
+											: agent()?.status === "cancelled"
+												? "This subagent was stopped; its transcript is read-only."
+												: "This subagent is no longer running; its transcript is read-only."}
 									</div>
 								}
 							>
+								<Show when={stopError()}>
+									<p class="pair-error">{stopError()}</p>
+								</Show>
 								<Show when={steerError()}>
 									<p class="pair-error">{steerError()}</p>
 								</Show>
@@ -328,7 +363,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 										ref={composerRef}
 										placeholder="Steer this subagent…"
 										value={composerText()}
-										disabled={sending()}
+										disabled={sending() || stopping()}
 										onInput={(event) => {
 											setComposerText(event.currentTarget.value);
 											autoGrowTextarea(event.currentTarget);
@@ -345,7 +380,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 										<button
 											type="button"
 											class="btn btn-primary btn-small send"
-											disabled={sending() || composerText().trim().length === 0}
+											disabled={sending() || stopping() || composerText().trim().length === 0}
 											onClick={() => void sendSteer()}
 										>
 											{sending() ? "sending…" : "steer ↵"}

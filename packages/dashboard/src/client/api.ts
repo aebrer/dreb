@@ -186,6 +186,11 @@ export const api = {
 		),
 	steerSubagent: (key: string, agentId: string, message: string) =>
 		request<{ ok: true }>(`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/steer`, json({ message })),
+	/** Stop exactly this background agent; the parent session and siblings keep running. */
+	abortSubagent: (key: string, agentId: string) =>
+		request<{ ok: true }>(`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/abort`, {
+			method: "POST",
+		}),
 	extensionUiResponse: (key: string, response: Record<string, unknown>) =>
 		request<{ ok: true }>(`/api/runtimes/${key}/extension-ui-response`, json(response)),
 	exportHtmlUrl: (key: string) => `/api/runtimes/${key}/export-html`,

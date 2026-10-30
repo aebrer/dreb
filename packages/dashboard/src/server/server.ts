@@ -842,6 +842,13 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		withRuntime(req, res, (h) => h.client.getBackgroundAgentPending(String(req.params.agentId)));
 	});
 
+	// Stop exactly one background agent (user stop from the subagent drill-in). The
+	// parent run and sibling agents are untouched; completion arrives over SSE as
+	// background_agent_end with cancelled: true.
+	app.post("/api/runtimes/:key/subagents/:agentId/abort", (req, res) => {
+		withRuntime(req, res, (h) => h.client.abortBackgroundAgent(String(req.params.agentId)));
+	});
+
 	app.post("/api/runtimes/:key/subagents/:agentId/steer", (req, res) => {
 		const { message } = req.body ?? {};
 		if (typeof message !== "string" || message.length === 0) {
@@ -1064,7 +1071,11 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 					agent.arbitrations !== undefined &&
 					agent.arbitrations.length > 0 &&
 					agent.arbitrations.every((record) => record.status === "failure");
-				if (!(error instanceof SubagentSessionLogNotFoundError) || !failedBeforeSpawn) throw error;
+				// A user stop while the agent was queued or before it spawned leaves no log.
+				const cancelledWithoutLog = agent.status === "cancelled";
+				if (!(error instanceof SubagentSessionLogNotFoundError) || !(failedBeforeSpawn || cancelledWithoutLog)) {
+					throw error;
+				}
 				messages = [];
 			}
 			return { agent, messages: images.project(messages, { runtimeKey: h.key, agentId }) };

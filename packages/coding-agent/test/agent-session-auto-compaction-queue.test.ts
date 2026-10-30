@@ -93,7 +93,10 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		}
 		return { tokens: 0, usageTokens: 0, trailingTokens: 0, lastUsageIndex: null };
 	},
-	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
+	generateBranchSummary: async () => {
+		if (compactGate.promise) await compactGate.promise;
+		return { summary: "branch summary", aborted: false, readFiles: [], modifiedFiles: [] };
+	},
 	prepareCompaction: (entries: Array<{ id: string }>) => ({ firstKeptEntryId: entries[0]?.id ?? "entry-1" }),
 	shouldCompact: (
 		contextTokens: number,
@@ -101,6 +104,16 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		settings: { enabled: boolean; reserveTokens: number },
 	) => settings.enabled && contextTokens > contextWindow - settings.reserveTokens,
 }));
+
+/** Text of a message's text parts (for locating cancellation notices). */
+function noticeText(message: object | undefined): string {
+	const content = (message as { content?: unknown } | undefined)?.content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part: { type?: string; text?: string }) => (part.type === "text" ? (part.text ?? "") : ""))
+		.join("");
+}
 
 describe("AgentSession auto-compaction queue resume", () => {
 	let session: AgentSession;
@@ -383,6 +396,74 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await vi.advanceTimersByTimeAsync(100);
 
 		expect(continueSpy).not.toHaveBeenCalled();
+	});
+
+	it("holds a cancellation notice that arrives during manual compaction until the compacted context is in place", async () => {
+		seedConversation(createAssistant("stop"));
+		compactGate.hold();
+		const compacting = session.compact();
+		for (let i = 0; i < 10 && compactGate.inFlight === 0; i++) await vi.advanceTimersByTimeAsync(0);
+		expect(compactGate.inFlight).toBe(1);
+		expect(session.isCompacting).toBe(true);
+
+		const isNotice = (message: object | undefined) => noticeText(message).includes("bg-during-compaction");
+		(
+			session as unknown as {
+				_handleBackgroundComplete: (agentId: string, result: Record<string, unknown>, cancelled: boolean) => void;
+			}
+		)._handleBackgroundComplete(
+			"bg-during-compaction",
+			{ agent: "worker", task: "task", exitCode: 0, output: "partial", stderr: "", errorMessage: null },
+			true,
+		);
+		// Not idle: appending now would land before the compaction entry and be discarded from context.
+		expect(session.agent.state.messages.some(isNotice)).toBe(false);
+		expect(sessionManager.getEntries().some((entry) => entry.type === "message" && isNotice(entry.message))).toBe(
+			false,
+		);
+
+		compactGate.release();
+		await compacting;
+
+		const entries = sessionManager.getEntries();
+		const compactionIndex = entries.findIndex((entry) => entry.type === "compaction");
+		const noticeIndex = entries.findIndex((entry) => entry.type === "message" && isNotice(entry.message));
+		expect(compactionIndex).toBeGreaterThan(-1);
+		expect(noticeIndex).toBeGreaterThan(compactionIndex);
+		expect(isNotice(session.agent.state.messages.at(-1))).toBe(true);
+	});
+
+	it("holds a cancellation notice that arrives during a branch summary until navigation finishes", async () => {
+		seedConversation(createAssistant("stop"));
+		const userEntry = sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "message" && entry.message.role === "user");
+		expect(userEntry).toBeDefined();
+		compactGate.hold();
+		const navigating = session.navigateTree(userEntry!.id, { summarize: true });
+		for (let i = 0; i < 10 && !session.isCompacting; i++) await vi.advanceTimersByTimeAsync(0);
+		expect(session.isCompacting).toBe(true);
+
+		const isNotice = (message: object | undefined) => noticeText(message).includes("bg-during-tree");
+		(
+			session as unknown as {
+				_handleBackgroundComplete: (agentId: string, result: Record<string, unknown>, cancelled: boolean) => void;
+			}
+		)._handleBackgroundComplete(
+			"bg-during-tree",
+			{ agent: "worker", task: "task", exitCode: 0, output: "partial", stderr: "", errorMessage: null },
+			true,
+		);
+		expect(session.agent.state.messages.some(isNotice)).toBe(false);
+
+		compactGate.release();
+		await navigating;
+
+		// Delivered on the navigated-to branch, after the branch summary.
+		expect(isNotice(session.agent.state.messages.at(-1))).toBe(true);
+		const branch = sessionManager.getBranch();
+		const last = branch.at(-1);
+		expect(last?.type === "message" && isNotice(last.message)).toBe(true);
 	});
 
 	it("should not continue after manual compaction when enabled", async () => {
