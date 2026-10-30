@@ -3,13 +3,14 @@
  *
  * This is the dashboard's own theming surface. It is deliberately independent of
  * the TUI theme system: the dashboard owns these palettes. Loaded AFTER
- * tokens.css and app.css, it overrides the design tokens (--bg, --text,
- * --border, --muted, the four --status-*, the nine --syntax-*, and --mono-font)
- * when a curated theme, forced color mode, or explicit font is active.
+ * tokens.css and app.css, it overrides the design tokens (--bg,
+ * --user-message-bg, --text, --border, --muted, the four --status-*, the nine
+ * --syntax-*, and --mono-font) when a curated theme, forced color mode, or
+ * explicit font is active.
  *
  * The no-attribute case (default theme + system mode + theme-default font) is
- * intentionally NOT matched here, so a pristine install renders byte-for-byte
- * identically to the tokens.css / app.css baseline.
+ * intentionally NOT matched here, preserving parity with the current
+ * tokens.css / app.css baseline, including its user-message fill.
  *
  * SCOPING: every rule uses bare attribute selectors ([data-theme='…'],
  * [data-color-mode='…'], [data-font='…']) rather than :root-anchored ones, so a
@@ -30,7 +31,8 @@
  * body --text on --bg, --muted on --bg, all four status accents on --bg, and
  * every syntax foreground on --bg. The needs-attention chip is filled
  * (--bg text on the --status-attention fill), whose contrast is symmetric to
- * --status-attention-on-bg, so it clears AA too.
+ * --status-attention-on-bg, so it clears AA too. Body --text also clears AA
+ * on the dedicated --user-message-bg fill in both variants of every theme.
  */
 
 /* ============================================================ fonts */
@@ -227,6 +229,7 @@
 	color-scheme: light;
 
 	--bg: #ffffff;
+	--user-message-bg: #f0f0f0;
 	--text: #000000;
 	--border: #e0e0e0;
 	--muted: #666666;
@@ -251,6 +254,7 @@
 	color-scheme: dark;
 
 	--bg: #000000;
+	--user-message-bg: #1a1a1a;
 	--text: #ffffff;
 	--border: #333333;
 	--muted: #999999;
@@ -287,6 +291,7 @@
 	--mono-font: "IBM Plex Mono", "Courier New", monospace;
 
 	--bg: #ffffff;
+	--user-message-bg: #f0f0f0;
 	--text: #000000;
 	--border: #e0e0e0;
 	--muted: #666666;
@@ -311,6 +316,7 @@
 	color-scheme: dark;
 
 	--bg: #000000;
+	--user-message-bg: #1a1a1a;
 	--text: #ffffff;
 	--border: #333333;
 	--muted: #999999;
@@ -336,6 +342,7 @@
 		color-scheme: dark;
 
 		--bg: #000000;
+		--user-message-bg: #1a1a1a;
 		--text: #ffffff;
 		--border: #333333;
 		--muted: #999999;
@@ -367,6 +374,7 @@
 [data-theme="dim"] {
 	/* dark variant palette */
 	--dim-d-bg: #1e1f22;
+	--dim-d-user-message-bg: #303238;
 	--dim-d-text: #d7d8da;
 	--dim-d-border: #3a3c40;
 	--dim-d-muted: #9a9ea6;
@@ -386,6 +394,7 @@
 
 	/* light variant palette */
 	--dim-l-bg: #f0f0ee;
+	--dim-l-user-message-bg: #dedfdb;
 	--dim-l-text: #33353a;
 	--dim-l-border: #d3d4d1;
 	--dim-l-muted: #5c5f66;
@@ -407,6 +416,7 @@
 	color-scheme: light;
 	--mono-font: "IBM Plex Mono", "Courier New", monospace;
 	--bg: var(--dim-l-bg);
+	--user-message-bg: var(--dim-l-user-message-bg);
 	--text: var(--dim-l-text);
 	--border: var(--dim-l-border);
 	--muted: var(--dim-l-muted);
@@ -429,6 +439,7 @@
 [data-theme="dim"][data-color-mode="dark"] {
 	color-scheme: dark;
 	--bg: var(--dim-d-bg);
+	--user-message-bg: var(--dim-d-user-message-bg);
 	--text: var(--dim-d-text);
 	--border: var(--dim-d-border);
 	--muted: var(--dim-d-muted);
@@ -451,6 +462,7 @@
 	[data-theme="dim"]:not([data-color-mode="light"]) {
 		color-scheme: dark;
 		--bg: var(--dim-d-bg);
+		--user-message-bg: var(--dim-d-user-message-bg);
 		--text: var(--dim-d-text);
 		--border: var(--dim-d-border);
 		--muted: var(--dim-d-muted);
@@ -481,6 +493,7 @@
 [data-theme="solarized"] {
 	/* dark variant palette (base03 bg) */
 	--sol-d-bg: #002b36;
+	--sol-d-user-message-bg: #073642;
 	--sol-d-text: #93a1a1;
 	--sol-d-border: #0a4b5a;
 	--sol-d-muted: #839496;
@@ -500,6 +513,7 @@
 
 	/* light variant palette (base3 bg) */
 	--sol-l-bg: #fdf6e3;
+	--sol-l-user-message-bg: #f3eddb;
 	--sol-l-text: #586e75;
 	--sol-l-border: #e7e0cb;
 	--sol-l-muted: #5b6f76;
@@ -521,6 +535,7 @@
 	color-scheme: light;
 	--mono-font: "IBM Plex Mono", "Courier New", monospace;
 	--bg: var(--sol-l-bg);
+	--user-message-bg: var(--sol-l-user-message-bg);
 	--text: var(--sol-l-text);
 	--border: var(--sol-l-border);
 	--muted: var(--sol-l-muted);
@@ -542,6 +557,7 @@
 [data-theme="solarized"][data-color-mode="dark"] {
 	color-scheme: dark;
 	--bg: var(--sol-d-bg);
+	--user-message-bg: var(--sol-d-user-message-bg);
 	--text: var(--sol-d-text);
 	--border: var(--sol-d-border);
 	--muted: var(--sol-d-muted);
@@ -564,6 +580,7 @@
 	[data-theme="solarized"]:not([data-color-mode="light"]) {
 		color-scheme: dark;
 		--bg: var(--sol-d-bg);
+		--user-message-bg: var(--sol-d-user-message-bg);
 		--text: var(--sol-d-text);
 		--border: var(--sol-d-border);
 		--muted: var(--sol-d-muted);
@@ -593,6 +610,7 @@
 [data-theme="gruvbox"] {
 	/* dark variant palette (bg0 #282828) */
 	--gruv-d-bg: #282828;
+	--gruv-d-user-message-bg: #3c3836;
 	--gruv-d-text: #ebdbb2;
 	--gruv-d-border: #504945;
 	--gruv-d-muted: #a89984;
@@ -612,6 +630,7 @@
 
 	/* light variant palette (bg0 #fbf1c7) */
 	--gruv-l-bg: #fbf1c7;
+	--gruv-l-user-message-bg: #ebdbb2;
 	--gruv-l-text: #3c3836;
 	--gruv-l-border: #e6dcae;
 	--gruv-l-muted: #665c54;
@@ -633,6 +652,7 @@
 	color-scheme: light;
 	--mono-font: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
 	--bg: var(--gruv-l-bg);
+	--user-message-bg: var(--gruv-l-user-message-bg);
 	--text: var(--gruv-l-text);
 	--border: var(--gruv-l-border);
 	--muted: var(--gruv-l-muted);
@@ -654,6 +674,7 @@
 [data-theme="gruvbox"][data-color-mode="dark"] {
 	color-scheme: dark;
 	--bg: var(--gruv-d-bg);
+	--user-message-bg: var(--gruv-d-user-message-bg);
 	--text: var(--gruv-d-text);
 	--border: var(--gruv-d-border);
 	--muted: var(--gruv-d-muted);
@@ -676,6 +697,7 @@
 	[data-theme="gruvbox"]:not([data-color-mode="light"]) {
 		color-scheme: dark;
 		--bg: var(--gruv-d-bg);
+		--user-message-bg: var(--gruv-d-user-message-bg);
 		--text: var(--gruv-d-text);
 		--border: var(--gruv-d-border);
 		--muted: var(--gruv-d-muted);
@@ -708,6 +730,7 @@
 [data-theme="qud"] {
 	/* dark variant palette (viridian bg #0f3b3a) */
 	--qud-d-bg: #0f3b3a;
+	--qud-d-user-message-bg: #1b514d;
 	--qud-d-text: #d7e4de;
 	--qud-d-border: #1f5b57;
 	--qud-d-muted: #8fb3aa;
@@ -727,6 +750,7 @@
 
 	/* light variant palette (pale viridian parchment) */
 	--qud-l-bg: #e8efe9;
+	--qud-l-user-message-bg: #d2e0d6;
 	--qud-l-text: #123b38;
 	--qud-l-border: #cdddd6;
 	--qud-l-muted: #3c655d;
@@ -748,6 +772,7 @@
 	color-scheme: light;
 	--mono-font: "IBM Plex Mono", "Courier New", monospace;
 	--bg: var(--qud-l-bg);
+	--user-message-bg: var(--qud-l-user-message-bg);
 	--text: var(--qud-l-text);
 	--border: var(--qud-l-border);
 	--muted: var(--qud-l-muted);
@@ -769,6 +794,7 @@
 [data-theme="qud"][data-color-mode="dark"] {
 	color-scheme: dark;
 	--bg: var(--qud-d-bg);
+	--user-message-bg: var(--qud-d-user-message-bg);
 	--text: var(--qud-d-text);
 	--border: var(--qud-d-border);
 	--muted: var(--qud-d-muted);
@@ -791,6 +817,7 @@
 	[data-theme="qud"]:not([data-color-mode="light"]) {
 		color-scheme: dark;
 		--bg: var(--qud-d-bg);
+		--user-message-bg: var(--qud-d-user-message-bg);
 		--text: var(--qud-d-text);
 		--border: var(--qud-d-border);
 		--muted: var(--qud-d-muted);
@@ -822,6 +849,7 @@
 [data-theme="vangogh"] {
 	/* dark variant palette (midnight-blue night sky) */
 	--vg-d-bg: #0d1b3d;
+	--vg-d-user-message-bg: #1c315b;
 	--vg-d-text: #f0e6c8;
 	--vg-d-border: #2a3e6a;
 	--vg-d-muted: #aab4d2;
@@ -841,6 +869,7 @@
 
 	/* light variant palette (sunlit wheat parchment) */
 	--vg-l-bg: #f4ecd2;
+	--vg-l-user-message-bg: #e6d9af;
 	--vg-l-text: #1a2a52;
 	--vg-l-border: #e0d4ad;
 	--vg-l-muted: #4a557d;
@@ -862,6 +891,7 @@
 	color-scheme: light;
 	--mono-font: "IBM Plex Mono", "Courier New", monospace;
 	--bg: var(--vg-l-bg);
+	--user-message-bg: var(--vg-l-user-message-bg);
 	--text: var(--vg-l-text);
 	--border: var(--vg-l-border);
 	--muted: var(--vg-l-muted);
@@ -883,6 +913,7 @@
 [data-theme="vangogh"][data-color-mode="dark"] {
 	color-scheme: dark;
 	--bg: var(--vg-d-bg);
+	--user-message-bg: var(--vg-d-user-message-bg);
 	--text: var(--vg-d-text);
 	--border: var(--vg-d-border);
 	--muted: var(--vg-d-muted);
@@ -905,6 +936,7 @@
 	[data-theme="vangogh"]:not([data-color-mode="light"]) {
 		color-scheme: dark;
 		--bg: var(--vg-d-bg);
+		--user-message-bg: var(--vg-d-user-message-bg);
 		--text: var(--vg-d-text);
 		--border: var(--vg-d-border);
 		--muted: var(--vg-d-muted);
@@ -937,6 +969,7 @@
 [data-theme="okabe"] {
 	/* dark variant palette (neutral charcoal) */
 	--okabe-d-bg: #16181d;
+	--okabe-d-user-message-bg: #292d35;
 	--okabe-d-text: #eceef2;
 	--okabe-d-border: #363a42;
 	--okabe-d-muted: #9ba1ab;
@@ -956,6 +989,7 @@
 
 	/* light variant palette (neutral off-white) */
 	--okabe-l-bg: #f6f6f3;
+	--okabe-l-user-message-bg: #e2e4df;
 	--okabe-l-text: #1a1a1a;
 	--okabe-l-border: #dcdcd6;
 	--okabe-l-muted: #565b62;
@@ -977,6 +1011,7 @@
 	color-scheme: light;
 	--mono-font: "IBM Plex Mono", "Courier New", monospace;
 	--bg: var(--okabe-l-bg);
+	--user-message-bg: var(--okabe-l-user-message-bg);
 	--text: var(--okabe-l-text);
 	--border: var(--okabe-l-border);
 	--muted: var(--okabe-l-muted);
@@ -998,6 +1033,7 @@
 [data-theme="okabe"][data-color-mode="dark"] {
 	color-scheme: dark;
 	--bg: var(--okabe-d-bg);
+	--user-message-bg: var(--okabe-d-user-message-bg);
 	--text: var(--okabe-d-text);
 	--border: var(--okabe-d-border);
 	--muted: var(--okabe-d-muted);
@@ -1020,6 +1056,7 @@
 	[data-theme="okabe"]:not([data-color-mode="light"]) {
 		color-scheme: dark;
 		--bg: var(--okabe-d-bg);
+		--user-message-bg: var(--okabe-d-user-message-bg);
 		--text: var(--okabe-d-text);
 		--border: var(--okabe-d-border);
 		--muted: var(--okabe-d-muted);
@@ -1051,6 +1088,7 @@
 [data-theme="tol"] {
 	/* dark variant palette (cool charcoal) */
 	--tol-d-bg: #1b1d21;
+	--tol-d-user-message-bg: #2e333d;
 	--tol-d-text: #e9eaec;
 	--tol-d-border: #363a43;
 	--tol-d-muted: #9a9ea6;
@@ -1070,6 +1108,7 @@
 
 	/* light variant palette (cool off-white) */
 	--tol-l-bg: #f4f4f6;
+	--tol-l-user-message-bg: #e0e2e9;
 	--tol-l-text: #1a1c22;
 	--tol-l-border: #dadae0;
 	--tol-l-muted: #565a62;
@@ -1091,6 +1130,7 @@
 	color-scheme: light;
 	--mono-font: "IBM Plex Mono", "Courier New", monospace;
 	--bg: var(--tol-l-bg);
+	--user-message-bg: var(--tol-l-user-message-bg);
 	--text: var(--tol-l-text);
 	--border: var(--tol-l-border);
 	--muted: var(--tol-l-muted);
@@ -1112,6 +1152,7 @@
 [data-theme="tol"][data-color-mode="dark"] {
 	color-scheme: dark;
 	--bg: var(--tol-d-bg);
+	--user-message-bg: var(--tol-d-user-message-bg);
 	--text: var(--tol-d-text);
 	--border: var(--tol-d-border);
 	--muted: var(--tol-d-muted);
@@ -1134,6 +1175,7 @@
 	[data-theme="tol"]:not([data-color-mode="light"]) {
 		color-scheme: dark;
 		--bg: var(--tol-d-bg);
+		--user-message-bg: var(--tol-d-user-message-bg);
 		--text: var(--tol-d-text);
 		--border: var(--tol-d-border);
 		--muted: var(--tol-d-muted);

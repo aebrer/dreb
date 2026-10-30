@@ -761,6 +761,7 @@ body {
 }
 
 .entry.user .entry-body {
+	background: var(--user-message-bg);
 	border: 1px solid var(--text);
 	border-radius: var(--radius);
 	padding: var(--space-2) var(--space-3);

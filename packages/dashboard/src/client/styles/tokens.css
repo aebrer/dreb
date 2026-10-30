@@ -7,7 +7,8 @@
  *     defaults to self-hosted JetBrains Mono, and the browser-local font picker
  *     can explicitly select either family (see styles/themes.css).
  *   - Pure #000 / #fff, automatic dark mode via prefers-color-scheme.
- *   - ONE neutral gray for secondary text (--muted). No gray ramps.
+ *   - ONE neutral gray for secondary text (--muted). No gray ramps, apart
+ *     from the dedicated user-message fill (--user-message-bg).
  *   - 1px hairline borders are the only separator device. No shadows,
  *     no gradients, no glow, no glassmorphism.
  *   - 3px maximum border radius.
@@ -21,7 +22,7 @@
  * Dark-mode note: this file is the baseline light/dark palette (default theme,
  * following the OS via prefers-color-scheme). The additive styles/themes.css
  * layer builds on it with curated dashboard themes, light/dark/system mode,
- * and explicit font overrides, without changing any token VALUES here.
+ * and explicit font overrides. Its default palette mirrors this baseline.
  * TUI-theme-following CSS variables (getResolvedThemeColors bridge in
  * core/export-html) are deliberately later work.
  */
@@ -31,6 +32,7 @@
 :root {
 	/* color */
 	--bg: #ffffff;
+	--user-message-bg: #f0f0f0;
 	--text: #000000;
 	--border: #e0e0e0;
 	--muted: #666666;
@@ -68,6 +70,7 @@
 @media (prefers-color-scheme: dark) {
 	:root {
 		--bg: #000000;
+		--user-message-bg: #1a1a1a;
 		--text: #ffffff;
 		--border: #333333;
 		--muted: #999999;
