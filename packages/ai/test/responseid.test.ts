@@ -116,7 +116,7 @@ describe("responseId E2E Tests", () => {
 			"OpenAI path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4-nano"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getCopilotTestModel("openai-responses"), githubCopilotToken);
 				await expectResponseId(llm, { apiKey: githubCopilotToken });
 			},
 		);
