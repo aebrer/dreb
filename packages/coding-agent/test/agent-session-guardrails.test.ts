@@ -769,6 +769,287 @@ describe("AgentSession background agent guardrails", () => {
 			promptSpy.mockRestore();
 		});
 
+		/** Persisted message texts of the current session, in log order. */
+		function persistedTexts(): string[] {
+			return session.sessionManager
+				.getEntries()
+				.filter((entry) => entry.type === "message")
+				.map((entry) => messageText((entry as { message: { content?: unknown } }).message));
+		}
+
+		const stateTexts = () => agent.state.messages.map(messageText);
+
+		/** Force the agent's streaming flag without running a turn. */
+		function setStreaming(value: boolean): void {
+			Object.defineProperty(agent.state, "isStreaming", { value, configurable: true });
+		}
+
+		/** Start a parent run whose reply is held until `release()`, and wait until it streams. */
+		async function startHeldRun(reply = "parent reply") {
+			let release!: () => void;
+			const released = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			streamResponder = (stream) => {
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				void released.then(() =>
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage(reply) }),
+				);
+			};
+			const running = session.prompt("parent task");
+			await vi.waitFor(() => expect(agent.state.isStreaming).toBe(true));
+			return { running, release };
+		}
+
+		/** Make `agent.abort()` also finish the held mock stream (the mock ignores the abort signal). */
+		function releaseOnAbort(release: () => void): void {
+			const originalAbort = agent.abort.bind(agent);
+			vi.spyOn(agent, "abort").mockImplementation(() => {
+				originalAbort();
+				release();
+			});
+		}
+
+		it("persists a notice after run events that are still being processed when it arrives", async () => {
+			const sessionAny = session as any;
+			// A slow extension message_end handler keeps the reply unpersisted after the agent
+			// has already emitted agent_end (isStreaming is false at that point).
+			let releaseHandler!: () => void;
+			const handlerReleased = new Promise<void>((resolve) => {
+				releaseHandler = resolve;
+			});
+			const originalEmit = sessionAny._emitExtensionEvent.bind(sessionAny);
+			sessionAny._emitExtensionEvent = async (event: { type: string; message?: { role?: string } }) => {
+				if (event.type === "message_end" && event.message?.role === "assistant") await handlerReleased;
+				await originalEmit(event);
+			};
+			streamResponder = (stream) => {
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("parent reply") });
+			};
+			const running = session.prompt("parent task");
+			await vi.waitFor(() => expect(stateTexts().some((text) => text.includes("parent reply"))).toBe(true));
+			await vi.waitFor(() => expect(agent.state.isStreaming).toBe(false));
+			expect(persistedTexts().some((text) => text.includes("parent reply"))).toBe(false);
+
+			sessionAny._handleBackgroundComplete("bg-race", cancelledResult("partial"), true);
+			expect(stateTexts().some((text) => text.includes("bg-race"))).toBe(false);
+			expect(persistedTexts().some((text) => text.includes("bg-race"))).toBe(false);
+
+			releaseHandler();
+			await running;
+			await vi.waitFor(() => expect(persistedTexts().some((text) => text.includes("bg-race"))).toBe(true));
+
+			const persisted = persistedTexts();
+			expect(persisted.findIndex((text) => text.includes("bg-race"))).toBeGreaterThan(
+				persisted.findIndex((text) => text.includes("parent reply")),
+			);
+			const state = stateTexts();
+			expect(state.findIndex((text) => text.includes("bg-race"))).toBeGreaterThan(
+				state.findIndex((text) => text.includes("parent reply")),
+			);
+		});
+
+		it("holds a notice that arrives during an auto-retry backoff until the retried run ends", async () => {
+			const sessionAny = session as any;
+			session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 2, baseDelayMs: 30 } });
+			let calls = 0;
+			streamResponder = (stream) => {
+				calls++;
+				if (calls === 1) {
+					const failed = createAssistantMessage("", "error");
+					failed.errorMessage = "overloaded_error";
+					stream.push({ type: "start", partial: failed });
+					stream.push({ type: "error", reason: "error", error: failed });
+					return;
+				}
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("retried reply") });
+			};
+			let deliveredDuringBackoff = false;
+			const unsubscribe = session.subscribe((event) => {
+				if (event.type !== "auto_retry_start" || deliveredDuringBackoff) return;
+				deliveredDuringBackoff = true;
+				sessionAny._handleBackgroundComplete("bg-retry", cancelledResult("partial"), true);
+				// The run is not streaming during the backoff, but the notice must wait for the retry.
+				expect(agent.state.isStreaming).toBe(false);
+				expect(stateTexts().some((text) => text.includes("bg-retry"))).toBe(false);
+				expect(persistedTexts().some((text) => text.includes("bg-retry"))).toBe(false);
+			});
+
+			await session.prompt("parent task");
+			await vi.waitFor(() => expect(stateTexts().some((text) => text.includes("bg-retry"))).toBe(true));
+			unsubscribe();
+
+			expect(deliveredDuringBackoff).toBe(true);
+			expect(calls).toBe(2);
+			const state = stateTexts();
+			expect(state.findIndex((text) => text.includes("bg-retry"))).toBeGreaterThan(
+				state.findIndex((text) => text.includes("retried reply")),
+			);
+			const persisted = persistedTexts();
+			expect(persisted.findIndex((text) => text.includes("bg-retry"))).toBeGreaterThan(
+				persisted.findIndex((text) => text.includes("retried reply")),
+			);
+			expect(steerCalls.length).toBe(0);
+			expect(followUpCalls.length).toBe(0);
+		});
+
+		it("holds a notice that arrives while the run's agent_end is compacting, then appends it after", async () => {
+			const sessionAny = session as any;
+			let releaseCompaction!: () => void;
+			const compactionReleased = new Promise<void>((resolve) => {
+				releaseCompaction = resolve;
+			});
+			let compactionStarted = false;
+			vi.spyOn(sessionAny, "_checkCompaction").mockImplementation(async () => {
+				compactionStarted = true;
+				await compactionReleased;
+			});
+			streamResponder = (stream) => {
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("parent reply") });
+			};
+			const running = session.prompt("parent task");
+			await vi.waitFor(() => expect(compactionStarted).toBe(true));
+			expect(agent.state.isStreaming).toBe(false);
+
+			sessionAny._handleBackgroundComplete("bg-compact", cancelledResult("partial"), true);
+			expect(stateTexts().some((text) => text.includes("bg-compact"))).toBe(false);
+			expect(persistedTexts().some((text) => text.includes("bg-compact"))).toBe(false);
+
+			releaseCompaction();
+			await running;
+			await vi.waitFor(() => expect(persistedTexts().some((text) => text.includes("bg-compact"))).toBe(true));
+			expect(stateTexts().at(-1)).toContain("bg-compact");
+		});
+
+		it("flushes a deferred notice before a later user prompt", async () => {
+			const sessionAny = session as any;
+			setStreaming(true);
+			sessionAny._handleBackgroundComplete("bg-before-prompt", cancelledResult("partial"), true);
+			expect(stateTexts().some((text) => text.includes("bg-before-prompt"))).toBe(false);
+			// The run ended without its agent_end delivering the notice (e.g. an abandoned retry).
+			setStreaming(false);
+			expect(stateTexts().some((text) => text.includes("bg-before-prompt"))).toBe(false);
+
+			streamResponder = (stream) => {
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("next reply") });
+			};
+			await session.prompt("next question");
+
+			const state = stateTexts();
+			const noticeIndex = state.findIndex((text) => text.includes("bg-before-prompt"));
+			expect(noticeIndex).toBeGreaterThan(-1);
+			expect(noticeIndex).toBeLessThan(state.findIndex((text) => text.includes("next question")));
+			const persisted = persistedTexts();
+			expect(persisted.findIndex((text) => text.includes("bg-before-prompt"))).toBeLessThan(
+				persisted.findIndex((text) => text.includes("next question")),
+			);
+		});
+
+		it("delivers a deferred notice on an agent_end that carries no assistant message", async () => {
+			const sessionAny = session as any;
+			setStreaming(true);
+			sessionAny._handleBackgroundComplete("bg-bare-end", cancelledResult("partial"), true);
+			setStreaming(false);
+			expect(stateTexts().some((text) => text.includes("bg-bare-end"))).toBe(false);
+
+			sessionAny._handleAgentEvent({ type: "agent_end", messages: [] });
+			await sessionAny._agentEventQueue;
+
+			expect(stateTexts().at(-1)).toContain("bg-bare-end");
+			expect(persistedTexts().at(-1)).toContain("bg-bare-end");
+		});
+
+		it("persists a deferred notice to the outgoing session, after its queued events, before a new session replaces it", async () => {
+			const sessionAny = session as any;
+			// The run has ended, but a slow extension handler still holds its reply unpersisted.
+			let releaseReplyEnd!: () => void;
+			const replyEndReleased = new Promise<void>((resolve) => {
+				releaseReplyEnd = resolve;
+			});
+			const originalEmit = sessionAny._emitExtensionEvent.bind(sessionAny);
+			sessionAny._emitExtensionEvent = async (event: { type: string; message?: { role?: string } }) => {
+				if (event.type === "message_end" && event.message?.role === "assistant") await replyEndReleased;
+				await originalEmit(event);
+			};
+			const appendSpy = vi.spyOn(session.sessionManager, "appendMessage");
+			const newSessionSpy = vi.spyOn(session.sessionManager, "newSession");
+			streamResponder = (stream) => {
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: createAssistantMessage("parent reply") });
+			};
+			const running = session.prompt("parent task");
+			await vi.waitFor(() => expect(stateTexts().some((text) => text.includes("parent reply"))).toBe(true));
+			await vi.waitFor(() => expect(agent.state.isStreaming).toBe(false));
+			sessionAny._handleBackgroundComplete("bg-new-session", cancelledResult("partial"), true);
+			expect(persistedTexts().some((text) => text.includes("bg-new-session"))).toBe(false);
+
+			const switching = session.newSession();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			// Still waiting for the outgoing session's queued events to be persisted.
+			expect(newSessionSpy).not.toHaveBeenCalled();
+			releaseReplyEnd();
+			await switching;
+			await running;
+
+			const calls = appendSpy.mock.calls.map(([message]) => messageText(message));
+			const replyCall = calls.findIndex((text) => text.includes("parent reply"));
+			const noticeCall = calls.findIndex((text) => text.includes("bg-new-session"));
+			expect(replyCall).toBeGreaterThan(-1);
+			expect(noticeCall).toBeGreaterThan(replyCall);
+			expect(appendSpy.mock.invocationCallOrder[noticeCall]).toBeLessThan(newSessionSpy.mock.invocationCallOrder[0]);
+			// Nothing is left to leak into the new session.
+			expect(sessionAny._pendingCancellationNotices).toEqual([]);
+			expect(persistedTexts().some((text) => text.includes("bg-new-session"))).toBe(false);
+		});
+
+		it("persists a deferred notice to the outgoing session before switching sessions", async () => {
+			const sessionAny = session as any;
+			const { running, release } = await startHeldRun();
+			releaseOnAbort(release);
+			sessionAny._handleBackgroundComplete("bg-switch", cancelledResult("partial"), true);
+
+			const appendSpy = vi.spyOn(session.sessionManager, "appendMessage");
+			const setSessionFileSpy = vi.spyOn(session.sessionManager, "setSessionFile").mockImplementation(() => {});
+			await session.switchSession(join(tempDir, "other-session.jsonl"));
+			await running;
+
+			const noticeCall = appendSpy.mock.calls.findIndex(([message]) => messageText(message).includes("bg-switch"));
+			expect(noticeCall).toBeGreaterThan(-1);
+			expect(appendSpy.mock.invocationCallOrder[noticeCall]).toBeLessThan(
+				setSessionFileSpy.mock.invocationCallOrder[0],
+			);
+			expect(sessionAny._pendingCancellationNotices).toEqual([]);
+		});
+
+		it("persists a deferred notice to the outgoing session's log only when forking mid-run", async () => {
+			const sessionAny = session as any;
+			const { running, release } = await startHeldRun();
+			sessionAny._handleBackgroundComplete("bg-fork", cancelledResult("partial"), true);
+			const firstUser = session.sessionManager
+				.getEntries()
+				.find((entry) => entry.type === "message" && entry.message.role === "user");
+			expect(firstUser).toBeDefined();
+
+			const appendSpy = vi.spyOn(session.sessionManager, "appendMessage");
+			const stateAppendSpy = vi.spyOn(agent, "appendMessage");
+			const branchSpy = vi.spyOn(session.sessionManager, "newSession");
+			await session.fork(firstUser!.id);
+
+			const noticeCall = appendSpy.mock.calls.findIndex(([message]) => messageText(message).includes("bg-fork"));
+			expect(noticeCall).toBeGreaterThan(-1);
+			expect(appendSpy.mock.invocationCallOrder[noticeCall]).toBeLessThan(branchSpy.mock.invocationCallOrder[0]);
+			// The run is still going: the live context never gets the notice mid-run.
+			expect(stateAppendSpy.mock.calls.some(([message]) => messageText(message).includes("bg-fork"))).toBe(false);
+			expect(sessionAny._pendingCancellationNotices).toEqual([]);
+
+			release();
+			await running;
+		});
+
 		it("does not reset bgTurnCounter for cancelled bg agents", () => {
 			const sessionAny = session as any;
 			sessionAny._bgTurnCounter = 3;

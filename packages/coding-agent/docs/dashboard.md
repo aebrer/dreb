@@ -550,13 +550,22 @@ concurrency slot, or between chain steps — the drill-in dock shows a
   ■ stop (and Esc in the TUI) still stops everything.
 - The child is stopped gracefully: it aborts its own run first, so a hung tool
   such as a long bash command is killed with its process group instead of being
-  orphaned, then it is terminated (SIGTERM, with a SIGKILL backstop).
+  orphaned, then it is terminated (SIGTERM, with a SIGKILL backstop). A child
+  stopped while it is still starting up is aborted as soon as its run begins,
+  before it can run any tool.
 - A queued child settles immediately without taking a concurrency slot. A chain
   is stopped as a whole; no later step starts.
 - The parent receives a "cancelled by the user" notice with any partial output
   in its context but is **not** woken — nothing relaunches work you just
   stopped. If the stopped agent was the last one running, the parent stays idle
-  until you prompt it.
+  until you prompt it. While the parent is busy (mid-run, retrying, or
+  compacting) the notice waits until it is idle again, so it never lands between
+  a tool call and its result. If you switch, start, or fork a session first, the
+  notice is still saved to the session it belongs to.
+- The stop is recorded in the agent's session directory, so it still shows as
+  cancelled after a reload or runtime restart. This includes a chain stopped
+  between steps, and an agent stopped while queued (which then has an empty
+  transcript).
 - Steering messages still queued in the stopped child are discarded with it.
 - While the stop is in flight the button reads `stopping…` and steering is
   disabled; the view turns read-only when the cancellation arrives. A failed

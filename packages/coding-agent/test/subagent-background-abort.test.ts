@@ -5,7 +5,7 @@
  */
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -19,6 +19,9 @@ import {
 	type executeSingle,
 	getBackgroundAgents,
 	getRunningBackgroundAgents,
+	pruneBackgroundAgents,
+	rehydrateBackgroundAgentsFromDisk,
+	SUBAGENT_CANCELLED_MARKER_FILE,
 	type SubagentResult,
 	steerBackgroundAgent,
 } from "../src/core/tools/subagent.js";
@@ -136,7 +139,10 @@ function mockLiveChildren(): void {
 type Completion = { result: SubagentResult; cancelled: boolean };
 
 /** Create the tool with completion/start tracking keyed by agentId and task label. */
-function createTool(maxConcurrentSubagents = 4) {
+function createTool(
+	maxConcurrentSubagents = 4,
+	sessions: { parentSessionFile?: string; subagentSessionsDir?: string } = {},
+) {
 	const completions = new Map<string, Completion>();
 	const waiters = new Map<string, (completion: Completion) => void>();
 	const idsByLabel = new Map<string, string>();
@@ -145,6 +151,8 @@ function createTool(maxConcurrentSubagents = 4) {
 		parentModel: () => "worker",
 		modelRegistry: registry,
 		maxConcurrentSubagents,
+		parentSessionFile: () => sessions.parentSessionFile,
+		subagentSessionsDir: sessions.subagentSessionsDir,
 		onBackgroundStart: (agentId, _agentType, taskSummary) => idsByLabel.set(taskSummary, agentId),
 		onBackgroundComplete: (agentId, result, cancelled) => {
 			const completion = { result, cancelled };
@@ -329,5 +337,92 @@ describe("abortBackgroundAgent (single-agent stop)", () => {
 		for (const id of ids) expect(statusOf(id)).toBe("cancelled");
 		// Graceful: each child was asked to abort its own run before being terminated.
 		for (const child of children) expect(child.commands.map((command) => command.type)).toContain("abort");
+	});
+});
+
+describe("cancellation markers (status after a reload)", () => {
+	function sessionDirOf(agentId: string): string {
+		const sessionDir = getBackgroundAgents().find((agent) => agent.agentId === agentId)?.sessionDir;
+		expect(sessionDir).toBeDefined();
+		return sessionDir!;
+	}
+
+	test("a stop is recorded on disk, so running and queued stops rehydrate as cancelled", async () => {
+		const subagentSessionsDir = join(tempCwd, "subagent-sessions");
+		const parentSessionFile = join(tempCwd, "parent-session.jsonl");
+		const { execute, completion, idsByLabel } = createTool(1, { parentSessionFile, subagentSessionsDir });
+		await execute({
+			tasks: [
+				{ agent: "worker", task: "runs to completion" },
+				{ agent: "worker", task: "stopped while queued" },
+			],
+		});
+		await waitForPrompts(1);
+		const finished = idsByLabel.get("worker task 1/2")!;
+		const queued = idsByLabel.get("worker task 2/2")!;
+
+		abortBackgroundAgent(queued);
+		await completion(queued);
+		const queuedMarker = JSON.parse(readFileSync(join(sessionDirOf(queued), SUBAGENT_CANCELLED_MARKER_FILE), "utf8"));
+		expect(queuedMarker).toMatchObject({
+			type: "subagent_cancelled",
+			parentSession: parentSessionFile,
+			agentType: "worker",
+			taskSummary: "worker task 2/2",
+			cwd: tempCwd,
+		});
+
+		children[0].finish();
+		await completion(finished);
+		// A normal finish leaves no marker.
+		expect(existsSync(join(sessionDirOf(finished), SUBAGENT_CANCELLED_MARKER_FILE))).toBe(false);
+
+		await execute({ agent: "worker", task: "stopped while running" });
+		await waitForPrompts(2);
+		const running = [...idsByLabel.values()].at(-1)!;
+		abortBackgroundAgent(running);
+		await completion(running);
+		expect(existsSync(join(sessionDirOf(running), SUBAGENT_CANCELLED_MARKER_FILE))).toBe(true);
+
+		// Reload: the live registry is gone; only disk state remains. The mocked children never
+		// wrote session logs, so both stops are recovered from their markers alone.
+		const stoppedDirs = [sessionDirOf(queued), sessionDirOf(running)];
+		pruneBackgroundAgents(-1);
+		expect(getBackgroundAgents()).toHaveLength(0);
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsDir)).toBe(2);
+		const recovered = getBackgroundAgents();
+		expect(recovered.map((agent) => agent.sessionDir).sort()).toEqual([...stoppedDirs].sort());
+		for (const agent of recovered) expect(agent.status).toBe("cancelled");
+		expect(recovered.map((agent) => agent.taskSummary).sort()).toEqual(["worker task", "worker task 2/2"]);
+	});
+
+	test("no marker is written without a parent session to match it against", async () => {
+		const subagentSessionsDir = join(tempCwd, "subagent-sessions");
+		const { execute, completion, idsByLabel } = createTool(4, { subagentSessionsDir });
+		await execute({ agent: "worker", task: "stop me" });
+		await waitForPrompts(1);
+		const agentId = idsByLabel.get("worker task")!;
+
+		abortBackgroundAgent(agentId);
+		await completion(agentId);
+		expect(existsSync(join(sessionDirOf(agentId), SUBAGENT_CANCELLED_MARKER_FILE))).toBe(false);
+	});
+
+	test("a marker write failure is logged loudly and the stop still happens", async () => {
+		const blocker = join(tempCwd, "not-a-directory");
+		writeFileSync(blocker, "file in the way");
+		const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
+		const { execute, completion, idsByLabel } = createTool(4, {
+			parentSessionFile: join(tempCwd, "parent-session.jsonl"),
+			subagentSessionsDir: blocker,
+		});
+		await execute({ agent: "worker", task: "stop me" });
+		await waitForPrompts(1);
+		const agentId = idsByLabel.get("worker task")!;
+
+		abortBackgroundAgent(agentId);
+		expect(statusOf(agentId)).toBe("cancelled");
+		expect((await completion(agentId)).cancelled).toBe(true);
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`cancellation of background agent ${agentId}`));
 	});
 });

@@ -1181,6 +1181,57 @@ describe("controlled subagent RPC lifecycle", () => {
 		await expect(resultPromise).resolves.toMatchObject({ exitCode: 1 });
 		expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("graceful abort failed"));
 	});
+
+	test("a stop handled before the child's run started is re-sent when the run starts, not left to the grace timer", async () => {
+		// Default abort behavior: the child acknowledges without ending anything, which is what a
+		// real child does when the abort lands while its prompt is still in the pre-run preamble.
+		const child = mockControlledSubagent();
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		const aborts = () => child.commands.filter((command) => command.type === "abort").length;
+
+		controller.abort();
+		await vi.waitFor(() => expect(aborts()).toBe(1));
+		await settleIo();
+		expect(aborts()).toBe(1);
+
+		// The prompt's run starts only now; it must be aborted before it can run tools.
+		child.proc.stdout.write(`${JSON.stringify({ type: "agent_start" })}\n`);
+		await vi.waitFor(() => expect(aborts()).toBe(2));
+		expect(child.proc.kill).not.toHaveBeenCalled();
+
+		child.proc.stdout.write(
+			`${JSON.stringify({
+				type: "message_end",
+				message: { role: "assistant", content: [{ type: "text", text: "stopped early" }], stopReason: "aborted" },
+			})}\n`,
+		);
+		child.proc.stdout.write(`${JSON.stringify({ type: "agent_end" })}\n`);
+		const result = await resultPromise;
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(child.proc.kill).not.toHaveBeenCalledWith("SIGKILL");
+		expect(result).toMatchObject({ exitCode: 0, output: "stopped early" });
+	});
+
+	test("a run that was already going when stopped gets a single abort", async () => {
+		const child = mockControlledSubagent({ abortBehavior: "end" });
+		const controller = new AbortController();
+		const { resultPromise } = await startControlled(child, controller.signal);
+		child.proc.stdout.write(`${JSON.stringify({ type: "agent_start" })}\n`);
+		await settleIo();
+
+		controller.abort();
+		await resultPromise;
+		expect(child.commands.filter((command) => command.type === "abort")).toHaveLength(1);
+	});
+
+	test("agent_start without a stop never sends an abort", async () => {
+		const child = mockControlledSubagent();
+		const { resultPromise } = await startControlled(child, new AbortController().signal);
+		child.finish("normal output");
+		await expect(resultPromise).resolves.toMatchObject({ exitCode: 0, output: "normal output" });
+		expect(child.commands.some((command) => command.type === "abort")).toBe(false);
+	});
 });
 
 describe("spawn-time model availability probing", () => {

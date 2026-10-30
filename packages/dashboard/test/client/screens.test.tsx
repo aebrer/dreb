@@ -3430,6 +3430,27 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).not.toContain("● working");
 	});
 
+	it("subagent drill-in shows ■ stop alongside ● working while the child is streaming", async () => {
+		const { session, fakeStore } = liveSubagentStore("k-stop-streaming");
+		applySessionEvent(session, {
+			type: "background_agent_event",
+			agentId: "bg-live",
+			event: { type: "agent_start" },
+		});
+		expect(session.subagents["bg-live"]?.streaming).toBe(true);
+		vi.mocked(api.abortSubagent).mockClear();
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-stop-streaming" agentId="bg-live" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(el.querySelector(".dock .status-line .working")?.textContent).toBe("● working");
+		const stop = subagentStopButton(el);
+		expect(stop?.textContent).toBe("■ stop");
+		expect(stop?.disabled).toBe(false);
+		stop!.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.abortSubagent).toHaveBeenCalledWith("k-stop-streaming", "bg-live");
+	});
+
 	it("subagent ■ stop stops only that child and locks steering while the stop is in flight", async () => {
 		const { fakeStore } = liveSubagentStore("k-stop-one");
 		vi.mocked(api.abortSubagent).mockClear();

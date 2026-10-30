@@ -4,12 +4,14 @@ import {
 	closeSync,
 	type Dirent,
 	existsSync,
+	mkdirSync,
 	openSync,
 	readdirSync,
 	readFileSync,
 	readSync,
 	realpathSync,
 	statSync,
+	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -473,6 +475,8 @@ async function spawnSubagent(
 		let resolvedThinking: ThinkingLevel | undefined;
 		let rpcRequestId = 0;
 		let rpcCompleted = false;
+		/** Set once a graceful RPC `abort` has been sent for a user stop. */
+		let gracefulAbortRequested = false;
 		let controlError: Error | undefined;
 		const pendingRpc = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>();
 		const sendRpc = <T>(command: Record<string, unknown>): Promise<T> => {
@@ -522,6 +526,22 @@ async function spawnSubagent(
 			forceKill();
 		};
 
+		// Ask a controlled child to abort its own run (graceful stop). If the request cannot
+		// be delivered or the child refuses it, terminate the child instead.
+		const requestGracefulAbort = () => {
+			if (!proc.stdin?.writable) {
+				forceKill();
+				return;
+			}
+			sendRpc({ type: "abort" }).catch((err) => {
+				if (settled) return;
+				log.warn(
+					`[subagent] graceful abort failed (agent=${agentConfig.name}): ${err instanceof Error ? err.message : String(err)}; terminating child`,
+				);
+				forceKill();
+			});
+		};
+
 		proc.stdin?.on("error", (err) => {
 			log.warn(`[subagent] stdin stream error (agent=${agentConfig.name}): ${err.message}`);
 			failControlledChild(err);
@@ -551,6 +571,16 @@ async function spawnSubagent(
 						if (message?.type === "agent_end" && !rpcCompleted) {
 							rpcCompleted = true;
 							setImmediate(forceKill);
+						}
+						if (message?.type === "agent_start" && gracefulAbortRequested && !rpcCompleted) {
+							// The child handles commands concurrently. An abort that arrived while
+							// its initial prompt was still in its pre-run preamble (API-key
+							// resolution, input/before-start hooks) was acknowledged without
+							// aborting anything, because no run existed yet. Abort the run that
+							// has now started, before it can execute tools the user just stopped.
+							// Otherwise it would keep working until the grace period expires, and
+							// SIGTERM would orphan any tool process tree it had started.
+							requestGracefulAbort();
 						}
 						if (message?.type === "response" && typeof message.id === "string") {
 							const pending = pendingRpc.get(message.id);
@@ -604,22 +634,18 @@ async function spawnSubagent(
 		// gracefully first: the RPC `abort` makes the child abort its own run, so its
 		// tools unwind — notably the bash tool kills its detached process group on its
 		// abort signal, which a bare SIGTERM to this child would orphan. The child's
-		// resulting agent_end triggers the normal SIGTERM above. If the abort cannot be
-		// delivered or the child does not finish within the grace period, escalate to
-		// SIGTERM and then the SIGKILL backstop.
+		// resulting agent_end triggers the normal SIGTERM above; a run that starts only
+		// after the abort was handled is aborted again on its agent_start. If the abort
+		// cannot be delivered or the child does not finish within the grace period,
+		// escalate to SIGTERM and then the SIGKILL backstop.
 		const onAbort = () => {
 			if (!controlClient || rpcCompleted || controlError || !proc.stdin?.writable) {
 				forceKill();
 				return;
 			}
+			gracefulAbortRequested = true;
 			abortGraceTimer ??= setTimeout(forceKill, SUBAGENT_ABORT_GRACE_MS);
-			sendRpc({ type: "abort" }).catch((err) => {
-				if (settled) return;
-				log.warn(
-					`[subagent] graceful abort failed (agent=${agentConfig.name}): ${err instanceof Error ? err.message : String(err)}; terminating child`,
-				);
-				forceKill();
-			});
+			requestGracefulAbort();
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -1733,6 +1759,11 @@ export interface BackgroundAgentInfo {
 	sessionFile?: string;
 	/** Working directory the agent runs in. */
 	cwd?: string;
+	/**
+	 * Parent session file the agent was launched from. A user stop records it in the
+	 * agent's cancellation marker so rehydration can match the marker to its parent.
+	 */
+	parentSessionFile?: string;
 	/** Safe host-generated pre-spawn routing decisions, ordered by chain step/attempt. */
 	arbitrations?: DispatchArbitrationRecord[];
 }
@@ -1953,6 +1984,98 @@ function inferCompletedSessionStatus(sessionFile: string): Exclude<BackgroundAge
 	return "completed";
 }
 
+/**
+ * File in a background agent's session directory recording that the user stopped it.
+ * A stop doesn't always leave a trailing `aborted` message in the child's log: a chain
+ * stopped between steps, a child terminated after the grace period, and an agent stopped
+ * while queued or before spawn (which has no log at all). The marker is the authoritative
+ * record that rehydration checks first.
+ */
+export const SUBAGENT_CANCELLED_MARKER_FILE = "cancelled.json";
+
+interface SubagentCancellationMarker {
+	type: "subagent_cancelled";
+	version: 1;
+	cancelledAt: string;
+	/** Parent session file the agent was launched from (matched during rehydration). */
+	parentSession: string;
+	agentType: string;
+	taskSummary: string;
+	startedAt: string;
+	cwd?: string;
+}
+
+/**
+ * Record a user stop in the agent's session directory (created if the agent never
+ * spawned). Agents without a session directory or parent session file can't be
+ * rehydrated, so nothing is written for them. A write failure doesn't block the stop
+ * itself. It is logged as an error, because the agent may show as completed or be
+ * missing after a reload.
+ */
+function writeCancellationMarker(info: BackgroundAgentInfo): void {
+	if (!info.sessionDir || !info.parentSessionFile) return;
+	const marker: SubagentCancellationMarker = {
+		type: "subagent_cancelled",
+		version: 1,
+		cancelledAt: new Date().toISOString(),
+		parentSession: info.parentSessionFile,
+		agentType: info.agentType,
+		taskSummary: info.taskSummary,
+		startedAt: new Date(info.startedAt).toISOString(),
+		...(info.cwd ? { cwd: info.cwd } : {}),
+	};
+	try {
+		mkdirSync(info.sessionDir, { recursive: true });
+		writeFileSync(join(info.sessionDir, SUBAGENT_CANCELLED_MARKER_FILE), `${JSON.stringify(marker)}\n`);
+	} catch (err) {
+		log.error(
+			`[subagent] Failed to record the cancellation of background agent ${info.agentId} in ${info.sessionDir}: ${err instanceof Error ? err.message : String(err)}. After a reload it may show as completed or be missing.`,
+		);
+	}
+}
+
+function isCancellationMarker(value: unknown): value is SubagentCancellationMarker {
+	return (
+		isRecord(value) &&
+		value.type === "subagent_cancelled" &&
+		typeof value.parentSession === "string" &&
+		typeof value.agentType === "string" &&
+		value.agentType.trim() !== "" &&
+		typeof value.taskSummary === "string" &&
+		typeof value.startedAt === "string" &&
+		Number.isFinite(Date.parse(value.startedAt)) &&
+		(value.cwd === undefined || typeof value.cwd === "string")
+	);
+}
+
+/**
+ * Read an agent's cancellation marker. Returns `undefined` when there is none, the parsed
+ * marker when valid, and `"malformed"` (after a warning) when the file exists but can't be
+ * used. A malformed marker still proves the stop happened, but can't identify the parent.
+ * Filesystem errors other than absence propagate to the caller's recovery policy.
+ */
+function readCancellationMarker(sessionDir: string): SubagentCancellationMarker | "malformed" | undefined {
+	const markerPath = join(sessionDir, SUBAGENT_CANCELLED_MARKER_FILE);
+	let raw: string;
+	try {
+		raw = readFileSync(markerPath, "utf8");
+	} catch (err) {
+		if (isMissingFilesystemError(err)) return undefined;
+		throw err;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		parsed = undefined;
+	}
+	if (isCancellationMarker(parsed)) return parsed;
+	log.warn(
+		`[subagent] ignoring malformed cancellation marker ${markerPath}; the agent is still reported as cancelled`,
+	);
+	return "malformed";
+}
+
 function parseStartedAt(header: Record<string, unknown>, sessionFile: string): number {
 	if (typeof header.timestamp === "string") {
 		const timestamp = Date.parse(header.timestamp);
@@ -1967,14 +2090,31 @@ function parseStartedAt(header: Record<string, unknown>, sessionFile: string): n
 	}
 }
 
-function hasRegisteredSession(sessionDir: string, sessionFile: string): boolean {
+function hasRegisteredSession(sessionDir: string, sessionFile?: string): boolean {
 	const comparableSessionDir = canonicalExistingPath(sessionDir);
-	const comparableSessionFile = canonicalExistingPath(sessionFile);
+	const comparableSessionFile = sessionFile ? canonicalExistingPath(sessionFile) : undefined;
 	for (const agent of backgroundAgentRegistry.values()) {
 		if (agent.sessionDir && canonicalExistingPath(agent.sessionDir) === comparableSessionDir) return true;
-		if (agent.sessionFile && canonicalExistingPath(agent.sessionFile) === comparableSessionFile) return true;
+		if (
+			comparableSessionFile &&
+			agent.sessionFile &&
+			canonicalExistingPath(agent.sessionFile) === comparableSessionFile
+		) {
+			return true;
+		}
 	}
 	return false;
+}
+
+/** A registry ID for a rehydrated agent, derived from its session directory name and kept unique. */
+function nextRehydratedAgentId(sessionDirName: string): string {
+	const baseAgentId = `${REHYDRATED_AGENT_ID_PREFIX}${sessionDirName}`;
+	let agentId = baseAgentId;
+	let suffix = 2;
+	while (backgroundAgentRegistry.has(agentId)) {
+		agentId = `${baseAgentId}-${suffix++}`;
+	}
+	return agentId;
 }
 
 /**
@@ -1982,6 +2122,10 @@ function hasRegisteredSession(sessionDir: string, sessionFile: string): boolean 
  * an existing parent session. Live background-agent state is an in-memory
  * registry, while child sessions are durable JSONL files under the subagent
  * sessions directory.
+ *
+ * A user stop's cancellation marker ({@link SUBAGENT_CANCELLED_MARKER_FILE}) takes
+ * precedence over status inferred from the log. An agent stopped before it spawned has
+ * only the marker, and is recovered from it.
  *
  * The first root is authoritative: absence races and malformed JSON are skipped,
  * while operational filesystem failures throw. Later roots are compatibility
@@ -2034,7 +2178,26 @@ export function rehydrateBackgroundAgentsFromDisk(
 				seenSessionDirs.add(canonicalSessionDir);
 
 				const sessionFiles = discoverSessionFiles(sessionDir, entry.name, { throwOnOperationalError: true });
-				if (sessionFiles.length === 0) continue;
+				const cancellationMarker = readCancellationMarker(sessionDir);
+				if (sessionFiles.length === 0) {
+					// A user stop while the agent was queued or before it spawned leaves no log,
+					// only the cancellation marker.
+					if (cancellationMarker === undefined || cancellationMarker === "malformed") continue;
+					if (!parentSessionMatches(cancellationMarker.parentSession, parentSessionFile)) continue;
+					if (hasRegisteredSession(sessionDir)) continue;
+					const agentId = nextRehydratedAgentId(entry.name);
+					backgroundAgentRegistry.set(agentId, {
+						agentId,
+						agentType: cancellationMarker.agentType,
+						taskSummary: cancellationMarker.taskSummary,
+						startedAt: Date.parse(cancellationMarker.startedAt),
+						status: "cancelled",
+						sessionDir,
+						cwd: cancellationMarker.cwd,
+					});
+					registered++;
+					continue;
+				}
 
 				let sessionFile: string | undefined;
 				let header: Record<string, unknown> | undefined;
@@ -2051,12 +2214,7 @@ export function rehydrateBackgroundAgentsFromDisk(
 				}
 				if (!sessionFile || !header || hasRegisteredSession(sessionDir, sessionFile)) continue;
 
-				const baseAgentId = `${REHYDRATED_AGENT_ID_PREFIX}${entry.name}`;
-				let agentId = baseAgentId;
-				let suffix = 2;
-				while (backgroundAgentRegistry.has(agentId)) {
-					agentId = `${baseAgentId}-${suffix++}`;
-				}
+				const agentId = nextRehydratedAgentId(entry.name);
 
 				const statusFile = sessionFiles[sessionFiles.length - 1] ?? sessionFile;
 				const agentType =
@@ -2067,7 +2225,9 @@ export function rehydrateBackgroundAgentsFromDisk(
 					agentType,
 					taskSummary,
 					startedAt: parseStartedAt(header, sessionFile),
-					status: inferCompletedSessionStatus(statusFile),
+					// The marker is authoritative: a stop between chain steps or a terminated child
+					// doesn't leave a trailing `aborted` message for inference to find.
+					status: cancellationMarker !== undefined ? "cancelled" : inferCompletedSessionStatus(statusFile),
 					sessionDir,
 					sessionFile,
 					cwd: typeof header.cwd === "string" ? header.cwd : undefined,
@@ -2124,15 +2284,19 @@ export async function getBackgroundAgentPendingSteering(
 }
 
 /**
- * Mark one registry entry cancelled and abort its controller. The status is set
- * before aborting so anything reacting synchronously to the abort (and the
- * lifecycle, which skips status updates once its signal is aborted) observes
- * `cancelled` rather than `running`. The controller's abort listeners perform the
- * graceful child shutdown (RPC abort first, then SIGTERM/SIGKILL backstops).
+ * Mark one registry entry cancelled, record the stop on disk, and abort its
+ * controller. The status is set before aborting so anything reacting
+ * synchronously to the abort (and the lifecycle, which skips status updates once
+ * its signal is aborted) observes `cancelled` rather than `running`. The
+ * controller's abort listeners perform the graceful child shutdown (RPC abort
+ * first, then SIGTERM/SIGKILL backstops).
  */
 function cancelBackgroundAgentEntry(agentId: string, controller: AbortController): void {
 	const entry = backgroundAgentRegistry.get(agentId);
-	if (entry && entry.status === "running") entry.status = "cancelled";
+	if (entry && entry.status === "running") {
+		entry.status = "cancelled";
+		writeCancellationMarker(entry);
+	}
 	backgroundAbortControllers.delete(agentId);
 	backgroundControlClients.delete(agentId);
 	controller.abort();
@@ -2570,6 +2734,7 @@ export function createSubagentToolDefinition(
 						status: "running",
 						sessionDir,
 						cwd: agentCwd,
+						parentSessionFile: getParentSessionFile(),
 					});
 					backgroundAbortControllers.set(agentId, bgAbort);
 					onBackgroundStart?.(agentId, agentName, taskSummary, sessionDir);

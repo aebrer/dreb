@@ -1012,6 +1012,23 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(missingLog.status).toBe(502);
 		await expect(missingLog.json()).resolves.toMatchObject({ error: expect.stringContaining("session log") });
 
+		// A user stop while queued or before spawn leaves no log: an empty, read-only transcript.
+		const stoppedBeforeSpawn = {
+			agentId: "bg-stopped-queued",
+			agentType: "Explore",
+			taskSummary: "stopped while queued",
+			startedAt: new Date().toISOString(),
+			status: "cancelled",
+			sessionDir: join(dir, "never-created"),
+		};
+		(clients[0].listBackgroundAgents as ReturnType<typeof vi.fn>).mockResolvedValue([stoppedBeforeSpawn]);
+		const stopped = await fetch(`${base}/api/runtimes/${key}/subagents/bg-stopped-queued/messages`);
+		expect(stopped.status).toBe(200);
+		await expect(stopped.json()).resolves.toMatchObject({
+			agent: { agentId: "bg-stopped-queued", status: "cancelled" },
+			messages: [],
+		});
+
 		// Unknown agent id → loud 502 with the registry error.
 		const missing = await fetch(`${base}/api/runtimes/${key}/subagents/nope/messages`);
 		expect(missing.status).toBe(502);
