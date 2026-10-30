@@ -1246,6 +1246,135 @@ describe("AgentSession background agent guardrails", () => {
 
 			promptSpy.mockRestore();
 		});
+
+		it("delimits a completed agent's output from the system lines around it", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-other", agentType: "Explore", taskSummary: "still going" },
+			]);
+
+			sessionAny._handleBackgroundComplete(
+				"bg-layout-done",
+				{
+					agent: "test",
+					task: "test task",
+					model: "resolved-model",
+					thinking: "high",
+					exitCode: 0,
+					output: "Final answer.",
+					stderr: "",
+					errorMessage: null,
+					sessionFile: "/tmp/child.jsonl",
+				},
+				false,
+			);
+
+			const text = (promptSpy.mock.calls[0][0] as any).content[0].text;
+			expect(text).toBe(
+				"<background-agent-complete>\n" +
+					"Background agent bg-layout-done (test) completed.\n\n" +
+					"Execution metadata: model: resolved-model, thinking: high\n\n" +
+					"--- agent output ---\n\n" +
+					"Final answer.\n\n" +
+					"--- end of agent output ---\n\n" +
+					"Session log: /tmp/child.jsonl\n\n" +
+					"Still running (1):\n  bg-other (Explore): still going\n" +
+					"</background-agent-complete>",
+			);
+
+			promptSpy.mockRestore();
+		});
+
+		it("marks a cancelled agent's output partial, after the cancellation line", () => {
+			const sessionAny = session as any;
+			const appendSpy = vi.spyOn(agent, "appendMessage");
+
+			sessionAny._handleBackgroundComplete(
+				"bg-layout-cancelled",
+				{
+					agent: "test",
+					task: "test task",
+					model: "resolved-model",
+					thinking: "high",
+					exitCode: 0,
+					output: "I'll start by surveying the filesystem layout and mounts.",
+					stderr: "",
+					errorMessage: null,
+				},
+				true,
+			);
+
+			const text = (appendSpy.mock.calls[0][0] as any).content[0].text;
+			expect(text).toContain(
+				"Execution metadata: model: resolved-model, thinking: high\n\n" +
+					"This agent was cancelled by the user.\n\n" +
+					"--- agent output (partial) ---\n\n" +
+					"I'll start by surveying the filesystem layout and mounts.\n\n" +
+					"--- end of agent output ---\n" +
+					"</background-agent-complete>",
+			);
+
+			appendSpy.mockRestore();
+		});
+
+		it("marks a failed agent's output partial and keeps the error and routing notes outside it", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+
+			sessionAny._handleBackgroundComplete(
+				"bg-layout-failed",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 1,
+					output: "Got halfway.",
+					notes: ["[WARNING: model selection ignored]", "[MODEL FALLBACK: skipped 1]\n- a: down"],
+					stderr: "boom",
+					errorMessage: "boom",
+				},
+				false,
+			);
+
+			const text = (promptSpy.mock.calls[0][0] as any).content[0].text;
+			expect(text).toContain(
+				"Error: boom\n\n" +
+					"[WARNING: model selection ignored]\n\n" +
+					"[MODEL FALLBACK: skipped 1]\n- a: down\n\n" +
+					"--- agent output (partial) ---\n\n" +
+					"Got halfway.\n\n" +
+					"--- end of agent output ---",
+			);
+
+			promptSpy.mockRestore();
+		});
+
+		it("does not wrap a chain's per-step report in another output block", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+			const chainReport =
+				"### Step 1\n## Agent: Explore\n\n--- agent output ---\n\nfound it\n\n--- end of agent output ---";
+
+			sessionAny._handleBackgroundComplete(
+				"bg-layout-chain",
+				{
+					agent: "Explore",
+					task: "1-step chain",
+					steps: [{ step: 1, agent: "Explore", success: true }],
+					exitCode: 0,
+					output: chainReport,
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			const text = (promptSpy.mock.calls[0][0] as any).content[0].text;
+			expect(text).toContain(`completed.\n\n${chainReport}\n</background-agent-complete>`);
+			expect(text.match(/--- agent output/g)).toHaveLength(1);
+
+			promptSpy.mockRestore();
+		});
 	});
 
 	describe("Guardrail cleanup on dispose", () => {

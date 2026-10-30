@@ -316,6 +316,35 @@ describe("abortBackgroundAgent (single-agent stop)", () => {
 		expect(statusOf(chainId!)).toBe("cancelled");
 		expect(children).toHaveLength(1);
 		expect(spawn).toHaveBeenCalledTimes(1);
+		// The stopped step's output is delimited and marked partial.
+		expect(stopped.result.output).toContain(
+			"--- agent output (partial) ---\n\npartial\n\n--- end of agent output ---",
+		);
+	});
+
+	test("a chain stopped in a later step marks only that step's output partial", async () => {
+		const { execute, completion } = createTool();
+		const launch = await execute({
+			chain: [
+				{ agent: "worker", task: "step one" },
+				{ agent: "worker", task: "step two using {previous}" },
+			],
+		});
+		await waitForPrompts(1);
+		const chainId = /Background chain (\S+) started/.exec(
+			(launch.content[0] as { type: "text"; text: string }).text,
+		)?.[1];
+		children[0].finish("step one result");
+		await waitForPrompts(2);
+
+		abortBackgroundAgent(chainId!);
+		const stopped = await completion(chainId!);
+
+		expect(stopped.cancelled).toBe(true);
+		const [stepOne, stepTwo] = stopped.result.output.split("### Step 2");
+		expect(stepOne).toContain("--- agent output ---\n\nstep one result\n\n--- end of agent output ---");
+		expect(stepOne).not.toContain("(partial)");
+		expect(stepTwo).toContain("--- agent output (partial) ---\n\npartial\n\n--- end of agent output ---");
 	});
 
 	test("abortBackgroundAgents cancels every running agent and marks them cancelled", async () => {

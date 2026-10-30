@@ -19,7 +19,6 @@ import {
 	formatSingleResult,
 	isRuntimeUnavailableError,
 	parseAgentFrontmatter,
-	prependModelFallbackSummary,
 	probeModelAvailability,
 	resolveModelForSubagentSpawn,
 	resolveModelStringSingle,
@@ -1541,20 +1540,16 @@ describe("spawn-time model availability probing", () => {
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
-	test("fallback summary formatting and prepending are visible in output", () => {
+	test("fallback summary formatting", () => {
 		const skipped = [{ model: "primary-model", reason: "429 rate limit" }];
 
 		expect(formatModelFallbackSummary([], "fallback-model")).toBeUndefined();
 		expect(formatModelFallbackSummary(skipped, "fallback-model")).toBe(
 			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit',
 		);
-		expect(prependModelFallbackSummary("child output", skipped, "fallback-model")).toBe(
-			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit\n\nchild output',
-		);
 		expect(formatModelFallbackSummary(skipped, "proposal-model", "final-model")).toBe(
 			'[MODEL FALLBACK: skipped 1 unavailable model(s); proposal resolved to "proposal-model" before arbitration selected "final-model".]\n- primary-model: 429 rate limit',
 		);
-		expect(prependModelFallbackSummary("child output", [], "fallback-model")).toBe("child output");
 	});
 
 	test("executeSingle prepends warning before fallback summary when parent model is used", async () => {
@@ -1579,13 +1574,14 @@ describe("spawn-time model availability probing", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.model).toBe("parent-model");
-		expect(result.output).toBe(
-			'[WARNING: Agent preferred models were unavailable. Falling back to parent model "parent-model".]\n\n' +
-				'[MODEL FALLBACK: skipped 2 unavailable model(s); using "parent-model".]\n' +
+		// Routing diagnostics are system notes (warning first), kept out of the child's own output.
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([
+			'[WARNING: Agent preferred models were unavailable. Falling back to parent model "parent-model".]',
+			'[MODEL FALLBACK: skipped 2 unavailable model(s); using "parent-model".]\n' +
 				"- primary-model: primary quota exhausted\n" +
-				"- fallback-model: fallback auth revoked\n\n" +
-				"child output",
-		);
+				"- fallback-model: fallback auth revoked",
+		]);
 		expect(spawn).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(spawn).mock.calls[0][1]).toContain("parent-model");
 	});
@@ -1837,7 +1833,7 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		'The user has enabled "single model mode" in the settings, so the model selection for this subagent ' +
 		`was ignored. Using parent model "${parentProvider}/${parentModel}".`;
 
-	test("modelOverride is ignored — parent model runs and the output carries the warning", async () => {
+	test("modelOverride is ignored — parent model runs and the result carries the warning note", async () => {
 		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
 
 		const result = await executeSingle(
@@ -1868,12 +1864,13 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("override-model");
 		expect(spawnArgs).not.toContain("agent-model");
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 		// No spawn-time availability probing.
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
-	test("agentModels fallback list is ignored — parent model runs and the output carries the warning", async () => {
+	test("agentModels fallback list is ignored — parent model runs and the result carries the warning note", async () => {
 		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
 
 		const result = await executeSingle(
@@ -1903,11 +1900,12 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("override-model");
 		expect(spawnArgs).not.toContain("fallback-model");
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
-	test("agent-definition model is ignored — parent model runs and the output carries the warning", async () => {
+	test("agent-definition model is ignored — parent model runs and the result carries the warning note", async () => {
 		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
 
 		const result = await executeSingle(
@@ -1936,7 +1934,8 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("agent-model");
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 	});
 
 	test("no model spec anywhere — parent model runs without a warning", async () => {
@@ -1967,7 +1966,8 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		expect(result.exitCode).toBe(0);
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain(parentModel);
-		expect(result.output).not.toContain("[WARNING:");
+		expect(result.output).toBe("child output");
+		expect(result.notes).toBeUndefined();
 	});
 
 	test("warning is emitted even when the requested spec equals the parent model", async () => {
@@ -1996,7 +1996,8 @@ describe("executeSingle single-model mode (issue 517)", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([`[WARNING: ${warningText}]`]);
 	});
 
 	test("fails loudly when the parent session's model is unavailable", async () => {
@@ -2523,7 +2524,8 @@ describe("formatSingleResult", () => {
 			output: "partial text",
 		});
 		expect(text).toContain("**Error**: Response truncated at token limit.\n");
-		expect(text).toContain("partial text");
+		// Truncated output did not finish cleanly, so its block is marked partial.
+		expect(text).toContain("--- agent output (partial) ---\n\npartial text\n\n--- end of agent output ---");
 		expect(text).not.toContain("(No output)");
 		// Should NOT use the exit-code error format reserved for non-zero exits.
 		expect(text).not.toContain("**Error** (exit");
@@ -2545,9 +2547,50 @@ describe("formatSingleResult", () => {
 			errorMessage: null,
 			output: "hello",
 		});
-		expect(text).toContain("\nhello");
+		expect(text).toBe("## Agent: explore\n\n--- agent output ---\n\nhello\n\n--- end of agent output ---");
 		expect(text).not.toContain("**Error**");
 		expect(text).not.toContain("(No output)");
+	});
+
+	test("a failed step's output is delimited as partial, after the error and stderr", () => {
+		const text = formatSingleResult({
+			...base,
+			exitCode: 1,
+			stderr: "boom",
+			errorMessage: "Subagent exited with code 1",
+			output: "half done",
+		});
+		const block = "--- agent output (partial) ---\n\nhalf done\n\n--- end of agent output ---";
+		expect(text).toContain(block);
+		expect(text.indexOf("**Error** (exit 1)")).toBeLessThan(text.indexOf(block));
+		expect(text.indexOf("Stderr:\nboom")).toBeLessThan(text.indexOf(block));
+	});
+
+	test("a step stopped by the user is delimited as partial even after a clean exit", () => {
+		const text = formatSingleResult({ ...base, errorMessage: null, output: "started" }, true);
+		expect(text).toContain("--- agent output (partial) ---\n\nstarted\n\n--- end of agent output ---");
+	});
+
+	test("system notes and the session log stay outside the agent output block", () => {
+		const text = formatSingleResult({
+			...base,
+			errorMessage: null,
+			output: "hello",
+			notes: ["[WARNING: model ignored]", "[MODEL FALLBACK: skipped 1]\n- a: down"],
+			sessionFile: "/tmp/step.jsonl",
+		});
+		expect(text).toBe(
+			"## Agent: explore\n\n" +
+				"[WARNING: model ignored]\n\n[MODEL FALLBACK: skipped 1]\n- a: down\n\n" +
+				"--- agent output ---\n\nhello\n\n--- end of agent output ---\n\n" +
+				"Session log: /tmp/step.jsonl",
+		);
+	});
+
+	test("no agent output block is rendered without output", () => {
+		const text = formatSingleResult({ ...base, exitCode: 1, errorMessage: "Aborted before spawn", output: "" }, true);
+		expect(text).not.toContain("--- agent output");
+		expect(text).toContain("**Error** (exit 1): Aborted before spawn");
 	});
 
 	test("renders effective model and thinking metadata", () => {
@@ -2881,8 +2924,8 @@ describe("subagent tool singleModelMode wiring (issue 517)", () => {
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain(parentModel);
 		expect(spawnArgs).not.toContain("config/feature-model");
-		expect(result.output).toContain(warningText);
-		expect(result.output).not.toContain("[MODEL FALLBACK");
+		expect(result.output).toBe("child output");
+		expect(result.notes).toEqual([warningText]);
 		// Registry-less parent resolution skips probing entirely.
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
@@ -2905,7 +2948,8 @@ describe("subagent tool singleModelMode wiring (issue 517)", () => {
 		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
 		expect(spawnArgs).toContain("config/feature-model");
 		expect(spawnArgs).not.toContain(parentModel);
-		expect(result.output).not.toContain("[WARNING:");
+		expect(result.output).toBe("child output");
+		expect(result.notes).toBeUndefined();
 	});
 
 	test("chain: the setting is re-read per step, so a flipped value applies from the next step", async () => {
@@ -2950,6 +2994,9 @@ describe("subagent tool singleModelMode wiring (issue 517)", () => {
 		const [step1Section, step2Section] = result.output.split("### Step 2");
 		expect(step1Section).not.toContain("[WARNING:");
 		expect(step2Section).toContain(warningText);
+		// The warning is a system note: rendered before, and outside, the step's output block.
+		expect(step2Section.indexOf(warningText)).toBeLessThan(step2Section.indexOf("--- agent output ---"));
+		expect(step2Section).toContain("--- agent output ---\n\nstep 2 output\n\n--- end of agent output ---");
 	});
 
 	test("parallel tasks: each task re-reads the setting and runs on the parent model", async () => {

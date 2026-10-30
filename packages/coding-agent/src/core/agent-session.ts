@@ -124,6 +124,7 @@ import {
 	createAllToolDefinitions,
 	createSubagentConcurrencyGate,
 	discoverAgentTypes,
+	formatAgentOutputBlock,
 	getRunningBackgroundAgents,
 	type SessionTask,
 	type SubagentArbitrationEvent,
@@ -971,11 +972,19 @@ export class AgentSession {
 		if (cancelled) {
 			parts.push("This agent was cancelled by the user.");
 		}
-		if (!cancelled && (result.exitCode !== 0 || result.errorMessage)) {
+		const failed = !cancelled && (result.exitCode !== 0 || !!result.errorMessage);
+		if (failed) {
 			parts.push(`Error: ${result.errorMessage || "unknown"}`);
 		}
+		if (result.notes && result.notes.length > 0) {
+			parts.push(...result.notes);
+		}
 		if (result.output) {
-			parts.push(result.output);
+			// The agent's own words are delimited from the system lines around them. A chain's
+			// output is already a per-step report with each step's output delimited
+			// (formatSingleResult), so it is not wrapped again.
+			const isChain = result.steps !== undefined;
+			parts.push(isChain ? result.output : formatAgentOutputBlock(result.output, cancelled || failed));
 		}
 		if (result.sessionFile) {
 			parts.push(`Session log: ${result.sessionFile}`);

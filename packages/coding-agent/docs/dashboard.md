@@ -555,8 +555,10 @@ concurrency slot, or between chain steps — the drill-in dock shows a
   before it can run any tool.
 - A queued child settles immediately without taking a concurrency slot. A chain
   is stopped as a whole; no later step starts.
-- The parent receives a "cancelled by the user" notice with any partial output
-  in its context but is **not** woken — nothing relaunches work you just
+- The parent receives a "cancelled by the user" notice in its context. Any
+  partial output sits between `--- agent output (partial) ---` and
+  `--- end of agent output ---` lines, apart from the notice's own lines. The
+  parent is **not** woken — nothing relaunches work you just
   stopped. If the stopped agent was the last one running, the parent stays idle
   until you prompt it. While the parent is busy (mid-run, retrying, or
   compacting) the notice waits until it is idle again, so it never lands between

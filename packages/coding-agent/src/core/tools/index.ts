@@ -94,6 +94,7 @@ export {
 	createSubagentToolDefinition,
 	discoverAgentTypes,
 	filterSubagentTools,
+	formatAgentOutputBlock,
 	getBackgroundAgents,
 	getRunningBackgroundAgents,
 	pruneBackgroundAgents,

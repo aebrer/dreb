@@ -187,7 +187,17 @@ export interface SubagentResult {
 	/** Ordered effective metadata for chain steps. */
 	steps?: SubagentStepMetadata[];
 	exitCode: number;
+	/**
+	 * The child agent's own text output (its assistant messages), without system notes.
+	 * For a chain (`steps` set) this is instead the composed per-step report from
+	 * `formatSingleResult`, in which each step's output is already delimited.
+	 */
 	output: string;
+	/**
+	 * System notes about how the run was routed (ignored model-selection warnings, model
+	 * fallback summaries). Rendered before, and outside, the agent-output block.
+	 */
+	notes?: string[];
 	stderr: string;
 	errorMessage: string | null;
 	/** Path to the persisted session JSONL file, if available */
@@ -1176,16 +1186,6 @@ export function formatModelFallbackSummary(
 	return `[MODEL FALLBACK: skipped ${skippedModels.length} unavailable model(s); ${routeSummary}]\n${skipped}`;
 }
 
-export function prependModelFallbackSummary(
-	output: string,
-	skippedModels: SkippedFallbackModel[],
-	proposalModel: string | undefined,
-	finalModel?: string,
-): string {
-	const fallbackSummary = formatModelFallbackSummary(skippedModels, proposalModel, finalModel);
-	return fallbackSummary ? `${fallbackSummary}\n\n${output}` : output;
-}
-
 function formatSkippedModelFailureDetails(skippedModels: SkippedFallbackModel[]): string | undefined {
 	if (skippedModels.length === 0) return undefined;
 	return `Skipped models:\n${skippedModels.map((s) => `- ${s.model}: ${s.reason}`).join("\n")}`;
@@ -1614,16 +1614,21 @@ export async function executeSingle(
 		onControlAvailable,
 	);
 	const finalSelectedModel = result.model ?? (usedModel ? canonicalModelRef(resolvedProvider, usedModel) : undefined);
-	result.output = prependModelFallbackSummary(
-		result.output,
+	// Spawn-time routing notes are system text, not the child's words: keep them out of
+	// `output` so the parent sees them outside the agent-output block (and so a chain's
+	// `{previous}` carries only the previous agent's output).
+	const notes: string[] = [];
+	if (warning) {
+		const warningContext = arbitrationEnabled ? `Proposal resolution: ${warning}` : warning;
+		notes.push(`[WARNING: ${warningContext}]`);
+	}
+	const fallbackSummary = formatModelFallbackSummary(
 		skippedModels,
 		arbitrationEnabled ? proposalSelectedModel : finalSelectedModel,
 		arbitrationEnabled ? finalSelectedModel : undefined,
 	);
-	if (warning) {
-		const warningContext = arbitrationEnabled ? `Proposal resolution: ${warning}` : warning;
-		result.output = `[WARNING: ${warningContext}]\n\n${result.output}`;
-	}
+	if (fallbackSummary) notes.push(fallbackSummary);
+	if (notes.length > 0) result.notes = notes;
 	return result;
 }
 
@@ -2563,7 +2568,23 @@ function formatSubagentResult(
 	return text;
 }
 
-export function formatSingleResult(result: SubagentResult): string {
+/**
+ * Wrap a subagent's own output in labelled delimiter lines so it can't be mistaken for
+ * the system lines around it (execution metadata, cancellation/error notes, session log,
+ * still-running list). `partial` marks output from a run that did not finish cleanly
+ * (cancelled, failed, or truncated). Blank lines around the delimiters keep them as
+ * separate paragraphs when the text is rendered as Markdown (dashboard, Telegram).
+ */
+export function formatAgentOutputBlock(output: string, partial: boolean): string {
+	return `--- agent output${partial ? " (partial)" : ""} ---\n\n${output}\n\n--- end of agent output ---`;
+}
+
+/**
+ * Render one subagent result (used for each chain step). The agent's output is wrapped by
+ * `formatAgentOutputBlock`; `cancelled` marks a step that was stopped by the user, whose
+ * output is therefore partial.
+ */
+export function formatSingleResult(result: SubagentResult, cancelled = false): string {
 	const metadata = [
 		result.model ? `model: ${result.model}` : undefined,
 		result.thinking ? `thinking: ${result.thinking}` : undefined,
@@ -2580,8 +2601,12 @@ export function formatSingleResult(result: SubagentResult): string {
 		// Clean exit but an error was surfaced (e.g. truncation at the token limit).
 		text += `**Error**: ${result.errorMessage}\n`;
 	}
+	if (result.notes && result.notes.length > 0) {
+		text += `\n${result.notes.join("\n\n")}\n`;
+	}
 	if (result.output) {
-		text += `\n${result.output}`;
+		const partial = cancelled || result.exitCode !== 0 || !!result.errorMessage;
+		text += `\n${formatAgentOutputBlock(result.output, partial)}`;
 	} else if (result.exitCode === 0 && !result.errorMessage) {
 		text += "\n(No output)";
 	}
@@ -2999,8 +3024,14 @@ export function createSubagentToolDefinition(
 								getParentSessionId(),
 								getSingleModelMode,
 							);
+							// A user stop ends the chain at its current (last) step, so only that step's
+							// output can be cut short.
+							const stoppedAtLastStep = signal.aborted;
 							const resultText = results
-								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
+								.map(
+									(r, i) =>
+										`### Step ${i + 1}\n${formatSingleResult(r, stoppedAtLastStep && i === results.length - 1)}`,
+								)
 								.join("\n\n---\n\n");
 							const failed = results.filter((r) => r.exitCode !== 0);
 							// Per-step session logs are already embedded in resultText via formatSingleResult
