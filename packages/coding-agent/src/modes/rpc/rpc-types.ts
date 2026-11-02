@@ -113,6 +113,7 @@ export type RpcCommand =
 	| { id?: string; type: "list_background_agents" }
 	| { id?: string; type: "steer_background_agent"; agentId: string; message: string }
 	| { id?: string; type: "get_background_agent_pending"; agentId: string }
+	| { id?: string; type: "abort_background_agent"; agentId: string }
 	| { id?: string; type: "list_agent_types" }
 
 	// Settings (persistent defaults)
@@ -477,6 +478,7 @@ export type RpcResponse =
 			data: { agents: RpcBackgroundAgentInfo[] };
 	  }
 	| { id?: string; type: "response"; command: "steer_background_agent"; success: true }
+	| { id?: string; type: "response"; command: "abort_background_agent"; success: true }
 	| {
 			id?: string;
 			type: "response";
@@ -564,8 +566,8 @@ export interface RpcBackgroundAgentInfo {
 	taskSummary: string;
 	/** ISO timestamp of launch */
 	startedAt: string;
-	/** Lifecycle status */
-	status: "running" | "completed" | "failed";
+	/** Lifecycle status (`cancelled` = stopped by the user) */
+	status: "running" | "completed" | "failed" | "cancelled";
 	/** Directory containing the agent's session JSONL file (known at spawn time) */
 	sessionDir?: string;
 	/** Path to the agent's session JSONL file (available after the child exits) */

@@ -2210,7 +2210,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 																				: "●"
 																			: agent.status === "completed"
 																				? "✓"
-																				: "✕"}
+																				: agent.status === "cancelled"
+																					? "■"
+																					: "✕"}
 																	</span>
 																	<span class="task">
 																		{agent.agentType} — {agent.taskSummary}

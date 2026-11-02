@@ -69,8 +69,12 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
 - **Subagent drill-in** — transcript of a background agent: live events via
   the relay, hydrated from the agent's on-disk session log so the view survives
   browser reloads. While the child is running, its composer queues user-written
-  steering messages directly to that child and shows its effective queue mode;
-  completed and rehydrated transcripts remain read-only.
+  steering messages directly to that child and shows its effective queue mode,
+  and a **■ stop** stops only that child (gracefully, so hung tools such as a
+  long bash command are killed rather than orphaned) without waking the parent
+  or touching other subagents; stopped agents show as `cancelled`. Completed,
+  cancelled, and rehydrated transcripts remain read-only (see
+  [Stopping a subagent](../coding-agent/docs/dashboard.md#stopping-a-subagent)).
 - **Files** — host-wide browse with places shortcuts, upload (collision
   prompts before overwrite), download, new-folder, "new session here", and the
   effective global nested-context trust for the viewed canonical folder. Trust

@@ -8,6 +8,7 @@ import {
 	getBackgroundAgents,
 	pruneBackgroundAgents,
 	rehydrateBackgroundAgentsFromDisk,
+	SUBAGENT_CANCELLED_MARKER_FILE,
 } from "../src/core/tools/subagent.js";
 
 function createTempDir(): string {
@@ -25,6 +26,7 @@ function writeChildSession(
 	name: string,
 	parentSessionFile: string,
 	task: string,
+	stopReason = "stop",
 ): { childDir: string; sessionFile: string } {
 	const childDir = join(baseDir, name);
 	mkdirSync(childDir, { recursive: true });
@@ -51,7 +53,7 @@ function writeChildSession(
 			id: `${name}-assistant`,
 			parentId: `${name}-user`,
 			timestamp: "2026-01-02T03:05:02.000Z",
-			message: { role: "assistant", content: [{ type: "text", text: "Done" }], stopReason: "stop" },
+			message: { role: "assistant", content: [{ type: "text", text: "Done" }], stopReason },
 		},
 	]);
 	return { childDir, sessionFile };
@@ -195,6 +197,119 @@ describe("rehydrateBackgroundAgentsFromDisk", () => {
 			sessionFile: step1SessionFile,
 			cwd: tempDir,
 		});
+	});
+
+	test("infers status from the child's final stop reason: aborted → cancelled, error → failed", () => {
+		const cancelled = writeChildSession(subagentSessionsBase, "stopped-child", parentSessionFile, "t1", "aborted");
+		const failed = writeChildSession(subagentSessionsBase, "errored-child", parentSessionFile, "t2", "error");
+		const completed = writeChildSession(subagentSessionsBase, "finished-child", parentSessionFile, "t3", "stop");
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(3);
+		const statusFor = (sessionFile: string) =>
+			getBackgroundAgents().find((agent) => agent.sessionFile === sessionFile)?.status;
+		expect(statusFor(cancelled.sessionFile)).toBe("cancelled");
+		expect(statusFor(failed.sessionFile)).toBe("failed");
+		expect(statusFor(completed.sessionFile)).toBe("completed");
+	});
+
+	function writeCancellationMarker(sessionDir: string, overrides: Record<string, unknown> = {}): void {
+		mkdirSync(sessionDir, { recursive: true });
+		writeFileSync(
+			join(sessionDir, SUBAGENT_CANCELLED_MARKER_FILE),
+			`${JSON.stringify({
+				type: "subagent_cancelled",
+				version: 1,
+				cancelledAt: "2026-01-02T03:07:00.000Z",
+				parentSession: parentSessionFile,
+				agentType: "worker",
+				taskSummary: "worker task",
+				startedAt: "2026-01-02T03:05:00.000Z",
+				cwd: tempDir,
+				...overrides,
+			})}\n`,
+		);
+	}
+
+	test("a cancellation marker overrides a log tail that doesn't show the stop", () => {
+		// Child terminated after the grace period: its last saved message is a normal tool-use turn.
+		const killed = writeChildSession(subagentSessionsBase, "killed-child", parentSessionFile, "t1", "toolUse");
+		writeCancellationMarker(killed.childDir);
+		// Untouched sibling without a marker keeps its inferred status.
+		const finished = writeChildSession(subagentSessionsBase, "finished-child", parentSessionFile, "t2", "stop");
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(2);
+		const statusFor = (sessionFile: string) =>
+			getBackgroundAgents().find((agent) => agent.sessionFile === sessionFile)?.status;
+		expect(statusFor(killed.sessionFile)).toBe("cancelled");
+		expect(statusFor(finished.sessionFile)).toBe("completed");
+	});
+
+	test("a chain stopped between steps rehydrates as cancelled, not as its last completed step", () => {
+		const chainDir = join(subagentSessionsBase, "chain-stopped");
+		const step1Dir = join(chainDir, "step-1");
+		mkdirSync(step1Dir, { recursive: true });
+		writeJsonl(join(step1Dir, "step-1.jsonl"), [
+			{
+				type: "session",
+				version: 3,
+				id: "chain-stopped-step-1",
+				timestamp: "2026-01-02T03:05:00.000Z",
+				cwd: tempDir,
+				parentSession: parentSessionFile,
+				agentType: "Explore",
+			},
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: null,
+				timestamp: "2026-01-02T03:05:02.000Z",
+				message: { role: "assistant", content: [{ type: "text", text: "Step one done" }], stopReason: "stop" },
+			},
+		]);
+		writeCancellationMarker(chainDir, { agentType: "Explore", taskSummary: "2-step chain" });
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(1);
+		expect(getBackgroundAgents().find((agent) => agent.sessionDir === chainDir)?.status).toBe("cancelled");
+	});
+
+	test("recovers an agent stopped before it spawned from its marker alone", () => {
+		const queuedDir = join(subagentSessionsBase, "queued-agent");
+		writeCancellationMarker(queuedDir);
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(1);
+		const agent = getBackgroundAgents().find((candidate) => candidate.sessionDir === queuedDir);
+		expect(agent).toEqual({
+			agentId: "rehydrated-queued-agent",
+			agentType: "worker",
+			taskSummary: "worker task",
+			startedAt: Date.parse("2026-01-02T03:05:00.000Z"),
+			status: "cancelled",
+			sessionDir: queuedDir,
+			cwd: tempDir,
+		});
+		// Idempotent: the directory is already registered.
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(0);
+	});
+
+	test("ignores a marker-only agent of another parent session", () => {
+		writeCancellationMarker(join(subagentSessionsBase, "other-parent-agent"), {
+			parentSession: join(tempDir, "different-parent.jsonl"),
+		});
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(0);
+	});
+
+	test("a malformed marker still marks a logged agent cancelled but can't recover a marker-only one", () => {
+		const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+		const logged = writeChildSession(subagentSessionsBase, "logged-child", parentSessionFile, "t1", "stop");
+		writeFileSync(join(logged.childDir, SUBAGENT_CANCELLED_MARKER_FILE), "{not json");
+		const markerOnlyDir = join(subagentSessionsBase, "marker-only");
+		writeCancellationMarker(markerOnlyDir, { startedAt: "not a date" });
+
+		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase)).toBe(1);
+		expect(getBackgroundAgents().find((agent) => agent.sessionFile === logged.sessionFile)?.status).toBe("cancelled");
+		expect(getBackgroundAgents().some((agent) => agent.sessionDir === markerOnlyDir)).toBe(false);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("malformed cancellation marker"));
 	});
 
 	test("discovers matching sessions from configured and legacy roots in order", () => {

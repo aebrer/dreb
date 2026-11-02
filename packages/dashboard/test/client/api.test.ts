@@ -117,6 +117,26 @@ describe("dashboardImageUrl", () => {
 	});
 });
 
+describe("subagent stop transport", () => {
+	it("POSTs to the selected subagent's encoded abort route and surfaces server errors", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }))
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ error: 'Background agent "agent/one" is no longer running.' }), {
+					status: 502,
+					headers: { "content-type": "application/json" },
+				}),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await api.abortSubagent("runtime", "agent/one");
+		expect(fetchMock).toHaveBeenCalledWith("/api/runtimes/runtime/subagents/agent%2Fone/abort", { method: "POST" });
+
+		await expect(api.abortSubagent("runtime", "agent/one")).rejects.toThrow("is no longer running");
+	});
+});
+
 describe("settings project context transport", () => {
 	it("encodes cwd for settings reads and writes while preserving global URLs", async () => {
 		const fetchMock = vi.fn().mockImplementation(

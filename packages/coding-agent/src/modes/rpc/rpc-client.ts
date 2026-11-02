@@ -385,6 +385,16 @@ export class RpcClient {
 	}
 
 	/**
+	 * Stop one running background agent (and only it). Resolves once the stop is
+	 * initiated; completion arrives as `background_agent_end` with `cancelled: true`.
+	 * Rejects for unknown or no-longer-running agents.
+	 */
+	async abortBackgroundAgent(agentId: string): Promise<void> {
+		const response = await this.send({ type: "abort_background_agent", agentId });
+		this.getData(response);
+	}
+
+	/**
 	 * Abort current operation.
 	 */
 	async abort(): Promise<void> {
