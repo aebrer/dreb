@@ -19,7 +19,7 @@ type AgentSessionEvent =
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
   | { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string; sessionDir?: string }
   | { type: "subagent_arbitration"; agentId: string; status: "success" | "failure"; proposed: DispatchRoute; final: DispatchRoute | null; changed: ("agent" | "model" | "thinking")[]; step?: number; errorCode?: string; errorMessage?: string }
-  | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; model?: string; thinking?: ThinkingLevel; steps?: SubagentStepMetadata[]; sessionFile?: string }
+  | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; cancelled: boolean; model?: string; thinking?: ThinkingLevel; steps?: SubagentStepMetadata[]; sessionFile?: string }
   | { type: "background_agent_event"; agentId: string; event: Record<string, unknown> }
   | { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
   | { type: "session_name_changed"; name: string }
@@ -130,7 +130,7 @@ Events are emitted in a predictable sequence:
 
 `message_update` events stream as chunks arrive — expect many per message. `tool_execution_update` events are optional (only emitted for tools that report progress).
 
-Auto-compaction and auto-retry events can appear between turns. Background lifecycle events are asynchronous: `background_agent_start` is emitted immediately, then an enabled `subagent_arbitration` record appears before that child's first `background_agent_event`; a failed arbitration is followed by `background_agent_end` without any child event.
+Auto-compaction and auto-retry events can appear between turns. Background lifecycle events are asynchronous: `background_agent_start` is emitted immediately, then an enabled `subagent_arbitration` record appears before that child's first `background_agent_event`; a failed arbitration is followed by `background_agent_end` without any child event. `background_agent_end.cancelled` is `true` when the user stopped the agent (then `success` is `false`).
 
 ## Example
 

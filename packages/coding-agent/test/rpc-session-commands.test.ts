@@ -86,6 +86,23 @@ describe("RPC session commands", () => {
 		});
 	});
 
+	it("serializes a single-agent stop and rejects failed stop responses", async () => {
+		const client = new RpcClient() as any;
+		client.send = vi
+			.fn()
+			.mockResolvedValueOnce({ type: "response", command: "abort_background_agent", success: true })
+			.mockResolvedValueOnce({
+				type: "response",
+				command: "abort_background_agent",
+				success: false,
+				error: 'Background agent "agent-1" is no longer running.',
+			});
+
+		await client.abortBackgroundAgent("agent-1");
+		expect(client.send).toHaveBeenNthCalledWith(1, { type: "abort_background_agent", agentId: "agent-1" });
+		await expect(client.abortBackgroundAgent("agent-1")).rejects.toThrow("is no longer running");
+	});
+
 	it("rejects failed agent-scoped steering responses", async () => {
 		const client = new RpcClient() as any;
 		client.send = vi.fn().mockResolvedValue({

@@ -40,7 +40,7 @@ If the `agentModels.models` list is empty or undefined for a given agent, resolu
 
 The `singleModelMode` setting (top-level, default `false`) is a global kill-switch for model selection: when enabled, every subagent runs on the **parent session's model** and the resolution order above is skipped entirely. Per-invocation `model` overrides, `agentModels.models` fallback lists, agent-definition `model` fields, spawn-time availability probes, and the optional [Dispatch Arbiter](#dispatch-arbiter) are all bypassed; the child process is spawned directly on the parent's resolved model.
 
-Any requested model selection — including one identical to the parent's model — is reported to the parent model by prepending this notice to the child's output:
+Any requested model selection — including one identical to the parent's model — is reported to the parent model by placing this notice just before the child's output (outside its `--- agent output ---` block):
 
 ```
 [WARNING: The user has enabled "single model mode" in the settings, so the model selection for this subagent was ignored. Using parent model "<provider>/<model>".]

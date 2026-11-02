@@ -311,13 +311,16 @@ describe("pre-spawn subagent arbitration", () => {
 		);
 
 		expect(result).toMatchObject({ exitCode: 0, model: route.decision.model });
-		expect(result.output).toContain(
+		// Routing diagnostics are system notes, kept out of the child's own output.
+		expect(result.output).toBe("done");
+		expect(result.notes).toHaveLength(2);
+		const [warning, fallbackSummary] = result.notes!;
+		expect(warning).toBe(
 			'[WARNING: Proposal resolution: Agent preferred models were unavailable. Falling back to parent model "worker".]',
 		);
-		expect(result.output).toContain("[MODEL FALLBACK: skipped 1 unavailable model(s);");
-		expect(result.output).toContain(route.expectedSummary);
-		expect(result.output).toContain("- provider/missing:");
-		expect(result.output).toContain("done");
+		expect(fallbackSummary).toContain("[MODEL FALLBACK: skipped 1 unavailable model(s);");
+		expect(fallbackSummary).toContain(route.expectedSummary);
+		expect(fallbackSummary).toContain("- provider/missing:");
 	});
 
 	test.each([

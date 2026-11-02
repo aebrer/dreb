@@ -923,7 +923,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		case "background_agent_end": {
 			const agent = state.backgroundAgents[String(event.agentId)];
 			if (agent) {
-				agent.status = event.success ? "completed" : "failed";
+				agent.status = event.cancelled === true ? "cancelled" : event.success ? "completed" : "failed";
 				agent.sessionFile = (event.sessionFile as string | undefined) ?? agent.sessionFile;
 			}
 			const sub = state.subagents[String(event.agentId)];

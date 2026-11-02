@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSubagentConcurrencyGate } from "../src/core/tools/subagent.js";
+import { createSubagentConcurrencyGate, SubagentSlotWaitAbortedError } from "../src/core/tools/subagent.js";
 
 /**
  * Unit tests for the subagent concurrency gate. The gate is owned separately from the tool
@@ -85,5 +85,67 @@ describe("createSubagentConcurrencyGate", () => {
 		sharedGate.release();
 		await postReload;
 		expect(postReloadAdmitted).toBe(true);
+	});
+	it("an aborted waiter leaves the queue without taking a slot; the next waiter still gets it", async () => {
+		const gate = createSubagentConcurrencyGate(1);
+		await gate.acquire(); // the only slot is held
+
+		const stopped = new AbortController();
+		const stoppedWait = gate.acquire(stopped.signal);
+		let keptAdmitted = false;
+		const keptWait = gate.acquire().then(() => {
+			keptAdmitted = true;
+		});
+
+		stopped.abort();
+		await expect(stoppedWait).rejects.toBeInstanceOf(SubagentSlotWaitAbortedError);
+
+		// The aborted waiter neither consumed nor skipped the slot: releasing the held
+		// slot admits the remaining waiter, and the gate is full again afterwards.
+		gate.release();
+		await keptWait;
+		expect(keptAdmitted).toBe(true);
+
+		let extraAdmitted = false;
+		const extra = gate.acquire().then(() => {
+			extraAdmitted = true;
+		});
+		await Promise.resolve();
+		expect(extraAdmitted).toBe(false);
+		gate.release();
+		await extra;
+		expect(extraAdmitted).toBe(true);
+	});
+
+	it("rejects an already-aborted signal without taking a free slot", async () => {
+		const gate = createSubagentConcurrencyGate(1);
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(gate.acquire(controller.signal)).rejects.toBeInstanceOf(SubagentSlotWaitAbortedError);
+
+		// The free slot is still available to the next caller.
+		let admitted = false;
+		await gate.acquire().then(() => {
+			admitted = true;
+		});
+		expect(admitted).toBe(true);
+	});
+
+	it("an abort after the slot was granted has no effect on accounting", async () => {
+		const gate = createSubagentConcurrencyGate(1);
+		const controller = new AbortController();
+		await gate.acquire(controller.signal);
+		controller.abort(); // the holder must still release explicitly
+
+		let waiterAdmitted = false;
+		const waiter = gate.acquire().then(() => {
+			waiterAdmitted = true;
+		});
+		await Promise.resolve();
+		expect(waiterAdmitted).toBe(false);
+		gate.release();
+		await waiter;
+		expect(waiterAdmitted).toBe(true);
 	});
 });

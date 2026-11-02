@@ -86,7 +86,7 @@ const BUNDLED_FONTS = [
 const isBundledFontRequest = (url: string): boolean =>
 	BUNDLED_FONTS.some((font) => (font.faces as readonly string[]).some((name) => url.endsWith(name)));
 
-const BASE_VARS = ["--bg", "--text", "--border", "--muted"] as const;
+const BASE_VARS = ["--bg", "--user-message-bg", "--text", "--border", "--muted"] as const;
 const STATUS_VARS = ["--status-running", "--status-attention", "--status-idle", "--status-error"] as const;
 const SYNTAX_VARS = [
 	"--syntax-comment",
@@ -105,8 +105,8 @@ const FG_VARS = ["--text", "--muted", ...STATUS_VARS, ...SYNTAX_VARS];
 
 // -------------------------------------------------------------- WCAG helper
 
-/** Parse "#rrggbb" / "#rgb" / "rgb(r, g, b[, a])" into [r, g, b] (0–255). */
-function parseColor(value: string): [number, number, number] {
+/** Parse "#rrggbb" / "#rgb" / "rgb(r, g, b[, a])" into [r, g, b, alpha]. */
+function parseColor(value: string): [number, number, number, number] {
 	const v = value.trim();
 	if (v.startsWith("#")) {
 		let hex = v.slice(1);
@@ -117,7 +117,7 @@ function parseColor(value: string): [number, number, number] {
 				.join("");
 		}
 		const n = Number.parseInt(hex, 16);
-		return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+		return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 1];
 	}
 	const m = v.match(/rgba?\(([^)]+)\)/i);
 	if (m) {
@@ -125,13 +125,13 @@ function parseColor(value: string): [number, number, number] {
 			.split(/[,\s/]+/)
 			.filter(Boolean)
 			.map(Number);
-		return [parts[0], parts[1], parts[2]];
+		return [parts[0], parts[1], parts[2], parts[3] ?? 1];
 	}
 	throw new Error(`unparseable color: ${JSON.stringify(value)}`);
 }
 
 /** WCAG 2.1 relative luminance of an sRGB color. */
-function relativeLuminance([r, g, b]: [number, number, number]): number {
+function relativeLuminance([r, g, b]: [number, number, number, number]): number {
 	const channel = (c: number): number => {
 		const s = c / 255;
 		return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
@@ -157,8 +157,22 @@ function stylesHead(includeThemes = true): string {
 	return `<style>${tokensCss}</style><style>${appCss}</style>${includeThemes ? `<style>${themesCss}</style>` : ""}`;
 }
 
+// Match transcript.tsx's user entry and assistant-turn/tool structure.
+function transcriptHtml(): string {
+	return `<div class="chat-inner">
+		<div class="entry user"><div class="entry-head"><span>you</span></div>
+			<div class="entry-body">Please check the dashboard appearance.</div></div>
+		<div class="assistant-turn">
+			<div class="entry assistant"><div class="entry-head"><span>dreb</span></div>
+				<div class="entry-body"><div class="markdown-body"><p>I will check the user bubble and tool output.</p></div></div></div>
+			<details class="tool" open><summary><span class="tool-name">read</span><span class="tool-arg">README.md</span><span class="tool-status">done</span></summary>
+				<div class="tool-result"><pre>Dashboard appearance checked.</pre></div></details>
+		</div>
+	</div>`;
+}
+
 function harnessHtml(includeThemes = true): string {
-	return `<!DOCTYPE html><html><head><meta charset="utf-8">${stylesHead(includeThemes)}</head><body><div id="probe">const x = 1;</div></body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8">${stylesHead(includeThemes)}</head><body><div id="probe">const x = 1;</div>${transcriptHtml()}</body></html>`;
 }
 
 let browser: Browser;
@@ -206,6 +220,45 @@ async function readVars(selector: string, names: readonly string[]): Promise<Rec
 		},
 		{ selector, names: [...names] },
 	);
+}
+
+async function readUserStyle(scope = "body"): Promise<{ background: string; color: string }> {
+	return page.locator(`${scope} .entry.user .entry-body`).evaluate((el) => {
+		const cs = getComputedStyle(el);
+		return { background: cs.backgroundColor, color: cs.color };
+	});
+}
+
+async function expectMessageFills(vars: Record<string, string>, scope = "body"): Promise<void> {
+	const user = await readUserStyle(scope);
+	const fill = parseColor(user.background);
+	expect(fill[3], `${scope}: user fill is opaque`).toBe(1);
+	expect(fill, `${scope}: user fill matches its token`).toEqual(parseColor(vars["--user-message-bg"]));
+	const pageBackground = await page.locator(scope).evaluate((el) => getComputedStyle(el).backgroundColor);
+	expect(fill, `${scope}: user fill differs from the page`).not.toEqual(parseColor(pageBackground));
+	const ratio = contrastRatio(user.color, user.background);
+	expect(ratio, `${scope}: user text on actual fill = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+
+	const transparent = await page.locator(scope).evaluate((el) =>
+		[
+			".entry.user",
+			".entry.user .entry-head",
+			".assistant-turn",
+			".entry.assistant",
+			".entry.assistant .entry-body",
+			".markdown-body",
+			"details.tool",
+			"details.tool summary",
+			".tool-result",
+			".tool-result pre",
+		].map((selector) => ({
+			selector,
+			background: getComputedStyle(el.querySelector(selector)!).backgroundColor,
+		})),
+	);
+	for (const { selector, background } of transparent) {
+		expect(parseColor(background)[3], `${scope} ${selector} remains transparent`).toBe(0);
+	}
 }
 
 async function readBodyFont(): Promise<string> {
@@ -341,34 +394,58 @@ describe("appearance — theme × mode × OS matrix resolves every token", () =>
 		}
 	}
 
-	it.each(combos)("theme=%s mode=%s os=%s → all tokens are non-empty colors", async (theme, mode, os) => {
-		const vars = await computeVars(theme, mode, os);
-		for (const name of ALL_VARS) {
-			expect(vars[name], `${name} for ${theme}/${mode}/${os}`).not.toBe("");
-			expect(isColor(vars[name]), `${name}=${vars[name]} for ${theme}/${mode}/${os}`).toBe(true);
-		}
-	});
+	it.each(combos)(
+		"theme=%s mode=%s os=%s → tokens resolve and only user bubbles are filled",
+		async (theme, mode, os) => {
+			const vars = await computeVars(theme, mode, os);
+			for (const name of ALL_VARS) {
+				expect(vars[name], `${name} for ${theme}/${mode}/${os}`).not.toBe("");
+				expect(isColor(vars[name]), `${name}=${vars[name]} for ${theme}/${mode}/${os}`).toBe(true);
+			}
+			await expectMessageFills(vars);
+		},
+	);
 });
 
 // ==================================================== 2. forced-mode precedence
 
 describe("appearance — forced color-mode outranks the OS; system follows it", () => {
 	it.each(THEME_IDS)("theme=%s: forced light/dark win over OS and system follows OS", async (theme) => {
-		const darkOnLight = (await computeVars(theme, "dark", "light"))["--bg"];
-		const darkOnDark = (await computeVars(theme, "dark", "dark"))["--bg"];
-		const lightOnDark = (await computeVars(theme, "light", "dark"))["--bg"];
-		const lightOnLight = (await computeVars(theme, "light", "light"))["--bg"];
-		const systemOnDark = (await computeVars(theme, "system", "dark"))["--bg"];
-		const systemOnLight = (await computeVars(theme, "system", "light"))["--bg"];
+		const darkOnLight = await computeVars(theme, "dark", "light");
+		const darkOnDark = await computeVars(theme, "dark", "dark");
+		const lightOnDark = await computeVars(theme, "light", "dark");
+		const lightOnLight = await computeVars(theme, "light", "light");
+		const systemOnDark = await computeVars(theme, "system", "dark");
+		const systemOnLight = await computeVars(theme, "system", "light");
 
-		// Forced mode ignores the OS preference entirely.
-		expect(darkOnLight).toBe(darkOnDark);
-		expect(lightOnDark).toBe(lightOnLight);
-		// The two forced variants are genuinely different backgrounds.
-		expect(darkOnLight).not.toBe(lightOnLight);
-		// System mode (no data-color-mode) tracks the emulated OS scheme.
-		expect(systemOnDark).toBe(darkOnDark);
-		expect(systemOnLight).toBe(lightOnLight);
+		for (const name of ["--bg", "--user-message-bg"]) {
+			// Forced mode ignores the OS; system tracks it for both surfaces.
+			expect(parseColor(darkOnLight[name])).toEqual(parseColor(darkOnDark[name]));
+			expect(parseColor(lightOnDark[name])).toEqual(parseColor(lightOnLight[name]));
+			expect(parseColor(darkOnLight[name])).not.toEqual(parseColor(lightOnLight[name]));
+			expect(parseColor(systemOnDark[name])).toEqual(parseColor(darkOnDark[name]));
+			expect(parseColor(systemOnLight[name])).toEqual(parseColor(lightOnLight[name]));
+		}
+	});
+});
+
+describe("appearance — mounted system mode responds to OS changes without reload", () => {
+	it.each(THEME_IDS)("theme=%s updates the user fill in both directions", async (theme) => {
+		const light = await computeVars(theme, "light", "light");
+		const dark = await computeVars(theme, "dark", "light");
+		await computeVars(theme, "system", "light");
+		await expectMessageFills(light);
+		for (const [os, expected] of [
+			["dark", dark],
+			["light", light],
+		] as const) {
+			await page.emulateMedia({ colorScheme: os });
+			await expect
+				.poll(async () => parseColor((await readUserStyle()).background))
+				.toEqual(parseColor(expected["--user-message-bg"]));
+			await expectMessageFills(expected);
+		}
+		expect(await page.locator("html").getAttribute("data-color-mode")).toBeNull();
 	});
 });
 
@@ -378,7 +455,7 @@ describe("appearance — a scoped data-theme themes only its subtree", () => {
 	it("a data-theme='gruvbox' container differs from the default :root without touching it", async () => {
 		await page.emulateMedia({ colorScheme: "light" });
 		await page.setContent(
-			`<!DOCTYPE html><html><head><meta charset="utf-8">${stylesHead(true)}</head><body><div id="preview" data-theme="gruvbox">preview card</div></body></html>`,
+			`<!DOCTYPE html><html><head><meta charset="utf-8">${stylesHead(true)}</head><body><div id="preview" class="theme-card" data-theme="gruvbox">${transcriptHtml()}</div></body></html>`,
 		);
 		const rootBg = (await readVars(":root", ["--bg"]))["--bg"];
 		const previewBg = (await readVars("#preview", ["--bg"]))["--bg"];
@@ -388,39 +465,49 @@ describe("appearance — a scoped data-theme themes only its subtree", () => {
 		expect(rootBg).not.toBe("");
 		expect(previewBg).not.toBe("");
 		expect(previewBg).not.toBe(rootBg);
+		const rootFill = (await readVars(":root", ["--user-message-bg"]))["--user-message-bg"];
+		const previewVars = await readVars("#preview", ALL_VARS);
+		expect(parseColor(previewVars["--user-message-bg"])).not.toEqual(parseColor(rootFill));
+		await expectMessageFills(previewVars, "#preview");
 	});
 
-	it("gallery cards keep their own palette when a NON-default theme is active on :root", async () => {
-		// Regression: selecting e.g. gruvbox must NOT bleed into the other preview
-		// cards (including the Default card). Each card carries data-theme (default
-		// included) so it renders its own palette regardless of the active root.
-		await page.emulateMedia({ colorScheme: "light" });
-		await page.setContent(
-			`<!DOCTYPE html><html data-theme="gruvbox"><head><meta charset="utf-8">${stylesHead(true)}</head><body>` +
-				`<div id="c-default" data-theme="default">d</div>` +
-				`<div id="c-dim" data-theme="dim">d</div>` +
-				`<div id="c-solarized" data-theme="solarized">s</div>` +
-				`<div id="c-gruvbox" data-theme="gruvbox">g</div>` +
-				`</body></html>`,
-		);
-		const rootBg = (await readVars(":root", ["--bg"]))["--bg"];
-		const dflt = (await readVars("#c-default", ["--bg"]))["--bg"];
-		const dim = (await readVars("#c-dim", ["--bg"]))["--bg"];
-		const sol = (await readVars("#c-solarized", ["--bg"]))["--bg"];
-		const gruv = (await readVars("#c-gruvbox", ["--bg"]))["--bg"];
-
-		// The Default card shows the tokens.css baseline white, NOT gruvbox
-		// (accept #fff or #ffffff — CSS minification may shorten it).
-		expect(["#fff", "#ffffff"]).toContain(dflt.toLowerCase());
-		// Every non-gruvbox card differs from the active gruvbox root.
-		expect(dflt).not.toBe(rootBg);
-		expect(dim).not.toBe(rootBg);
-		expect(sol).not.toBe(rootBg);
-		// The four preview backgrounds are all distinct palettes.
-		expect(new Set([dflt, dim, sol, gruv]).size).toBe(4);
-		// The gruvbox card matches the (also-gruvbox) root — same palette.
-		expect(gruv).toBe(rootBg);
-	});
+	it.each([
+		["gruvbox", "light", "dark"],
+		["dim", "dark", "light"],
+		["dim", "system", "light"],
+		["gruvbox", "system", "dark"],
+	] as Array<[ThemeId, Mode, Scheme]>)(
+		"root=%s: every scoped mode=%s owns its fill with OS=%s without changing siblings",
+		async (rootTheme, mode, os) => {
+			// Obtain expectations from each theme in isolation, not TS palette copies.
+			const expected = new Map<ThemeId, Record<string, string>>();
+			for (const theme of THEME_IDS) expected.set(theme, await computeVars(theme, mode, os));
+			const rootExpected = await computeVars(rootTheme, "system", os);
+			await page.setContent(
+				`<!DOCTYPE html><html data-theme="${rootTheme}"><head><meta charset="utf-8">${stylesHead(true)}</head><body>` +
+					THEME_IDS.map(
+						(theme) =>
+							`<div id="c-${theme}" class="theme-card" data-theme="${theme}"${mode === "system" ? "" : ` data-color-mode="${mode}"`}>${transcriptHtml()}</div>`,
+					).join("") +
+					`</body></html>`,
+			);
+			for (const theme of THEME_IDS) {
+				const vars = await readVars(`#c-${theme}`, ALL_VARS);
+				for (const name of ALL_VARS) {
+					expect(parseColor(vars[name]), `${theme} owns ${name}`).toEqual(parseColor(expected.get(theme)![name]));
+				}
+				await expectMessageFills(vars, `#c-${theme}`);
+			}
+			expect(await readVars(":root", ALL_VARS)).toEqual(rootExpected);
+			const sibling = await readVars("#c-solarized", ALL_VARS);
+			const siblingFill = await readUserStyle("#c-solarized");
+			await page.locator("#c-default").evaluate((el) => el.setAttribute("data-theme", "tol"));
+			await expectMessageFills(expected.get("tol")!, "#c-default");
+			expect(await readVars(":root", ALL_VARS)).toEqual(rootExpected);
+			expect(await readVars("#c-solarized", ALL_VARS)).toEqual(sibling);
+			expect(await readUserStyle("#c-solarized")).toEqual(siblingFill);
+		},
+	);
 });
 
 // ================================================== 4. no-preference regression
@@ -434,7 +521,7 @@ describe("appearance — themes.css does not change the pristine default", () =>
 			const baselineOnly = await computeVars("default", "system", os, { includeThemes: false });
 			const baselineFont = await readBodyFont();
 
-			for (const name of ["--bg", "--text", ...STATUS_VARS, ...SYNTAX_VARS]) {
+			for (const name of ["--bg", "--user-message-bg", "--text", ...STATUS_VARS, ...SYNTAX_VARS]) {
 				expect(withThemes[name], `${name} at os=${os}`).toBe(baselineOnly[name]);
 			}
 			expect(withThemesFont).toBe(baselineFont);
