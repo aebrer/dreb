@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getModel } from "../src/models.js";
 import { streamOpenAIResponses } from "../src/providers/openai-responses.js";
 import { streamSimple } from "../src/stream.js";
 import type { Model } from "../src/types.js";
@@ -19,7 +18,18 @@ describe("openai-responses github-copilot defaults", () => {
 	});
 
 	it("omits reasoning when no reasoning is requested", async () => {
-		const model = getModel("github-copilot", "gpt-5.4-nano");
+		const model: Model<"openai-responses"> = {
+			id: "test-copilot-responses",
+			name: "Copilot Responses test fixture",
+			api: "openai-responses",
+			provider: "github-copilot",
+			baseUrl: "https://api.githubcopilot.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32768,
+			maxTokens: 4096,
+		};
 		let capturedPayload: unknown;
 
 		mockDoneStream();
@@ -42,7 +52,7 @@ describe("openai-responses github-copilot defaults", () => {
 			if (event.type === "done" || event.type === "error") break;
 		}
 
-		expect(capturedPayload).not.toBeNull();
+		expect(capturedPayload).toBeDefined();
 		expect(capturedPayload).not.toMatchObject({
 			reasoning: expect.anything(),
 		});

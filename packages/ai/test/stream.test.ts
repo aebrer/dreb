@@ -905,8 +905,8 @@ describe("Generate E2E Tests", () => {
 	// Tokens are resolved at module level (see oauthTokens above)
 	// =========================================================================
 
-	describe("GitHub Copilot Provider (gpt-5.4-nano)", () => {
-		const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4-nano"), githubCopilotToken);
+	describe("GitHub Copilot Provider (reasoning and image capable via OpenAI Responses)", () => {
+		const llm = applyCopilotBaseUrl(getCopilotTestModel("openai-responses"), githubCopilotToken);
 
 		it.skipIf(!isLiveApiEnabled() || !githubCopilotToken)(
 			"should complete basic text generation",
