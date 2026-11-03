@@ -9,7 +9,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { access, link, mkdir, open, readdir, realpath, rename, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import type { Writable } from "node:stream";
@@ -74,7 +74,7 @@ export async function canonicalizePath(raw: string, opts: { mustExist: boolean }
 /** Resolve and canonicalize an existing directory supplied by a Dashboard client. */
 export async function resolveExistingDirectory(rawPath: string): Promise<string> {
 	const path = await canonicalizePath(rawPath, { mustExist: true });
-	let info: Awaited<ReturnType<typeof stat>>;
+	let info: Stats;
 	try {
 		info = await stat(path);
 	} catch (err) {

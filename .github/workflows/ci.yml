@@ -14,10 +14,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run verify-engines
+      # The pinned npm (.nvmrc -> bundled npm) is the single lockfile writer. `npm ls`
+      # fails on any invalid or missing entry (e.g. a locked version that violates an
+      # `overrides` entry; extraneous-only problems do not fail it), and the re-resolve
+      # must be a byte-for-byte no-op, which also catches stale lockfile entries.
+      - name: Verify package-lock.json is consistent and canonical
+        run: |
+          npm ls --all > /dev/null
+          npm install --package-lock-only --ignore-scripts
+          git diff --exit-code package-lock.json
       - run: npm run build
       - name: Verify build did not mutate package-lock.json
         run: git diff --exit-code package-lock.json
@@ -31,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - name: Install ripgrep and fd
         run: |
@@ -58,7 +67,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - name: Install ripgrep and fd
         run: |

@@ -75,8 +75,7 @@ function createFixtureProject(dir: string): void {
 // ============================================================================
 
 describe("isSearchAvailable", () => {
-	it("returns true on Node 22+", () => {
-		// We're running on Node 22, so node:sqlite should be available
+	it("returns true on the supported runtime (node:sqlite is built in)", () => {
 		expect(isSearchAvailable()).toBe(true);
 	});
 });

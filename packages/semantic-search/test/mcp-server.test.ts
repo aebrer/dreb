@@ -389,7 +389,8 @@ describe("MCP protocol integration", () => {
 		});
 		expect(result.isError).toBe(true);
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
-		expect(text).toContain("Node.js 22");
+		expect(text).toContain("node:sqlite");
+		expect(text).toContain("Node.js 26 LTS");
 
 		spy.mockRestore();
 	});

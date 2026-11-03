@@ -14,14 +14,14 @@ Use dreb if you want a coding agent that can run against direct APIs, coding sub
 - **Durable context.** [Sessions](packages/coding-agent/docs/session.md) are JSONL trees with resume/continue, `/tree` navigation, `/fork`, CLI `--fork`, compaction, HTML export, and JSONL import/export. Automatic compaction can run between tool-loop requests before the provider limit is reached; an opt-in [continuation setting](packages/coding-agent/docs/compaction.md#continuing-after-auto-compaction) keeps pending or interrupted work moving after successful compaction without restarting an already completed answer or changing manual `/compact`. [Memory](packages/coding-agent/README.md#memory) is file-based, global + project-scoped, survives sessions, can read Claude Code project memory, and can be maintained with `/dream` memory consolidation.
 - **A capable terminal workspace.** The TUI supports slash commands, file references with `@`, path completion, image paste/drag, bash shortcuts, hotkeys, settings, model cycling, steering/follow-up queues while the agent is working, token/cost/context status, custom themes, and extension-provided UI surfaces. Transcript prose, code, tool output, and agent results use terminal soft-wrap so copying from scrollback keeps long logical lines intact instead of injecting hard newlines.
 - **Optional local companion.** [`/buddy`](packages/coding-agent/docs/buddy.md) hatches an Ollama-powered terminal companion with persistent state, generated personality/backstory, event reactions, idle quips, name-call responses, pet/reroll/stats commands, and a sidebar presence while you work.
-- **Codebase and web understanding.** dreb includes file, grep/find/ls, bash, web search/fetch, task tracking, skill invocation, and semantic `search`. Semantic search uses AST-aware chunks, embeddings, POEM ranking, memory indexing, and also ships as [`@dreb/semantic-search`](packages/semantic-search/) with an MCP server for other harnesses. The semantic search package requires Node.js 22+.
+- **Codebase and web understanding.** dreb includes file, grep/find/ls, bash, web search/fetch, task tracking, skill invocation, and semantic `search`. Semantic search uses AST-aware chunks, embeddings, POEM ranking, memory indexing, and also ships as [`@dreb/semantic-search`](packages/semantic-search/) with an MCP server for other harnesses.
 - **Detailed usage tracking and performance logging.** dreb records per-session token usage, cost, context-window utilization, and rolling tokens-per-second performance in a local JSONL log (`~/.dreb/agent/performance.jsonl`). This data stays on your machine; the TUI footer, dashboard session details, Telegram `/stats`, and RPC share the same latest-100 median with long-term delta for personal analytics and model comparison.
 - **Safety and reliability primitives.** Recent dreb-specific hardening includes secret output scrubbing, sensitive-file guards, destructive-command guards, resource diagnostics surfaced in-session, warning propagation, rate-limited web search across parallel subagents, and JSON/RPC protocol hardening. Dropped provider streams are retried (discarding the partial), and responses truncated at the model's configured output limit are retried at that same limit. `maxTokens` is the ordinary request maximum, including model overrides; explicit bounded internal calls may use less. Genuine output-budget exhaustion fails loudly; possible full-context truncation enters one compact-and-retry recovery. The ChatGPT-backed Codex protocol is server-controlled because it rejects client output-limit fields.
 - **Multiple interfaces.** Run dreb as an interactive TUI, print/headless CLI, JSON event stream, RPC process, embedded [SDK](packages/coding-agent/docs/sdk.md), [web dashboard](packages/coding-agent/docs/dashboard.md), or [Telegram bot](packages/telegram/).
 
 ## Quick Start
 
-> **Node.js 22 LTS is required.** dreb relies on SSE streaming behavior that is stable in Node 22 LTS. Node 24 and Node 26 are known to break provider streaming due to changes in ReadableStream buffering, which causes every provider to fail with **"request ended without sending any chunks"**. If you see that error, switch to Node 22 LTS.
+> **Node.js 26 LTS is required** (`^26.13.0`). Source builds enforce it: npm refuses to install or run scripts on any other Node or npm major (`EBADDEVENGINES`). With [nvm](https://github.com/nvm-sh/nvm), run `nvm install` in the cloned repo to get the exact version the project builds and tests with (`.nvmrc`).
 
 ### Building from source (recommended)
 
@@ -68,7 +68,7 @@ bunx --force dreb
 
 ### Troubleshooting
 
-- **"request ended without sending any chunks" on every provider** — Your Node version is likely too new. Switch to **Node.js 22 LTS**. Node 26 in particular changed ReadableStream buffering in a way that breaks the Anthropic and OpenAI SDK stream parsers dreb uses.
+- **`EBADDEVENGINES` from `npm install` or `npm run` in a source checkout** — Your Node or npm is not the project toolchain. Switch to Node.js 26 LTS and its bundled npm (`nvm install` in the repo reads `.nvmrc`).
 
 ## Core capabilities
 

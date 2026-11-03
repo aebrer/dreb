@@ -4,8 +4,8 @@ See [AGENTS.md](../../../AGENTS.md) for build requirements, release protocol, an
 
 ## Prerequisites
 
-- **Node.js** 22 LTS (CI runs on Node 22)
-- **npm** (comes with Node)
+- **Node.js 26 LTS** — the exact version is pinned in `.nvmrc` / `.node-version` (`nvm install` in the repo picks it up); CI and publishing use the same pin
+- **npm** — the one bundled with that Node. npm itself enforces both through the root `devEngines` (`EBADDEVENGINES` on a mismatch); see [AGENTS.md](../../../AGENTS.md#node--npm-toolchain)
 
 ## Setup
 
@@ -15,6 +15,8 @@ cd dreb
 npm install
 npm run build
 ```
+
+Adding or updating a dependency that has an install script fails with `ESTRICTALLOWSCRIPTS` until the script is reviewed and recorded in the root `allowScripts`; see [AGENTS.md](../../../AGENTS.md#node--npm-toolchain).
 
 Run from source:
 

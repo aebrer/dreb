@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/tui",
-	"version": "2.74.1",
+	"version": "2.75.0",
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"type": "module",
 	"main": "dist/index.js",
@@ -35,7 +35,7 @@
 		"directory": "packages/tui"
 	},
 	"engines": {
-		"node": "22.x"
+		"node": "^26.13.0"
 	},
 	"types": "./dist/index.d.ts",
 	"dependencies": {

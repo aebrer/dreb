@@ -779,7 +779,7 @@ edits to an installed package:
    existing checks for the managed `expanded/` records. If distributing your
    build, include custom notices/provenance in Dashboard's `package.json`
    `files` list as well as the built font resources.
-5. From the repository root, using Node 22, run `npm run check`, `npm run build`,
+5. From the repository root, using the pinned Node 26 LTS toolchain, run `npm run check`, `npm run build`,
    and `npm run verify-workspace-links`, then the Dashboard tests:
    ```sh
    npm run test --workspace @dreb/dashboard
@@ -819,7 +819,12 @@ WantedBy=default.target
 ```
 
 Use the absolute path from `which dreb-dashboard` for `ExecStart` (the example
-matches an npm global prefix under `~/.npm-global`). Then:
+matches an npm global prefix under `~/.npm-global`). The `dreb-dashboard` bin
+starts with `#!/usr/bin/env node`, so it runs the first `node` on the service's
+`PATH` — under systemd that is usually the system Node, not one installed with
+a version manager such as nvm. Make sure it is Node 26 LTS, or set `ExecStart`
+to the absolute Node 26 binary followed by the resolved `dist/index.js`, as in
+the macOS example below. Then:
 
 ```bash
 systemctl --user daemon-reload
@@ -895,7 +900,9 @@ realpath "$(command -v dreb-dashboard)"   # → /opt/homebrew/lib/node_modules/@
 
 Replace `/ABSOLUTE/PATH/TO/node` and `/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js`
 with the actual output. Also replace `/Users/YOU/` in the log paths with your
-home directory.
+home directory. If `node` comes from a version manager such as nvm, its path
+contains the Node version (e.g. `~/.nvm/versions/node/v26.13.0/bin/node`);
+update the plist whenever you switch Node versions. dreb requires Node 26 LTS.
 
 #### load / unload / status
 

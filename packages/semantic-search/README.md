@@ -4,7 +4,7 @@ Semantic codebase search engine with embedding-based ranking and an MCP server. 
 
 ## Requirements
 
-- **Node.js 22+** — uses the built-in `node:sqlite` module
+- **Node.js 26 LTS** (`^26.13.0`) — uses the built-in `node:sqlite` module
 
 ## Installation
 

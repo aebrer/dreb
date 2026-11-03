@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isSqliteAvailable, SearchDatabase } from "../src/db.js";
 
 describe("isSqliteAvailable", () => {
-	it("returns true on Node 22+", () => {
+	it("returns true on the supported runtime (node:sqlite is built in)", () => {
 		expect(isSqliteAvailable()).toBe(true);
 	});
 });
