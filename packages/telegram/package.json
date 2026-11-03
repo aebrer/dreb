@@ -34,12 +34,12 @@
 		"grammy": "^1.35.0"
 	},
 	"devDependencies": {
-		"@types/node": "^24.3.0",
+		"@types/node": "^26.6.6",
 		"typescript": "^5.9.2",
-		"vitest": "^4.1.8"
+		"vitest": "^4.1.12"
 	},
 	"engines": {
-		"node": "22.x"
+		"node": "^26.13.0"
 	},
 	"repository": {
 		"type": "git",

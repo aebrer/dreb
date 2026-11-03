@@ -55,7 +55,7 @@
 		"@dreb/ai": "*",
 		"@dreb/semantic-search": "*",
 		"@dreb/tui": "*",
-		"@huggingface/transformers": "^4.0.1",
+		"@huggingface/transformers": "^4.3.2",
 		"@mariozechner/jiti": "^2.6.2",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"ajv": "^8.17.1",
@@ -64,11 +64,10 @@
 		"diff": "^8.0.2",
 		"extract-zip": "^2.0.1",
 		"file-type": "^21.1.1",
-		"glob": "^13.0.1",
 		"hosted-git-info": "^9.0.2",
 		"ignore": "^7.0.5",
 		"marked": "^15.0.12",
-		"minimatch": "^10.2.3",
+		"minimatch": "^11.0.4",
 		"proper-lockfile": "^4.1.2",
 		"strip-ansi": "^7.1.0",
 		"terminal-render": "^1.5.1",
@@ -80,15 +79,9 @@
 		"tree-sitter-python": "^0.25.0",
 		"tree-sitter-rust": "^0.24.0",
 		"tree-sitter-typescript": "^0.23.2",
-		"undici": "^7.19.1",
+		"undici": "^7.30.1",
 		"web-tree-sitter": "^0.26.8",
 		"yaml": "^2.8.2"
-	},
-	"overrides": {
-		"rimraf": "6.1.2",
-		"gaxios": {
-			"rimraf": "6.1.2"
-		}
 	},
 	"optionalDependencies": {
 		"@mariozechner/clipboard": "^0.3.2"
@@ -97,11 +90,11 @@
 		"@types/diff": "^7.0.2",
 		"@types/hosted-git-info": "^3.0.5",
 		"@types/ms": "^2.1.0",
-		"@types/node": "^24.3.0",
+		"@types/node": "^26.6.6",
 		"@types/proper-lockfile": "^4.1.4",
 		"shx": "^0.4.0",
 		"typescript": "^5.7.3",
-		"vitest": "^4.1.8"
+		"vitest": "^4.1.12"
 	},
 	"keywords": [
 		"coding-agent",
@@ -119,6 +112,6 @@
 		"directory": "packages/coding-agent"
 	},
 	"engines": {
-		"node": "22.x"
+		"node": "^26.13.0"
 	}
 }

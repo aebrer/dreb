@@ -161,7 +161,7 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 					content: [
 						{
 							type: "text",
-							text: "Semantic search requires Node.js 22+ (for built-in SQLite). Current Node.js version does not support node:sqlite.",
+							text: "Semantic search requires the built-in node:sqlite module, which this Node.js version does not provide. Use Node.js 26 LTS, dreb's supported runtime.",
 						},
 					],
 					details: { resultCount: 0, indexBuilt: false },

@@ -77,7 +77,7 @@ describe("IndexManager", () => {
 	// Static: isAvailable
 	// ====================================================================
 
-	it("isAvailable() returns true on Node 22+", () => {
+	it("isAvailable() returns true on the supported runtime (node:sqlite is built in)", () => {
 		expect(IndexManager.isAvailable()).toBe(true);
 	});
 

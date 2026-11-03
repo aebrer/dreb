@@ -779,7 +779,7 @@ edits to an installed package:
    existing checks for the managed `expanded/` records. If distributing your
    build, include custom notices/provenance in Dashboard's `package.json`
    `files` list as well as the built font resources.
-5. From the repository root, using Node 22, run `npm run check`, `npm run build`,
+5. From the repository root, using the pinned Node 26 LTS toolchain, run `npm run check`, `npm run build`,
    and `npm run verify-workspace-links`, then the Dashboard tests:
    ```sh
    npm run test --workspace @dreb/dashboard

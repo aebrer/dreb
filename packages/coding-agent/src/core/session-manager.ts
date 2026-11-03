@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import type { Stats } from "node:fs";
 import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { AgentMessage } from "@dreb/agent-core";
 import type { ImageContent, Message, TextContent } from "@dreb/ai";
@@ -602,7 +603,7 @@ function toSessionMetadata(info: SessionInfo): SessionMetadata {
 
 async function parseSessionInfo(
 	filePath: string,
-	stats: Awaited<ReturnType<typeof stat>>,
+	stats: Stats,
 	includeAllMessagesText: boolean,
 ): Promise<SessionInfo | null> {
 	const content = await readFile(filePath, "utf8");

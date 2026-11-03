@@ -43,7 +43,7 @@ What you get in exchange: a skill system, an extension API, custom agent definit
 
 ## Quick Start
 
-> **Node.js 22 LTS is required.** dreb relies on SSE streaming behavior that is stable in Node 22 LTS. Node 24 and Node 26 are known to break provider streaming due to changes in ReadableStream buffering, which causes every provider to fail with **"request ended without sending any chunks"**. If you see that error, switch to Node 22 LTS.
+> **Node.js 26 LTS is required** (`^26.13.0`). Source builds enforce it: npm refuses to install or run scripts on any other Node or npm major (`EBADDEVENGINES`). With [nvm](https://github.com/nvm-sh/nvm), run `nvm install` in the cloned repo to get the exact version the project builds and tests with (`.nvmrc`).
 
 ### Building from source (recommended)
 
@@ -93,7 +93,7 @@ Dashboard theme cards keep IBM Plex Mono for Theme default previews, while the f
 
 ### Troubleshooting
 
-- **"request ended without sending any chunks" on every provider** — Your Node version is likely too new. Switch to **Node.js 22 LTS**. Node 26 in particular changed ReadableStream buffering in a way that breaks the Anthropic and OpenAI SDK stream parsers dreb uses.
+- **`EBADDEVENGINES` from `npm install` or `npm run` in a source checkout** — Your Node or npm is not the project toolchain. Switch to Node.js 26 LTS and its bundled npm (`nvm install` in the repo reads `.nvmrc`).
 
 ---
 
@@ -456,7 +456,7 @@ The `search` tool provides natural language queries over the codebase using embe
 
 **Storage:** Project index at `.dreb/index/`, memory files indexed alongside code. Add `**/.dreb/` to your project's `.gitignore`. Works offline after the initial model download.
 
-**Requirements:** Node.js 22+ (uses built-in `node:sqlite`). On older Node versions the tool is silently unavailable — no crash, it simply doesn't register. Zero native addons — uses `web-tree-sitter` (WASM) and `@huggingface/transformers` (WASM).
+**Requirements:** Node.js 26 LTS, like the rest of dreb (the index uses the built-in `node:sqlite` module; if a runtime lacks it, the tool simply doesn't register). Zero native addons — uses `web-tree-sitter` (WASM) and `@huggingface/transformers` (WASM).
 
 ---
 

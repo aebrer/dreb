@@ -243,6 +243,28 @@ describe("resolveModelScopePatterns", () => {
 		expect(result.warnings).toEqual([]);
 	});
 
+	// Pins the glob semantics dreb relies on (minimatch with `nocase`, matched against
+	// both "provider/id" and the bare id) so a minimatch upgrade cannot silently change
+	// which models a scope pattern selects.
+	test.each([
+		["ANTHROPIC/*", ["anthropic/claude-sonnet-4-5"]],
+		["*SONNET*", ["anthropic/claude-sonnet-4-5"]],
+		["qwen/*", ["openrouter/qwen/qwen3-coder:exacto"]],
+		["gpt-4?", ["openai/gpt-4o"]],
+		["[ag]*", ["openai/gpt-4o"]],
+		["{anthropic,openai}/*", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o", "openrouter/openai/gpt-4o:extended"]],
+		["**/gpt-4o*", ["openai/gpt-4o", "openrouter/openai/gpt-4o:extended"]],
+		["*/*/*", ["openrouter/qwen/qwen3-coder:exacto", "openrouter/openai/gpt-4o:extended"]],
+		// `*` does not cross "/": provider-prefixed ids with a slash need `**`.
+		["openrouter/*", []],
+	])("glob pattern %s selects the expected models", (pattern, expected) => {
+		const result = resolveModelScopePatterns([pattern], allModels);
+		expect(result.models.map(({ model }) => `${model.provider}/${model.id}`)).toEqual(expected);
+		expect(result.warnings).toEqual(
+			expected.length === 0 ? [{ pattern, message: `No models match pattern "${pattern}"` }] : [],
+		);
+	});
+
 	test("legacy async wrapper emits the same warning text", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const registry = { getAvailable: vi.fn().mockResolvedValue(allModels) };

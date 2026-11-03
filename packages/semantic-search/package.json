@@ -34,8 +34,8 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@huggingface/transformers": "^4.0.1",
-		"@modelcontextprotocol/sdk": "^1.29.0",
+		"@huggingface/transformers": "^4.3.2",
+		"@modelcontextprotocol/sdk": "^1.32.2",
 		"ignore": "^7.0.5",
 		"tree-sitter-c": "^0.24.1",
 		"tree-sitter-cpp": "^0.23.4",
@@ -48,11 +48,11 @@
 		"web-tree-sitter": "^0.26.8"
 	},
 	"devDependencies": {
-		"@types/node": "^24.3.0",
+		"@types/node": "^26.6.6",
 		"shx": "^0.4.0",
 		"tree-sitter-gdscript": "^6.1.0",
 		"typescript": "^5.9.2",
-		"vitest": "^4.1.8"
+		"vitest": "^4.1.12"
 	},
 	"keywords": [
 		"semantic-search",
@@ -68,6 +68,6 @@
 		"directory": "packages/semantic-search"
 	},
 	"engines": {
-		"node": "22.x"
+		"node": "^26.13.0"
 	}
 }

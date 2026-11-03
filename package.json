@@ -24,21 +24,32 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",
-		"@types/node": "^22.10.5",
+		"@types/node": "^26.6.6",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
-		"@vitest/coverage-v8": "^4.1.8",
-		"concurrently": "^10.0.3",
+		"@vitest/coverage-v8": "^4.1.12",
+		"concurrently": "^10.0.6",
 		"husky": "^9.1.7",
 		"shx": "^0.4.0",
-		"tsx": "^4.20.3",
+		"tsx": "^4.23.15",
 		"typescript": "^5.9.2"
 	},
 	"author": "Drew Brereton",
 	"homepage": "https://entropist.ca",
 	"engines": {
-		"node": "22.x"
+		"node": "^26.13.0"
 	},
-	"packageManager": "npm@11.5.1",
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": "^26.13.0",
+			"onFail": "error"
+		},
+		"packageManager": {
+			"name": "npm",
+			"version": "^11.20.0",
+			"onFail": "error"
+		}
+	},
 	"version": "2.74.1",
 	"dependencies": {
 		"@dreb/coding-agent": "*",
@@ -46,10 +57,21 @@
 		"get-east-asian-width": "^1.4.0"
 	},
 	"overrides": {
-		"rimraf": "6.1.2",
-		"fast-xml-parser": "5.5.9",
-		"gaxios": {
-			"rimraf": "6.1.2"
-		}
+		"basic-ftp": "^6.2.5"
+	},
+	"allowScripts": {
+		"koffi": false,
+		"onnxruntime-node": false,
+		"protobufjs": false,
+		"tree-sitter-c": false,
+		"tree-sitter-cpp": false,
+		"tree-sitter-gdscript": false,
+		"tree-sitter-go": false,
+		"tree-sitter-java": false,
+		"tree-sitter-javascript": false,
+		"tree-sitter-python": false,
+		"tree-sitter-rust": false,
+		"tree-sitter-typescript": false,
+		"esbuild": false
 	}
 }

@@ -728,6 +728,77 @@ Content`,
 		});
 	});
 
+	// Pins the glob semantics of exclusion patterns (minimatch with default options,
+	// matched against the base-relative path, the file name, and the absolute path) so
+	// a minimatch upgrade cannot silently change which resources are filtered.
+	describe("glob semantics of exclusion patterns", () => {
+		const themeFiles = [
+			"dark.json",
+			"light.json",
+			"funky.json",
+			"archive/old.json",
+			"archive/deep/older.json",
+		] as const;
+
+		function writeThemes(): string {
+			const themesDir = join(agentDir, "themes");
+			for (const file of themeFiles) {
+				mkdirSync(join(themesDir, file, ".."), { recursive: true });
+				writeFileSync(join(themesDir, file), "{}");
+			}
+			return themesDir;
+		}
+
+		async function disabledThemes(pattern: string): Promise<string[]> {
+			const themesDir = writeThemes();
+			settingsManager.setThemePaths(["themes", `!${pattern}`]);
+			const result = await packageManager.resolve();
+			const themes = result.themes.filter((r) => normalizeForMatch(r.path).includes("/themes/"));
+			expect(themes).toHaveLength(themeFiles.length);
+			return themes
+				.filter((r) => !r.enabled)
+				.map((r) => normalizeForMatch(relative(themesDir, r.path)))
+				.sort();
+		}
+
+		it.each([
+			["{dark,light}.json", ["dark.json", "light.json"]],
+			["[dl]*.json", ["dark.json", "light.json"]],
+			["f?nky.json", ["funky.json"]],
+			["themes/*.json", ["dark.json", "funky.json", "light.json"]],
+			["**/archive/*.json", ["archive/old.json"]],
+			["**/archive/**", ["archive/deep/older.json", "archive/old.json"]],
+			// Relative patterns are anchored at the settings base dir, not the resource dir.
+			["archive/**", []],
+		])("!%s disables the expected themes", async (pattern, expected) => {
+			expect(await disabledThemes(pattern)).toEqual(expected);
+		});
+
+		it("matches absolute-path globs", async () => {
+			const absolutePattern = `${normalizeForMatch(join(agentDir, "themes", "archive"))}/**`;
+			expect(await disabledThemes(absolutePattern)).toEqual(["archive/deep/older.json", "archive/old.json"]);
+		});
+
+		it.each([
+			["**/bad-*", true],
+			["bad-skill", true],
+			// Skill directory paths are never slash-terminated, so a trailing-slash pattern does not match.
+			["**/bad-skill/", false],
+		])("skill directory pattern !%s excludes bad-skill: %s", async (pattern, excluded) => {
+			const skillsDir = join(agentDir, "skills");
+			for (const name of ["good-skill", "bad-skill"]) {
+				mkdirSync(join(skillsDir, name), { recursive: true });
+				writeFileSync(join(skillsDir, name, "SKILL.md"), `---\nname: ${name}\ndescription: Test\n---\nContent`);
+			}
+			settingsManager.setSkillPaths(["skills", `!${pattern}`]);
+
+			const result = await packageManager.resolve();
+			expect(result.skills.some((r) => isEnabled(r, "good-skill", "includes"))).toBe(true);
+			expect(result.skills.some((r) => isDisabled(r, "bad-skill", "includes"))).toBe(excluded);
+			expect(result.skills.some((r) => isEnabled(r, "bad-skill", "includes"))).toBe(!excluded);
+		});
+	});
+
 	describe("pattern filtering in dreb manifest", () => {
 		it("should support glob patterns in manifest extensions", async () => {
 			const pkgDir = join(tempDir, "manifest-pkg");
