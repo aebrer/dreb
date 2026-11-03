@@ -663,7 +663,7 @@ Response:
 
 #### set_auto_retry
 
-Enable or disable automatic retry on transient errors (overloaded, rate limit, 5xx).
+Enable or disable automatic retry on transient errors (overloaded, rate limit, 5xx). Safety refusals (assistant messages with a [`refusal`](#assistantmessage) field) are never treated as transient and are not retried.
 
 ```json
 {"type": "set_auto_retry", "enabled": true}
@@ -2014,7 +2014,7 @@ If compaction failed (e.g., API quota exceeded), `result` is `null`, `aborted` i
 
 ### auto_retry_start / auto_retry_end
 
-Emitted when automatic retry is triggered after a transient error (overloaded, rate limit, 5xx).
+Emitted when automatic retry is triggered after a transient error (overloaded, rate limit, 5xx). A safety refusal never starts an automatic retry, whatever its error text says; see [AssistantMessage](#assistantmessage).
 
 ```json
 {
@@ -2482,6 +2482,25 @@ The `content` field can be a string or an array of `TextContent`/`ImageContent` 
 ```
 
 Stop reasons: `"stop"`, `"length"`, `"toolUse"`, `"error"`, `"aborted"`
+
+Messages that end with `"error"` or `"aborted"` also carry `errorMessage`. When the provider's safety system declined the request (currently Anthropic `stop_reason: "refusal"`, or a proxy's `"sensitive"`), the message ends with `"error"` and also has a `refusal` object with optional `category` and `explanation` taken from the provider. Use `refusal` to classify refusals instead of matching text. The `errorMessage` always starts with `Request declined by the model's safety filter`:
+
+```json
+{
+  "role": "assistant",
+  "content": [],
+  "api": "anthropic-messages",
+  "provider": "anthropic",
+  "model": "claude-opus-5-5",
+  "usage": {"input": 412, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 412, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}},
+  "stopReason": "error",
+  "errorMessage": "Request declined by the model's safety filter (category: cyber): This request was declined because it could enable cyber harm.",
+  "refusal": {"category": "cyber", "explanation": "This request was declined because it could enable cyber harm."},
+  "timestamp": 1733234567890
+}
+```
+
+`category` and `explanation` are omitted when the provider does not supply them; the explanation is not stable text, so display it rather than parse it. Refusals are never retried automatically, because re-sending the same context to the same model is normally declined again. Rephrase or remove the declined turn, or switch models.
 
 ### ToolResultMessage
 

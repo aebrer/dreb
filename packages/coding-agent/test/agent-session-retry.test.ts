@@ -74,10 +74,16 @@ describe("AgentSession retry", () => {
 		}
 	});
 
-	function createSession(options?: { failCount?: number; maxRetries?: number; delayAssistantMessageEndMs?: number }) {
+	function createSession(options?: {
+		failCount?: number;
+		maxRetries?: number;
+		delayAssistantMessageEndMs?: number;
+		failure?: Partial<AssistantMessage>;
+	}) {
 		const failCount = options?.failCount ?? 1;
 		const maxRetries = options?.maxRetries ?? 3;
 		const delayAssistantMessageEndMs = options?.delayAssistantMessageEndMs ?? 0;
+		const failure = options?.failure ?? { errorMessage: "overloaded_error" };
 		let callCount = 0;
 
 		const model = findModel("anthropic", "sonnet")!;
@@ -91,7 +97,7 @@ describe("AgentSession retry", () => {
 					if (callCount <= failCount) {
 						const msg = createAssistantMessage("", {
 							stopReason: "error",
-							errorMessage: "overloaded_error",
+							...failure,
 						});
 						stream.push({ type: "start", partial: msg });
 						stream.push({ type: "error", reason: "error", error: msg });
@@ -148,6 +154,61 @@ describe("AgentSession retry", () => {
 		expect(created.getCallCount()).toBe(2);
 		expect(events).toEqual(["start:1", "end:success=true"]);
 		expect(created.session.isRetrying).toBe(false);
+	});
+
+	describe("safety refusals", () => {
+		// Matches the retry regex ("terminated", "timed out") and an overflow pattern
+		// ("prompt is too long"): only the structured refusal marker may stop recovery.
+		const explanation = "This conversation was terminated because the prompt is too long and the review timed out.";
+		const errorMessage = `Request declined by the model's safety filter (category: cyber): ${explanation}`;
+
+		function recordRecovery(target: AgentSession): string[] {
+			const events: string[] = [];
+			target.subscribe((event) => {
+				if (event.type === "auto_retry_start") events.push(`retry-start:${event.attempt}`);
+				if (event.type === "auto_retry_end") events.push(`retry-end:success=${event.success}`);
+				if (event.type === "auto_compaction_start") events.push(`compaction-start:${event.reason}`);
+			});
+			return events;
+		}
+
+		it("never auto-retries or compacts a refusal, whatever its explanation says", async () => {
+			// Same provider/model as the session so the overflow-compaction path is reachable.
+			const model = findModel("anthropic", "sonnet")!;
+			const created = createSession({
+				failCount: 1,
+				failure: {
+					provider: model.provider,
+					model: model.id,
+					errorMessage,
+					refusal: { category: "cyber", explanation },
+				},
+			});
+			const events = recordRecovery(created.session);
+
+			await created.session.prompt("Test");
+
+			expect(created.getCallCount()).toBe(1);
+			expect(events).toEqual([]);
+			expect(created.session.isRetrying).toBe(false);
+			const last = created.session.messages.at(-1) as AssistantMessage;
+			expect(last.stopReason).toBe("error");
+			expect(last.errorMessage).toBe(errorMessage);
+			expect(last.refusal).toEqual({ category: "cyber", explanation });
+		});
+
+		it("still retries the same retryable wording without the refusal marker", async () => {
+			const created = createSession({
+				failCount: 1,
+				failure: { errorMessage: `Upstream ${explanation.replace("the prompt is too long and ", "")}` },
+			});
+			const events = recordRecovery(created.session);
+
+			await created.session.prompt("Test");
+
+			expect(created.getCallCount()).toBe(2);
+			expect(events).toEqual(["retry-start:1", "retry-end:success=true"]);
+		});
 	});
 
 	it("retries on 'ended without' error", async () => {

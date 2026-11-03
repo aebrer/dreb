@@ -3644,6 +3644,10 @@ export class AgentSession {
 	private _isRetryableError(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error" || !message.errorMessage) return false;
 
+		// Safety refusals are declined again on the same model and context, and their
+		// provider-supplied explanation is free text that could match the patterns below.
+		if (message.refusal) return false;
+
 		// Context overflow is handled by compaction, not retry
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (isContextOverflow(message, contextWindow)) return false;

@@ -90,10 +90,16 @@ interface AssistantMessage {
   api: string;
   provider: string;
   model: string;
+  responseId?: string;   // Provider response/message ID, when the API exposes one
   usage: Usage;
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
   errorMessage?: string;
+  refusal?: {            // Present only when the provider's safety system declined the request
+    category?: string;
+    explanation?: string;
+  };
   timestamp: number;
+  durationMs?: number;   // Time from stream start to completion
 }
 
 interface ToolResultMessage {

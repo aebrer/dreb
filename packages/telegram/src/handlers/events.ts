@@ -217,8 +217,11 @@ export interface EventDisplayState {
 const RETRYABLE_ERROR_PATTERN =
 	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|ended without|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
 
-function isRetryableError(errorMessage: string): boolean {
-	return RETRYABLE_ERROR_PATTERN.test(errorMessage);
+function isRetryableError(message: { errorMessage?: string; refusal?: unknown }): boolean {
+	// Like the core, never expect a retry after a safety refusal: its provider-supplied
+	// explanation is free text that could match the pattern, and waiting would hang the chat.
+	if (message.refusal) return false;
+	return !!message.errorMessage && RETRYABLE_ERROR_PATTERN.test(message.errorMessage);
 }
 
 /**
@@ -472,7 +475,7 @@ export async function handleAgentEvent(
 			// Layer 2 (defensive): If this error looks retryable and we're not already
 			// tracking a retry via Layer 1, don't mark done — the core will auto-retry
 			// and emit a new agent_start/agent_end cycle.
-			const errorIsRetryable = errorMsg?.errorMessage && isRetryableError(errorMsg.errorMessage);
+			const errorIsRetryable = !!errorMsg && isRetryableError(errorMsg);
 
 			if (errorMsg?.errorMessage) {
 				// Suppress the scary error message during retry — user already saw the
@@ -482,8 +485,10 @@ export async function handleAgentEvent(
 					const provider = errorMsg.provider ? `${errorMsg.provider}/${errorMsg.model}` : "";
 					const prefix = provider ? `${provider}: ` : "";
 					const errLower = errorMsg.errorMessage.toLowerCase();
+					// A refusal's explanation is provider text, not an outage signal.
 					const hint =
-						errLower.includes("connection") || errLower.includes("timeout") || errLower.includes("network")
+						!errorMsg.refusal &&
+						(errLower.includes("connection") || errLower.includes("timeout") || errLower.includes("network"))
 							? "\n_Provider may be down — try /model to switch._"
 							: "";
 					send(`❌ ${prefix}${errorMsg.errorMessage}${hint}`, true);

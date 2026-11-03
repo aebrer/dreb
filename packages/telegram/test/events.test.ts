@@ -149,6 +149,33 @@ describe("agent_end", () => {
 		expect(state.toolCount).toBe(0);
 	});
 
+	it("shows a safety refusal and finishes even when its explanation looks retryable", async () => {
+		const send = vi.fn();
+		const state = makeState({ textBlocks: ["partial"], visibleToolResultCount: 1 });
+		const errorMessage =
+			"Request declined by the model's safety filter (category: cyber): The request hit a network timeout after it was terminated by policy.";
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "agent_end",
+			messages: [
+				{
+					stopReason: "error",
+					provider: "anthropic",
+					model: "claude-test",
+					errorMessage,
+					refusal: {
+						category: "cyber",
+						explanation: "The request hit a network timeout after it was terminated by policy.",
+					},
+				},
+			],
+		});
+
+		expect(send).toHaveBeenCalledWith(`❌ anthropic/claude-test: ${errorMessage}`, true);
+		expect(state.pendingRetry).toBe(false);
+		expect(state.done).toBe(true);
+	});
+
 	it("does NOT set done for 'ended without' errors (stream termination)", async () => {
 		const send = vi.fn();
 		const state = makeState({ toolCount: 2, textBlocks: ["partial"], visibleToolResultCount: 1 });

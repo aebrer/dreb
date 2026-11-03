@@ -204,6 +204,18 @@ export interface UserMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+/**
+ * Structured details for a turn the provider's safety system declined (for example an
+ * Anthropic `stop_reason: "refusal"`). The presence of {@link AssistantMessage.refusal}
+ * is the signal; either detail may be absent when the provider does not supply it.
+ */
+export interface AssistantRefusal {
+	/** Provider policy category that triggered the refusal (for example `"cyber"`). */
+	category?: string;
+	/** Human-readable provider explanation. Not stable across releases: display it, don't parse it. */
+	explanation?: string;
+}
+
 export interface AssistantMessage {
 	role: "assistant";
 	content: (TextContent | ThinkingContent | ToolCall)[];
@@ -214,6 +226,12 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	/**
+	 * Present only when the provider's safety system declined the request. Such turns end with
+	 * `stopReason: "error"`; re-sending the same context to the same model is normally declined
+	 * again, so dreb never retries them automatically.
+	 */
+	refusal?: AssistantRefusal;
 	timestamp: number; // Unix timestamp in milliseconds
 	durationMs?: number; // Time from stream start to completion in milliseconds
 }
