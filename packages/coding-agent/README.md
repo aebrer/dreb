@@ -456,7 +456,7 @@ The `search` tool provides natural language queries over the codebase using embe
 
 **Storage:** Project index at `.dreb/index/`, memory files indexed alongside code. Add `**/.dreb/` to your project's `.gitignore`. Works offline after the initial model download.
 
-**Requirements:** Node.js 26 LTS, like the rest of dreb (the index uses the built-in `node:sqlite` module; if a runtime lacks it, the tool simply doesn't register). Zero native addons — uses `web-tree-sitter` (WASM) and `@huggingface/transformers` (WASM).
+**Requirements:** Node.js 26 LTS, like the rest of dreb (the index uses the built-in `node:sqlite` module; if a runtime lacks it, the tool simply doesn't register). Code chunking uses `web-tree-sitter` (WASM); embeddings run through `@huggingface/transformers` on the prebuilt native `onnxruntime-node` binding shipped in its package — nothing is compiled at install time.
 
 ---
 

@@ -19,8 +19,9 @@ jobs:
       - run: npm ci
       - run: npm run verify-engines
       # The pinned npm (.nvmrc -> bundled npm) is the single lockfile writer. `npm ls`
-      # fails on any invalid/missing/extraneous entry (e.g. a locked version that
-      # violates an `overrides` entry); the re-resolve must be a byte-for-byte no-op.
+      # fails on any invalid or missing entry (e.g. a locked version that violates an
+      # `overrides` entry; extraneous-only problems do not fail it), and the re-resolve
+      # must be a byte-for-byte no-op, which also catches stale lockfile entries.
       - name: Verify package-lock.json is consistent and canonical
         run: |
           npm ls --all > /dev/null

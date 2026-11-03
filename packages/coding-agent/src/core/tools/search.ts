@@ -2,7 +2,7 @@
  * Semantic codebase search tool.
  *
  * Uses embeddings + FTS5 to support natural language queries over the codebase.
- * Feature-gated on `node:sqlite` availability (Node 22+).
+ * Feature-gated on `node:sqlite` availability (built into Node.js; dreb requires Node 26 LTS).
  */
 
 import { existsSync, statSync } from "node:fs";

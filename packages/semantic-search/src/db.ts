@@ -1,7 +1,7 @@
 /**
  * SQLite database abstraction for the search index.
  *
- * Uses `node:sqlite` (built-in Node 22+). Feature-gated — callers must check
+ * Uses `node:sqlite` (built into Node.js; dreb requires Node 26 LTS). Feature-gated — callers must check
  * availability via `isSqliteAvailable()` before constructing a SearchDatabase.
  */
 
@@ -23,7 +23,7 @@ export function isSqliteAvailable(): boolean {
 		require("node:sqlite");
 		_sqliteAvailable = true;
 	} catch {
-		/* node:sqlite not available (requires Node 22.5+) — gracefully degrade */
+		/* node:sqlite not available in this runtime — gracefully degrade */
 		_sqliteAvailable = false;
 	}
 	return _sqliteAvailable;
