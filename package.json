@@ -72,6 +72,7 @@
 		"tree-sitter-python": false,
 		"tree-sitter-rust": false,
 		"tree-sitter-typescript": false,
-		"esbuild": false
+		"esbuild": false,
+		"fsevents": false
 	}
 }

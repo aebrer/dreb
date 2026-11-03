@@ -16,6 +16,8 @@ npm install
 npm run build
 ```
 
+Adding or updating a dependency that has an install script fails with `ESTRICTALLOWSCRIPTS` until the script is reviewed and recorded in the root `allowScripts`; see [AGENTS.md](../../../AGENTS.md#node--npm-toolchain).
+
 Run from source:
 
 ```bash
