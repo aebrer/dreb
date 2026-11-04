@@ -2,9 +2,16 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type AgentEvent, type AgentTool } from "@dreb/agent-core";
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, findModel } from "@dreb/ai";
+import {
+	type Api,
+	type AssistantMessage,
+	type AssistantMessageEvent,
+	EventStream,
+	findModel,
+	type Model,
+} from "@dreb/ai";
 import { Type } from "@sinclair/typebox";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -74,13 +81,24 @@ describe("AgentSession retry", () => {
 		}
 	});
 
-	function createSession(options?: { failCount?: number; maxRetries?: number; delayAssistantMessageEndMs?: number }) {
-		const failCount = options?.failCount ?? 1;
+	function createSession(options?: {
+		failCount?: number;
+		maxRetries?: number;
+		delayAssistantMessageEndMs?: number;
+		failure?: Partial<AssistantMessage>;
+		/** Scripted results by call order; calls beyond the script succeed. Replaces failCount/failure. */
+		responses?: Partial<AssistantMessage>[];
+		model?: Model<Api>;
+		compactionReserveTokens?: number;
+	}) {
+		const responses = options?.responses;
+		const failCount = responses ? 0 : (options?.failCount ?? 1);
 		const maxRetries = options?.maxRetries ?? 3;
 		const delayAssistantMessageEndMs = options?.delayAssistantMessageEndMs ?? 0;
+		const failure = options?.failure ?? { errorMessage: "overloaded_error" };
 		let callCount = 0;
 
-		const model = findModel("anthropic", "sonnet")!;
+		const model = options?.model ?? findModel("anthropic", "sonnet")!;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: "Test", tools: [] },
@@ -88,17 +106,17 @@ describe("AgentSession retry", () => {
 				callCount++;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
-					if (callCount <= failCount) {
-						const msg = createAssistantMessage("", {
-							stopReason: "error",
-							errorMessage: "overloaded_error",
-						});
-						stream.push({ type: "start", partial: msg });
-						stream.push({ type: "error", reason: "error", error: msg });
+					const scripted = responses?.[callCount - 1];
+					const msg = scripted
+						? createAssistantMessage("", scripted)
+						: callCount <= failCount
+							? createAssistantMessage("", { stopReason: "error", ...failure })
+							: createAssistantMessage("Success");
+					stream.push({ type: "start", partial: msg });
+					if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+						stream.push({ type: "error", reason: msg.stopReason, error: msg });
 					} else {
-						const msg = createAssistantMessage("Success");
-						stream.push({ type: "start", partial: msg });
-						stream.push({ type: "done", reason: "stop", message: msg });
+						stream.push({ type: "done", reason: msg.stopReason, message: msg });
 					}
 				});
 				return stream;
@@ -111,6 +129,11 @@ describe("AgentSession retry", () => {
 		const modelRegistry = new ModelRegistry(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		settingsManager.applyOverrides({ retry: { enabled: true, maxRetries, baseDelayMs: 1 } });
+		if (options?.compactionReserveTokens !== undefined) {
+			settingsManager.applyOverrides({
+				compaction: { enabled: true, reserveTokens: options.compactionReserveTokens },
+			});
+		}
 
 		session = new AgentSession({
 			agent,
@@ -148,6 +171,189 @@ describe("AgentSession retry", () => {
 		expect(created.getCallCount()).toBe(2);
 		expect(events).toEqual(["start:1", "end:success=true"]);
 		expect(created.session.isRetrying).toBe(false);
+	});
+
+	describe("safety refusals", () => {
+		// Matches the retry regex ("terminated", "timed out") and an overflow pattern
+		// ("prompt is too long"): only the structured refusal marker may stop recovery.
+		const explanation = "This conversation was terminated because the prompt is too long and the review timed out.";
+		const errorMessage = `Request declined by the model's safety filter (category: cyber): ${explanation}`;
+
+		function recordRecovery(target: AgentSession): string[] {
+			const events: string[] = [];
+			target.subscribe((event) => {
+				if (event.type === "auto_retry_start") events.push(`retry-start:${event.attempt}`);
+				if (event.type === "auto_retry_end") events.push(`retry-end:success=${event.success}`);
+				if (event.type === "auto_compaction_start") events.push(`compaction-start:${event.reason}`);
+			});
+			return events;
+		}
+
+		it("never auto-retries or compacts a refusal, whatever its explanation says", async () => {
+			// Same provider/model as the session so the overflow-compaction path is reachable.
+			const model = findModel("anthropic", "sonnet")!;
+			const created = createSession({
+				failCount: 1,
+				failure: {
+					provider: model.provider,
+					model: model.id,
+					errorMessage,
+					refusal: { category: "cyber", explanation },
+				},
+			});
+			const events = recordRecovery(created.session);
+
+			await created.session.prompt("Test");
+
+			expect(created.getCallCount()).toBe(1);
+			expect(events).toEqual([]);
+			expect(created.session.isRetrying).toBe(false);
+			const last = created.session.messages.at(-1) as AssistantMessage;
+			expect(last.stopReason).toBe("error");
+			expect(last.errorMessage).toBe(errorMessage);
+			expect(last.refusal).toEqual({ category: "cyber", explanation });
+		});
+
+		it("still retries the same retryable wording without the refusal marker", async () => {
+			const created = createSession({
+				failCount: 1,
+				failure: { errorMessage: `Upstream ${explanation.replace("the prompt is too long and ", "")}` },
+			});
+			const events = recordRecovery(created.session);
+
+			await created.session.prompt("Test");
+
+			expect(created.getCallCount()).toBe(2);
+			expect(events).toEqual(["retry-start:1", "retry-end:success=true"]);
+		});
+
+		it("closes the retry cycle when the retried request is refused, and resets the retry budget", async () => {
+			const refusal = { category: "cyber", explanation };
+			const created = createSession({
+				responses: [
+					{ stopReason: "error", errorMessage: "overloaded_error" },
+					{ stopReason: "error", errorMessage, refusal },
+					{ stopReason: "error", errorMessage: "overloaded_error" },
+				],
+			});
+			const events = recordRecovery(created.session);
+			const retryEnds: unknown[] = [];
+			created.session.subscribe((event) => {
+				if (event.type === "auto_retry_end") retryEnds.push(event);
+			});
+
+			await created.session.prompt("Test");
+
+			// The 529 is retried once; the refused retry is final and ends the cycle as a failure.
+			expect(created.getCallCount()).toBe(2);
+			expect(events).toEqual(["retry-start:1", "retry-end:success=false"]);
+			expect(retryEnds).toEqual([{ type: "auto_retry_end", success: false, attempt: 1, finalError: errorMessage }]);
+			expect(created.session.isRetrying).toBe(false);
+			const last = created.session.messages.at(-1) as AssistantMessage;
+			expect(last.refusal).toEqual(refusal);
+
+			// The next transient error starts a fresh retry cycle at attempt 1.
+			await created.session.prompt("Rephrased");
+
+			expect(created.getCallCount()).toBe(4);
+			expect(events).toEqual([
+				"retry-start:1",
+				"retry-end:success=false",
+				"retry-start:1",
+				"retry-end:success=true",
+			]);
+		});
+
+		describe("threshold compaction", () => {
+			// Threshold = contextWindow - reserveTokens = 9,000 tokens. The first turn leaves
+			// 8,000 tokens; the refused turn's partial output (~2,000 tokens) tips it over.
+			const model: Model<Api> = { ...findModel("anthropic", "sonnet")!, contextWindow: 10_000 };
+			const firstTurn: Partial<AssistantMessage> = {
+				stopReason: "stop",
+				content: [{ type: "text", text: "ok" }],
+				usage: {
+					input: 8_000,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 8_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			};
+			const partialOutput = [{ type: "text" as const, text: "x".repeat(8_000) }];
+
+			function spyOnAutoCompaction(target: AgentSession) {
+				return vi
+					.spyOn(
+						target as unknown as {
+							_runAutoCompaction: (
+								reason: "overflow" | "threshold",
+								willRetry: boolean,
+								requestWillFollow: boolean,
+							) => Promise<void>;
+						},
+						"_runAutoCompaction",
+					)
+					.mockResolvedValue();
+			}
+
+			it("does not compact (and auto-continue) after a refusal that crosses the threshold", async () => {
+				const created = createSession({
+					model,
+					compactionReserveTokens: 1_000,
+					responses: [
+						firstTurn,
+						{
+							stopReason: "error",
+							provider: model.provider,
+							model: model.id,
+							content: partialOutput,
+							errorMessage,
+							refusal: { category: "cyber", explanation },
+						},
+					],
+				});
+				const runAutoCompaction = spyOnAutoCompaction(created.session);
+
+				await created.session.prompt("First");
+				await created.session.prompt("Second");
+
+				expect(runAutoCompaction).not.toHaveBeenCalled();
+				expect(created.getCallCount()).toBe(2);
+				const last = created.session.messages.at(-1) as AssistantMessage;
+				expect(last.refusal).toEqual({ category: "cyber", explanation });
+
+				// The user's next request still compacts first (the pre-prompt check); it is that
+				// request, not an automatic continuation, that follows the compaction.
+				await created.session.prompt("Third");
+
+				expect(runAutoCompaction).toHaveBeenNthCalledWith(1, "threshold", false, true);
+				expect(created.getCallCount()).toBe(3);
+			});
+
+			it("still compacts after a non-refusal error that crosses the threshold", async () => {
+				const created = createSession({
+					model,
+					compactionReserveTokens: 1_000,
+					responses: [
+						firstTurn,
+						{
+							stopReason: "error",
+							provider: model.provider,
+							model: model.id,
+							content: partialOutput,
+							errorMessage: "400 invalid_request_error: malformed tool result",
+						},
+					],
+				});
+				const runAutoCompaction = spyOnAutoCompaction(created.session);
+
+				await created.session.prompt("First");
+				await created.session.prompt("Second");
+
+				expect(runAutoCompaction).toHaveBeenCalledWith("threshold", false, false);
+			});
+		});
 	});
 
 	it("retries on 'ended without' error", async () => {

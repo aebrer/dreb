@@ -262,6 +262,48 @@ describe("stream retry on dropped connections", () => {
 		}
 	});
 
+	it("does NOT retry a safety refusal whose text looks like a stream drop", async () => {
+		let attempts = 0;
+		const refusalText =
+			"Request declined by the model's safety filter: Stream ended without approval — connection likely dropped by policy.";
+		const streamFn = () => {
+			attempts++;
+			const stream = new MockAssistantStream();
+			setTimeout(() => {
+				const errorMsg: AssistantMessage = {
+					...createAssistantMessage([{ type: "text", text: "partial" }], "error", refusalText),
+					refusal: { explanation: "Stream ended without approval — connection likely dropped by policy." },
+				};
+				stream.push({ type: "start", partial: errorMsg });
+				stream.push({ type: "error", reason: "error", error: errorMsg });
+				stream.end();
+			}, 0);
+			return stream;
+		};
+
+		const events = await collectEvents(
+			streamFn,
+			createConfig({
+				streamRetries: 3,
+				streamRetryBaseDelayMs: 10,
+			}),
+		);
+
+		expect(attempts).toBe(1);
+		expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(0);
+		const msgEndEvents = events.filter((e) => e.type === "message_end");
+		const lastMsgEnd = msgEndEvents[msgEndEvents.length - 1];
+		expect(lastMsgEnd?.type).toBe("message_end");
+		if (lastMsgEnd?.type === "message_end") {
+			const msg = lastMsgEnd.message as AssistantMessage;
+			expect(msg.stopReason).toBe("error");
+			expect(msg.errorMessage).toBe(refusalText);
+			expect(msg.refusal).toEqual({
+				explanation: "Stream ended without approval — connection likely dropped by policy.",
+			});
+		}
+	});
+
 	it("does NOT treat a length result as a stream drop", async () => {
 		// A turn ending with stopReason "length" must not fire stream_retry —
 		// length retries are a separate mechanism.

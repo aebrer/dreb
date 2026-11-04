@@ -114,7 +114,8 @@ The event never contains the arbiter prompt, response, reasoning, guide, task, o
 
 Errors surface as events, not as broken JSON or exit codes:
 
-- **LLM failures** (rate limits, network errors) trigger `auto_retry_start` / `auto_retry_end` events. dreb retries automatically with backoff. If all retries fail, `auto_retry_end` has `success: false` and `finalError` set.
+- **LLM failures** (rate limits, network errors) trigger `auto_retry_start` / `auto_retry_end` events. dreb retries automatically with backoff. If all retries fail, or a retried request fails with an error that is not retried (such as a safety refusal), `auto_retry_end` has `success: false` and `finalError` set.
+- **Safety refusals** are not retried and do not trigger automatic compaction. The final assistant message has `stopReason: "error"`, an `errorMessage` starting with `Request declined by the model's safety filter`, and a `refusal` object with the provider's optional `category` and `explanation` (see [AssistantMessage in rpc.md](rpc.md#assistantmessage)).
 - **Tool execution errors** produce a `tool_execution_end` event with `isError: true` and the error message in `result`.
 - **Context overflow or a proactive threshold** triggers `auto_compaction_start` / `auto_compaction_end`. If compaction fails, `errorMessage` is set. `willRetry: true` means another model request is imminent, including continuation inside the same tool loop.
 

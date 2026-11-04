@@ -149,6 +149,33 @@ describe("agent_end", () => {
 		expect(state.toolCount).toBe(0);
 	});
 
+	it("shows a safety refusal and finishes even when its explanation looks retryable", async () => {
+		const send = vi.fn();
+		const state = makeState({ textBlocks: ["partial"], visibleToolResultCount: 1 });
+		const errorMessage =
+			"Request declined by the model's safety filter (category: cyber): The request hit a network timeout after it was terminated by policy.";
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "agent_end",
+			messages: [
+				{
+					stopReason: "error",
+					provider: "anthropic",
+					model: "claude-test",
+					errorMessage,
+					refusal: {
+						category: "cyber",
+						explanation: "The request hit a network timeout after it was terminated by policy.",
+					},
+				},
+			],
+		});
+
+		expect(send).toHaveBeenCalledWith(`❌ anthropic/claude-test: ${errorMessage}`, true);
+		expect(state.pendingRetry).toBe(false);
+		expect(state.done).toBe(true);
+	});
+
 	it("does NOT set done for 'ended without' errors (stream termination)", async () => {
 		const send = vi.fn();
 		const state = makeState({ toolCount: 2, textBlocks: ["partial"], visibleToolResultCount: 1 });
@@ -261,6 +288,95 @@ describe("auto_retry_end", () => {
 		expect(state.retryInProgress).toBe(false);
 		expect(state.retryAttempt).toBe(0);
 		expect(send).toHaveBeenCalledWith(expect.stringContaining("Retry failed (3 attempts)"), true);
+	});
+
+	it("finishes the turn when the retry cycle fails, since no further agent cycle follows", async () => {
+		const send = vi.fn();
+		const api = mockApi();
+		const state = makeState({ retryInProgress: true, pendingRetry: true, statusMessageId: 77 });
+
+		await handleAgentEvent(send, api, state, {
+			type: "auto_retry_end",
+			success: false,
+			attempt: 3,
+			finalError: "overloaded_error",
+		});
+
+		expect(state.pendingRetry).toBe(false);
+		expect(api.deleteMessage).toHaveBeenCalledWith(123, 77);
+		expect(state.statusMessageId).toBeNull();
+		expect(state.done).toBe(true);
+	});
+
+	it("keeps the turn open for running background agents after a failed retry cycle", async () => {
+		const send = vi.fn();
+		const backgroundAgents = new Map([["a1", { agentType: "Explore", taskSummary: "look" } as any]]);
+		const state = makeState({ retryInProgress: true, backgroundAgents, statusMessageId: 77 });
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "auto_retry_end",
+			success: false,
+			attempt: 1,
+			finalError: "overloaded_error",
+		});
+
+		expect(state.retryInProgress).toBe(false);
+		expect(state.statusMessageId).toBe(77);
+		expect(state.done).toBe(false);
+	});
+
+	it("shows a refusal on a retried request once and finishes the turn", async () => {
+		const send = vi.fn();
+		const state = makeState({ statusMessageId: 77 });
+		const api = mockApi();
+		const refusalText =
+			"Request declined by the model's safety filter (category: cyber): This request was declined because it could enable cyber harm.";
+
+		// Core order: the 529 run ends, the core schedules a retry, the retried run is refused,
+		// and the core then closes the retry cycle (auto_retry_end follows the final agent_end).
+		await handleAgentEvent(send, api, state, {
+			type: "agent_end",
+			messages: [
+				{ stopReason: "error", provider: "anthropic", model: "claude-test", errorMessage: "529 overloaded" },
+			],
+		});
+		await handleAgentEvent(send, api, state, {
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 2000,
+			errorMessage: "529 overloaded",
+		});
+		await handleAgentEvent(send, api, state, { type: "agent_start" });
+		await handleAgentEvent(send, api, state, {
+			type: "agent_end",
+			messages: [
+				{
+					stopReason: "error",
+					provider: "anthropic",
+					model: "claude-test",
+					errorMessage: refusalText,
+					refusal: {
+						category: "cyber",
+						explanation: "This request was declined because it could enable cyber harm.",
+					},
+				},
+			],
+		});
+		expect(state.done).toBe(false);
+
+		await handleAgentEvent(send, api, state, {
+			type: "auto_retry_end",
+			success: false,
+			attempt: 1,
+			finalError: refusalText,
+		});
+
+		const refusalSends = send.mock.calls.filter(([text]) => String(text).includes("Request declined"));
+		expect(refusalSends).toEqual([[`❌ _Retry failed (1 attempts):_ ${refusalText}`, true]]);
+		expect(state.retryInProgress).toBe(false);
+		expect(state.pendingRetry).toBe(false);
+		expect(state.done).toBe(true);
 	});
 
 	it("does not send error message on success", async () => {

@@ -7,6 +7,7 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
+	type AssistantRefusal,
 	type Context,
 	EventStream,
 	type Model,
@@ -53,6 +54,8 @@ export type ProxyAssistantMessageEvent =
 			type: "error";
 			reason: Extract<StopReason, "aborted" | "error">;
 			errorMessage?: string;
+			/** Forward `AssistantMessage.refusal` when the provider's safety system declined the request. */
+			refusal?: AssistantRefusal;
 			usage: AssistantMessage["usage"];
 	  };
 
@@ -330,6 +333,9 @@ function processProxyEvent(
 		case "error":
 			partial.stopReason = proxyEvent.reason;
 			partial.errorMessage = proxyEvent.errorMessage;
+			if (proxyEvent.refusal) {
+				partial.refusal = proxyEvent.refusal;
+			}
 			partial.usage = proxyEvent.usage;
 			return { type: "error", reason: proxyEvent.reason, error: partial };
 

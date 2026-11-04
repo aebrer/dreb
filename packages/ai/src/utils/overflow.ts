@@ -122,6 +122,12 @@ export function isContextOverflow(
 	contextWindow?: number,
 	options: ContextOverflowOptions = {},
 ): boolean {
+	// A safety refusal is never an overflow, whatever its provider-supplied explanation says.
+	// Treating it as one would compact and re-send the declined context.
+	if (message.refusal) {
+		return false;
+	}
+
 	// Case 1: Check error message patterns
 	if (message.stopReason === "error" && message.errorMessage) {
 		// Check known patterns

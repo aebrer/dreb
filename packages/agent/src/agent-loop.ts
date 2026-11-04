@@ -503,8 +503,10 @@ async function streamAssistantResponse(
 					case "done":
 					case "error": {
 						const result = await response.result();
-						// Check if this is a stream-drop error that should be retried
-						const isDrop = result.stopReason === "error" && isStreamDropError(result.errorMessage);
+						// Check if this is a stream-drop error that should be retried.
+						// A safety refusal is never a drop, whatever its provider-supplied text says.
+						const isDrop =
+							result.stopReason === "error" && !result.refusal && isStreamDropError(result.errorMessage);
 						if (isDrop && streamDropAttempt < maxRetries && !signal?.aborted) {
 							shouldRetry = true;
 							retryError =

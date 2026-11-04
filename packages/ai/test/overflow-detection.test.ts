@@ -158,3 +158,20 @@ describe("GitHub Copilot overflow errors", () => {
 		expect(isContextOverflow(createErrorMessage({ errorMessage: "403 Forbidden" }))).toBe(false);
 	});
 });
+
+describe("safety refusals", () => {
+	const OVERFLOW_LOOKING_REFUSAL =
+		"Request declined by the model's safety filter: Declined because the prompt is too long to review safely.";
+
+	it("never classifies a refusal as overflow, even when its explanation matches an overflow pattern", () => {
+		const refusal = createErrorMessage({
+			errorMessage: OVERFLOW_LOOKING_REFUSAL,
+			refusal: { explanation: "Declined because the prompt is too long to review safely." },
+		});
+		expect(isContextOverflow(refusal, 100)).toBe(false);
+	});
+
+	it("still classifies the same text as overflow without the refusal marker", () => {
+		expect(isContextOverflow(createErrorMessage({ errorMessage: OVERFLOW_LOOKING_REFUSAL }), 100)).toBe(true);
+	});
+});
