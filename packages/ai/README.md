@@ -591,7 +591,7 @@ Request declined by the model's safety filter (category: cyber): This request wa
 Request declined by the model's safety filter.
 ```
 
-Re-sending the same context to the same model is normally declined again, so dreb never retries refusals automatically: `isContextOverflow()` returns `false` for them, and the agent loop and coding-agent auto-retry skip them. To continue, rephrase or remove the declined turn, or switch to a different model. Any partial output is kept on the message for display; errored assistant messages are not replayed to the provider.
+Re-sending the same context to the same model is normally declined again, so dreb never retries refusals automatically: `isContextOverflow()` returns `false` for them, the agent loop and coding-agent auto-retry skip them, and coding-agent does not run automatic compaction after them (which would resume the refused request). To continue, rephrase or remove the declined turn, or switch to a different model. Any partial output is kept on the message for display; errored assistant messages are not replayed to the provider.
 
 ```typescript
 const message = await stream.result();

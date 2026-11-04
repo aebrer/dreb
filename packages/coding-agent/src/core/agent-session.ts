@@ -1325,6 +1325,19 @@ export class AgentSession {
 						if (didRetry) return;
 					}
 
+					// A retried request that ended in an error which is not retried (for example a
+					// safety refusal) still closes the retry cycle, so consumers tracking
+					// auto_retry_start do not wait for a retry that will never come.
+					if (this._retryAttempt > 0) {
+						this._emit({
+							type: "auto_retry_end",
+							success: false,
+							attempt: this._retryAttempt,
+							finalError: msg.errorMessage,
+						});
+						this._retryAttempt = 0;
+					}
+
 					this._resolveRetry();
 					await this._checkCompaction(msg);
 				}
@@ -2769,6 +2782,11 @@ export class AgentSession {
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
+
+		// A safety refusal is declined again on the same context, and compacting after it ends
+		// in an automatic continuation that re-sends the refused turn. Only compact once the
+		// user issues the next request (the pre-prompt check), which never auto-continues.
+		if (assistantMessage.refusal && !requestWillFollow) return;
 
 		let contextWindow = this.model?.contextWindow ?? 0;
 

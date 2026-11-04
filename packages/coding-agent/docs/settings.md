@@ -249,7 +249,7 @@ The continuation option is intended for unattended long-running work and can pro
 | `retry.baseDelayMs` | number | `2000` | Base delay for exponential backoff (2s, 4s, 8s) |
 | `retry.maxDelayMs` | number | `60000` | Max server-requested delay before failing (60s) |
 
-Safety refusals (for example Anthropic `stop_reason: "refusal"`) are never retried automatically: re-sending the same context to the same model is normally declined again, so the turn fails with a `Request declined by the model's safety filter` error instead.
+Safety refusals (for example Anthropic `stop_reason: "refusal"`) are never retried automatically: re-sending the same context to the same model is normally declined again, so the turn fails with a `Request declined by the model's safety filter` error instead. For the same reason, automatic compaction does not run after a refused turn; the next prompt compacts first if needed. If a retried request is refused, the retry cycle ends with a failed `auto_retry_end`.
 
 When a provider requests a retry delay longer than `maxDelayMs` (e.g., Google's "quota will reset after 5h"), the request fails immediately with an informative error instead of waiting silently. Set to `0` to disable the cap.
 

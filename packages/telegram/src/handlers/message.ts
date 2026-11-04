@@ -182,6 +182,23 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 			});
 		}
 
+		// A failed retry cycle (retries exhausted, cancelled, or a retried request that
+		// failed with an error that is not retried, such as a safety refusal) ends after the
+		// final agent_end, whose completion was skipped while the retry was in progress.
+		if (event.type === "auto_retry_end" && event.success === false) {
+			eventChain = eventChain.then(() => {
+				if (
+					!parentAgentDone ||
+					userState.backgroundAgents.size > 0 ||
+					display.retryInProgress ||
+					display.pendingRetry
+				) {
+					return;
+				}
+				chainCompletion(display);
+			});
+		}
+
 		// Re-trigger completion when the last BG agent finishes.
 		// agent_end already fired but skipped completion because BG agents were running.
 		// Now that the last one is done, finalize.

@@ -232,6 +232,30 @@ describe("Anthropic refusals", () => {
 		expect(result.usage.output).toBe(3);
 	});
 
+	it("decides the outcome from the final stop reason received", async () => {
+		const replaced = await run([
+			messageStart(),
+			messageDelta({
+				stop_reason: "refusal",
+				stop_details: { type: "refusal", category: "cyber", explanation: CYBER_EXPLANATION },
+			}),
+			messageDelta({ stop_reason: "end_turn", stop_details: null }),
+		]);
+		expect(terminal(replaced.events).type).toBe("done");
+		expect(replaced.result.stopReason).toBe("stop");
+		expect(replaced.result).not.toHaveProperty("refusal");
+
+		const refusedLast = await run([
+			messageStart(),
+			messageDelta({ stop_reason: "end_turn" }),
+			messageDelta({ stop_reason: "refusal" }),
+		]);
+		expect(terminal(refusedLast.events).type).toBe("error");
+		expect(refusedLast.result.stopReason).toBe("error");
+		expect(refusedLast.result.errorMessage).toBe("Request declined by the model's safety filter.");
+		expect(refusedLast.result.refusal).toEqual({});
+	});
+
 	it("does not mark a normal end_turn with null stop_details as a refusal", async () => {
 		const { events, result } = await run([
 			messageStart(),

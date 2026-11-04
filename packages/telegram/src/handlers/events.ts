@@ -451,9 +451,17 @@ export async function handleAgentEvent(
 			const { success, attempt, finalError } = event as any;
 			state.retryInProgress = false;
 			state.retryAttempt = 0;
-			if (!success && finalError) {
-				// Max retries exhausted — show final error
-				send(`❌ _Retry failed (${attempt} attempts):_ ${finalError}`, true);
+			if (!success) {
+				// The retry cycle ended without a successful response (retries exhausted,
+				// cancelled, or a retried request failed with an error that is not retried, such
+				// as a safety refusal). It arrives after the final agent_end, whose error display
+				// and completion were deferred while the retry was in progress, so show the
+				// final error and finish the turn here: no further agent cycle will follow.
+				state.pendingRetry = false;
+				if (finalError) {
+					send(`❌ _Retry failed (${attempt} attempts):_ ${finalError}`, true);
+				}
+				await finishTurn(api, state);
 			}
 			// On success, the retry's agent_start/agent_end cycle will handle display normally
 			break;
@@ -522,28 +530,7 @@ export async function handleAgentEvent(
 				break;
 			}
 
-			// If background agents are still running, keep the subscription alive
-			// and reset per-cycle state for the next agent loop
-			if (state.backgroundAgents.size > 0) {
-				state.textBlocks = [];
-				state.visibleToolResultCount = 0;
-				state.toolCount = 0;
-				break;
-			}
-
-			// Delete ephemeral status before signaling done
-			if (state.statusMessageId) {
-				await state.editor.flush(state.chatId, state.statusMessageId);
-				await safeDelete(api, state.chatId, state.statusMessageId);
-				state.statusMessageId = null;
-			}
-
-			// Clean up editor
-			state.editor.clear();
-
-			// Signal done AFTER cleanup — waitForCompletion checks this flag,
-			// so setting it last ensures status message is deleted before DONE is sent
-			state.done = true;
+			await finishTurn(api, state);
 			break;
 		}
 
@@ -556,6 +543,34 @@ export async function handleAgentEvent(
 			break;
 		}
 	}
+}
+
+/**
+ * Finish the visible turn once no further agent cycle is expected.
+ * While background agents are still running, the subscription stays alive and only the
+ * per-cycle state is reset for the next agent loop.
+ */
+async function finishTurn(api: Api, state: EventDisplayState): Promise<void> {
+	if (state.backgroundAgents.size > 0) {
+		state.textBlocks = [];
+		state.visibleToolResultCount = 0;
+		state.toolCount = 0;
+		return;
+	}
+
+	// Delete ephemeral status before signaling done
+	if (state.statusMessageId) {
+		await state.editor.flush(state.chatId, state.statusMessageId);
+		await safeDelete(api, state.chatId, state.statusMessageId);
+		state.statusMessageId = null;
+	}
+
+	// Clean up editor
+	state.editor.clear();
+
+	// Signal done AFTER cleanup — waitForCompletion checks this flag,
+	// so setting it last ensures status message is deleted before DONE is sent
+	state.done = true;
 }
 
 /**
