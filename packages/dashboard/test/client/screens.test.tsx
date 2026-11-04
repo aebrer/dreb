@@ -291,9 +291,13 @@ import {
 	THEME_STORAGE_KEY,
 } from "../../src/client/state/appearance.js";
 import { evictComposerMemory, getComposerDraft } from "../../src/client/state/composer-memory.js";
+import { DEFAULT_FLEET_SORT, FLEET_SORT_OPTIONS } from "../../src/client/state/fleet-sorting.js";
 import {
+	FLEET_SORT_KEY,
+	reloadFleetSortPreference,
 	SESSION_SIDEBAR_COLLAPSED_KEY,
 	setExpandThinking,
+	setFleetSort,
 	setImageDisplayMode,
 	setSessionSidebarCollapsed,
 } from "../../src/client/state/preferences.js";
@@ -308,10 +312,12 @@ import {
 import { createAppStore } from "../../src/client/state/store.js";
 import {
 	type CommandDto,
+	type FleetDto,
 	MAX_TOTAL_IMAGE_BYTES,
 	type PerformanceModelSummaryDto,
 	type PerformanceStatsDto,
 	type RuntimeInfoDto,
+	type SessionInfoDto,
 	type SettingsDto,
 } from "../../src/shared/protocol.js";
 
@@ -384,6 +390,7 @@ beforeEach(() => {
 			},
 		},
 	});
+	reloadFleetSortPreference();
 });
 
 afterEach(() => {
@@ -394,6 +401,7 @@ afterEach(() => {
 	setExpandThinking(false);
 	setImageDisplayMode("previews");
 	setSessionSidebarCollapsed(false);
+	setFleetSort(DEFAULT_FLEET_SORT);
 	window.localStorage.clear();
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
@@ -6920,6 +6928,251 @@ describe("dashboard client regressions", () => {
 
 		expect(api.listFiles).toHaveBeenCalledWith("/home/slow");
 		expect(vi.mocked(api.listFiles).mock.calls.some(([target]) => target === "/")).toBe(false);
+	});
+
+	describe("Fleet sort controls", () => {
+		const date = (day: number) => `2026-01-${String(day).padStart(2, "0")}T00:00:00.000Z`;
+		const disk = (id: string, cwd: string, modified: number): SessionInfoDto => ({
+			id,
+			path: `/sessions/${id}.jsonl`,
+			cwd,
+			name: id,
+			created: date(modified),
+			modified: date(modified),
+			messageCount: 1,
+			firstMessage: id,
+		});
+		const names = (el: HTMLElement) => [...el.querySelectorAll(".session-card .name")].map((n) => n.textContent);
+		const change = (el: HTMLElement, id: string, value: string) => {
+			const select = el.querySelector<HTMLSelectElement>(`#${id}`)!;
+			select.value = value;
+			select.dispatchEvent(new Event("change", { bubbles: true }));
+		};
+		function fixture(runtimes: RuntimeInfoDto[], diskSessions: SessionInfoDto[] = []) {
+			const [fleet, setFleet] = createSignal<FleetDto>({ runtimes, diskSessions });
+			const store = {
+				...makeStore(),
+				fleet,
+				navigate: vi.fn(),
+				upsertRuntime: vi.fn(),
+				refreshDiskSessions: vi.fn(async () => {}),
+			};
+			return { el: mount(() => <FleetScreen store={store} />), store, setFleet };
+		}
+
+		it("exposes all six keys, labels direction honestly, persists pairs and adds no requests", () => {
+			const { el } = fixture([runtimeInfo("b", "/b"), runtimeInfo("a", "/a")]);
+			const key = el.querySelector<HTMLSelectElement>("#fleet-sort-key")!;
+			const direction = el.querySelector<HTMLSelectElement>("#fleet-sort-direction")!;
+			expect([...key.options].map((o) => o.textContent)).toEqual(FLEET_SORT_OPTIONS.map((o) => o.label));
+			expect(direction.disabled).toBe(true);
+			expect(names(el)).toEqual(["a", "b"]);
+			expect(window.localStorage.getItem(FLEET_SORT_KEY)).toBeNull();
+			vi.mocked(api.sessions).mockClear();
+			vi.mocked(api.fleet).mockClear();
+			vi.mocked(api.hydrate).mockClear();
+			change(el, "fleet-sort-key", "name");
+			expect(direction.disabled).toBe(false);
+			expect(direction.options[0].textContent).toContain("A–Z");
+			change(el, "fleet-sort-direction", "desc");
+			expect(names(el)).toEqual(["b", "a"]);
+			expect(JSON.parse(window.localStorage.getItem(FLEET_SORT_KEY)!)).toEqual({ key: "name", direction: "desc" });
+			change(el, "fleet-sort-key", "created");
+			expect(direction.value).toBe("desc");
+			expect(direction.options[0].textContent).toBe("Oldest first");
+			change(el, "fleet-sort-key", "default");
+			expect(direction.disabled).toBe(true);
+			expect(names(el)).toEqual(["a", "b"]);
+			expect(api.sessions).not.toHaveBeenCalled();
+			expect(api.fleet).not.toHaveBeenCalled();
+			expect(api.hydrate).not.toHaveBeenCalled();
+		});
+
+		it("distinguishes original creation from runtime start and updates when inventory arrives", () => {
+			const old = runtimeInfo("old", "/z");
+			old.createdAt = date(30);
+			old.state.sessionFile = "/sessions/old.jsonl";
+			const recent = runtimeInfo("recent", "/a");
+			recent.createdAt = date(1);
+			recent.state.sessionFile = "/sessions/recent.jsonl";
+			const { el, setFleet } = fixture([old, recent], [disk("old", "/original", 2)]);
+			change(el, "fleet-sort-key", "created");
+			change(el, "fleet-sort-direction", "asc");
+			expect(names(el)).toEqual(["old", "recent"]); // unknown remains last, not runtime-start substitution
+			expect(el.querySelector("#fleet-sort-help")?.textContent).toContain("Unknown dates");
+			setFleet({ runtimes: [old, recent], diskSessions: [disk("old", "/original", 2), disk("recent", "/a", 1)] });
+			expect(names(el)).toEqual(["recent", "old"]);
+			change(el, "fleet-sort-key", "started");
+			change(el, "fleet-sort-direction", "asc");
+			expect(names(el)).toEqual(["recent", "old"]);
+			expect(el.querySelector("#fleet-sort-help")?.textContent).toContain(
+				"Past sessions keep their default newest-first",
+			);
+			change(el, "fleet-sort-key", "created"); // newest original first: the opposite of newest runtime first
+			expect(names(el)).toEqual(["old", "recent"]);
+		});
+
+		it("sorts full groups before truncation and preserves group DOM, expansion and focus across movement", async () => {
+			const entries = [
+				disk("Z", "/a", 6),
+				disk("Y", "/a", 5),
+				disk("X", "/a", 4),
+				disk("A", "/a", 1),
+				disk("B", "/b", 3),
+			];
+			const { el } = fixture([], entries);
+			const group = el.querySelector<HTMLElement>(".project-group")!;
+			expect(group.querySelectorAll(".disk-row")).toHaveLength(3);
+			change(el, "fleet-sort-key", "name");
+			expect([...group.querySelectorAll(".disk-row .name")].map((n) => n.textContent)).toEqual(["A", "X", "Y"]);
+			group.querySelector<HTMLButtonElement>(".disk-more")!.click();
+			expect(group.querySelectorAll(".disk-row")).toHaveLength(4);
+			const toggle = group.querySelector<HTMLButtonElement>(".disk-more")!;
+			toggle.focus();
+			setFleetSort({ key: "path", direction: "desc" });
+			expect([...el.querySelectorAll(".group-head h3")].map((n) => n.textContent)).toEqual(["/b", "/a"]);
+			expect(el.querySelectorAll(".project-group")[1]).toBe(group);
+			expect(group.querySelectorAll(".disk-row")).toHaveLength(4);
+			await Promise.resolve(); // focus is restored after DOM reconciliation
+			expect(document.activeElement).toBe(toggle);
+		});
+
+		it("never restores focus over a deliberate new focus target or after the Fleet is unmounted", async () => {
+			const store = {
+				...makeStore(),
+				fleet: () => ({ runtimes: [runtimeInfo("a", "/a"), runtimeInfo("b", "/b")], diskSessions: [] }),
+			};
+			const { container, dispose } = mountDisposable(() => <FleetScreen store={store} />);
+			try {
+				const first = container.querySelector<HTMLButtonElement>(".session-card .btn-primary")!;
+				first.focus();
+				setFleetSort({ key: "path", direction: "desc" });
+				const key = container.querySelector<HTMLSelectElement>("#fleet-sort-key")!;
+				key.focus();
+				await Promise.resolve();
+				expect(document.activeElement).toBe(key);
+				first.focus();
+				setFleetSort(DEFAULT_FLEET_SORT);
+				dispose();
+				await Promise.resolve();
+				expect(document.activeElement).not.toBe(first);
+				expect(first.isConnected).toBe(false);
+			} finally {
+				dispose();
+				container.remove();
+			}
+		});
+
+		it("keeps the explicit historical-directory chooser bound to its sorted session", async () => {
+			const moved = { ...disk("Zulu", "/gone/z", 3), cwdAvailable: false };
+			const { el } = fixture([], [disk("Alpha", "/a", 1), moved]);
+			change(el, "fleet-sort-key", "name");
+			change(el, "fleet-sort-direction", "desc");
+			vi.mocked(api.createRuntime).mockClear();
+			el.querySelector<HTMLButtonElement>(".disk-row .btn")!.click();
+			expect(el.querySelector(".resume-historical-cwd")?.textContent).toBe("/gone/z");
+			expect(api.createRuntime).not.toHaveBeenCalled();
+			change(el, "fleet-sort-direction", "asc");
+			const input = el.querySelector<HTMLInputElement>("#resume-runtime-cwd")!;
+			input.value = "/replacement";
+			input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+			el.querySelector<HTMLButtonElement>(".resume-session-modal .btn-primary")!.click();
+			await vi.waitFor(() =>
+				expect(api.createRuntime).toHaveBeenCalledWith("/replacement", { sessionPath: "/sessions/Zulu.jsonl" }),
+			);
+			expect(moved.cwd).toBe("/gone/z");
+		});
+
+		it("applies live activity/name snapshots and membership without changing Default or losing card identity", async () => {
+			const a = runtimeInfo("a", "/a");
+			a.state.sessionName = "Alpha";
+			a.lastActivity = date(1);
+			const b = runtimeInfo("b", "/b");
+			b.state.sessionName = "Beta";
+			b.lastActivity = date(2);
+			vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [b, a], diskSessions: [] });
+			let handlers: EventStreamHandlers | undefined;
+			vi.mocked(connectEvents).mockImplementation((next) => {
+				handlers = next;
+				return () => {};
+			});
+			const store = makeStore();
+			await store.start();
+			const el = mount(() => <FleetScreen store={store} />);
+			let seq = 0;
+			const snapshot = (runtimes: RuntimeInfoDto[]) =>
+				handlers!.onEnvelope!({ seq: ++seq, key: "", event: { type: "fleet_snapshot", runtimes } });
+			try {
+				const openA = el.querySelector<HTMLButtonElement>(".session-card .btn-primary")!;
+				snapshot([{ ...b, lastActivity: date(30), needsAttention: true }, { ...a }]);
+				expect(names(el)).toEqual(["Alpha", "Beta"]);
+				change(el, "fleet-sort-key", "activity");
+				expect(names(el)).toEqual(["Beta", "Alpha"]);
+				expect(el.querySelectorAll(".session-card .btn-primary")[1]).toBe(openA);
+				snapshot([
+					{ ...a, lastActivity: date(31) },
+					{ ...b, lastActivity: date(30) },
+				]);
+				expect(names(el)).toEqual(["Alpha", "Beta"]);
+				change(el, "fleet-sort-key", "name");
+				handlers!.onEnvelope!({ seq: ++seq, key: "a", event: { type: "session_name_changed", name: "Zulu" } });
+				expect(names(el)).toEqual(["Beta", "Zulu"]);
+				const c = runtimeInfo("c", "/c");
+				c.state.sessionName = "Charlie";
+				snapshot([b, c]);
+				expect(names(el)).toEqual(["Beta", "Charlie"]);
+			} finally {
+				store.stop();
+			}
+		});
+
+		it("keeps action and confirmation identities correct when the selected order changes", async () => {
+			const entries = [disk("Zulu", "/historical/z", 3), disk("Alpha", "/historical/a", 1)];
+			const { el, store } = fixture([runtimeInfo("b", "/b"), runtimeInfo("a", "/a")], entries);
+			change(el, "fleet-sort-key", "name");
+			change(el, "fleet-sort-direction", "desc");
+			el.querySelector<HTMLButtonElement>(".session-card .btn-primary")!.click();
+			expect(store.navigate).toHaveBeenCalledWith({ screen: "session", key: "b" });
+			el.querySelector<HTMLButtonElement>(".session-card .btn-danger")!.click();
+			await Promise.resolve();
+			expect(api.stopRuntime).toHaveBeenCalledWith("b");
+			el.querySelector<HTMLButtonElement>(".disk-row .btn")!.click();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(api.createRuntime).toHaveBeenCalledWith("/historical/z", { sessionPath: "/sessions/Zulu.jsonl" });
+			el.querySelector<HTMLButtonElement>(".disk-row .btn-danger")!.click();
+			change(el, "fleet-sort-direction", "asc");
+			el.querySelector<HTMLButtonElement>(".modal .btn-danger")!.click();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(api.deleteSession).toHaveBeenCalledWith("/sessions/Zulu.jsonl");
+			expect(store.refreshDiskSessions).toHaveBeenCalled();
+		});
+
+		it.each(FLEET_SORT_OPTIONS.map(({ key }) => key))(
+			"leaves session/subagent sidebars stable with Fleet preference %s",
+			(key) => {
+				setFleetSort({ key, direction: "desc" });
+				const a = runtimeInfo("a", "/a");
+				a.state.sessionName = "Zulu";
+				const b = runtimeInfo("b", "/b");
+				b.state.sessionName = "Alpha";
+				b.lastActivity = date(30);
+				const store = {
+					...makeStore(),
+					fleet: () => ({ runtimes: [b, a, runtimeInfo("current", "/current")], diskSessions: [] }),
+					hydrateSession: vi.fn(async () => {}),
+				};
+				const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+				expect([...el.querySelectorAll(".fleet-sidebar-entry .name")].map((e) => e.textContent)).toEqual([
+					"Zulu",
+					"Alpha",
+				]);
+				const sub = mount(() => <SubagentScreen store={store} sessionKey="current" agentId="bg1" />);
+				expect([...sub.querySelectorAll(".fleet-sidebar-entry .name")].map((e) => e.textContent)).toEqual([
+					"Zulu",
+					"Alpha",
+				]);
+			},
+		);
 	});
 
 	it("groups /tmp sessions under a single fleet project", () => {

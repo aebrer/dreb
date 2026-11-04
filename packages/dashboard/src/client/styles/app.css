@@ -80,6 +80,47 @@ body {
 	flex-wrap: wrap;
 }
 
+.fleet-sort {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	min-width: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+}
+
+.fleet-sort-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+	max-width: 100%;
+}
+
+.fleet-sort-field label {
+	font-size: var(--fs-small);
+}
+
+.fleet-sort-field select {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.fleet-sort-help {
+	margin: var(--space-2) 0 var(--space-5);
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+	.fleet-sort-field {
+		flex: 1 1 240px;
+	}
+	.fleet-sort-field select {
+		min-height: 44px;
+	}
+}
+
 /* Live sessions come first — the fleet's primary content. */
 .live-sessions {
 	margin-bottom: var(--space-6);

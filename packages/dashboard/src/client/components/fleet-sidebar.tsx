@@ -2,10 +2,10 @@
  * Fleet sidebar for the session view and subagent drill-in — the other live
  * sessions, so a focused transcript never loses fleet visibility.
  *
- * Entries are deterministically ordered (cwd, then createdAt — the fleet
- * page's comparator); attention uses a filled chip and errors an outlined chip,
+ * Entries retain stable cwd/createdAt ordering independently of Fleet home's
+ * user-selected sort; attention uses a filled chip and errors an outlined chip,
  * both with entry-border emphasis without moving position (AGENTS.md:
- * highlight, never re-sort).
+ * highlight, never re-sort on sidebar activity).
  *
  * Desktop: a resizable column beside the transcript, collapsed through the
  * persisted `dreb.dashboard.sessionSidebarCollapsed` preference. Mobile
@@ -23,9 +23,9 @@ import { createFleetSidebarResize, FleetSidebarResizeHandle } from "./fleet-side
 import { SessionCardSummary, sessionCardStatus } from "./session-card-summary.js";
 
 /**
- * Deterministic fleet order: alphabetical by project path, then session start
- * time as tiebreak — the same comparator the fleet page uses, so entries
- * never jump around as attention flags flip or activity ticks.
+ * Stable sidebar order: alphabetical by project path, then runtime start time.
+ * These are also Fleet home's default dimensions, but its selected-sort
+ * preference never moves sidebar entries as attention or activity changes.
  */
 export function fleetSidebarOrder(runtimes: readonly RuntimeInfoDto[]): RuntimeInfoDto[] {
 	const ordered = [...runtimes];

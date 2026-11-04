@@ -94,7 +94,9 @@ The initial startup scan still walks upward from the main or subagent launch cwd
 
 ## UI Ordering — Determinism Over Recency
 
-**Lists of live/long-lived UI cards (fleet sessions, agent strips, etc.) must sort deterministically, not by dynamic activity.** Order by a stable key (e.g. project path alphabetical, then session start time as tiebreak) so cards keep a fixed position. Sorting by `lastActivity` or other constantly-changing signals makes cards jump around on every event — consistency is better UX than dynamic reordering. When a new ordering dimension is needed, add a stable field (like `createdAt`) rather than reusing a mutable one.
+**Lists of live/long-lived UI cards (fleet sessions, agent strips, etc.) must always sort deterministically. Defaults and other surfaces must use stable keys, not dynamic activity.** Order by a stable key (e.g. project path alphabetical, then runtime start time as tiebreak) so cards keep a fixed position. Sorting by `lastActivity` or other constantly-changing signals makes cards jump around on every event — consistency is better UX than implicit dynamic reordering. For default ordering and other surfaces, use stable fields for new ordering dimensions rather than mutable activity signals.
+
+**Narrow exception: explicitly user-selected Fleet home sorts may reorder on updates to the selected key.** Selecting Last activity opts only Fleet into live activity reordering; Default remains stable path/start ordering, unaffected by activity or status changes. Session and subagent fleet sidebars retain their stable path/start comparator regardless of the Fleet preference. Every comparator must still use deterministic ties; reversing the selected direction must not reverse equal-value tiebreaks.
 
 ## Testing
 

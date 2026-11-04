@@ -1,7 +1,6 @@
 /**
  * Fleet overview — home screen. Live-first: one grid of all live session
- * cards (deterministic order — project path, then session start time;
- * attention/error emphasis never re-orders them), then compact past
+ * cards (stable path/start order by default, user-selected sorting otherwise), then compact past
  * sessions grouped by project (3 rows + expand). "+ new session" modal.
  */
 
@@ -9,17 +8,34 @@ import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
-import { fleetSidebarOrder } from "../components/fleet-sidebar.js";
 import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { SessionCardSummary, sessionCardStatus } from "../components/session-card-summary.js";
+import {
+	diskSessionDisplayName,
+	FLEET_SORT_OPTIONS,
+	type FleetSortDirection,
+	type FleetSortKey,
+	isFleetDateSort,
+	runtimeDisplayName,
+	sortFleetDiskGroups,
+	sortFleetRuntimes,
+} from "../state/fleet-sorting.js";
 import { createFleetStatsRefresh } from "../state/fleet-stats-refresh.js";
+import { fleetSort, setFleetSort } from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
 
-// Display-only normalization: /tmp children are grouped together in the fleet UI.
-// Resume still uses each session's own real cwd and session log path unchanged.
-export function fleetGroupKey(cwd: string): string {
-	return cwd === "/tmp" || cwd.startsWith("/tmp/") ? "/tmp" : cwd;
-}
+export { fleetGroupKey } from "../state/fleet-sorting.js";
+
+const SORT_HELP: Record<FleetSortKey, string> = {
+	default:
+		"Live cards keep a stable project/start order; past sessions are newest first. Session sidebars always stay stable.",
+	activity: "Live cards can move as activity updates. Past project groups follow their first sorted session.",
+	created:
+		"Original session creation, not runtime start. Unknown dates sort last until saved-session metadata is available.",
+	started: "Live sessions only. Past sessions keep their default newest-first order in either direction.",
+	name: "Sorts the displayed session names. Past project groups follow their first sorted session; sidebars stay stable.",
+	path: "Live cards use their runtime path; past sessions keep their historical project groups. Sidebars stay stable.",
+};
 
 function shortenPath(path: string): string {
 	return path.replace(/^\/home\/[^/]+/, "~");
@@ -144,28 +160,35 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const [expandedGroups, setExpandedGroups] = createSignal<Record<string, boolean>>({});
 	const [resumeError, setResumeError] = createSignal<string>();
 	const resumeRequests = new Map<string, Promise<void>>();
+	let fleetMain: HTMLElement | undefined;
 
-	// Live sessions: one flat grid, deterministically ordered — alphabetical by
-	// project path, then session start time as tiebreak. Stable ordering beats
-	// dynamic reordering for UX: cards never jump around as activity ticks.
-	const liveRuntimes = createMemo(() => fleetSidebarOrder(props.store.fleet().runtimes));
+	// Moving an existing card/group with insertBefore can blur its focused control.
+	// Restore only a still-mounted control, after reconciliation, and never steal
+	// focus from a newly focused control/dialog or a different route.
+	function retainFocusAcrossReorder(): void {
+		const focused = document.activeElement;
+		if (!(focused instanceof HTMLElement) || !fleetMain?.contains(focused)) return;
+		queueMicrotask(() => {
+			if (focused.isConnected && fleetMain?.isConnected && document.activeElement === document.body) {
+				focused.focus({ preventScroll: true });
+			}
+		});
+	}
 
-	// Past sessions: grouped by project, compact rows, newest group first.
-	const diskGroups = createMemo(() => {
+	const liveRuntimes = createMemo(() => {
+		retainFocusAcrossReorder();
 		const fleet = props.store.fleet();
-		const liveSessionFiles = new Set(fleet.runtimes.map((r) => r.state.sessionFile).filter(Boolean));
-		const byProject = new Map<string, SessionInfoDto[]>();
-		for (const session of fleet.diskSessions) {
-			if (liveSessionFiles.has(session.path)) continue; // already live
-			const key = fleetGroupKey(session.cwd);
-			const group = byProject.get(key) ?? [];
-			group.push(session);
-			byProject.set(key, group);
-		}
-		const entries = [...byProject.entries()];
-		entries.sort(([, a], [, b]) => new Date(b[0]?.modified ?? 0).getTime() - new Date(a[0]?.modified ?? 0).getTime());
-		return entries;
+		return sortFleetRuntimes(fleet.runtimes, fleet.diskSessions, fleetSort(), (runtime) =>
+			runtimeDisplayName(runtime, props.store.sessions[runtime.key]?.sessionName),
+		);
 	});
+	const liveByKey = createMemo(() => new Map(liveRuntimes().map((runtime) => [runtime.key, runtime])));
+	const diskGroups = createMemo(() => {
+		retainFocusAcrossReorder();
+		const fleet = props.store.fleet();
+		return sortFleetDiskGroups(fleet.diskSessions, fleet.runtimes, fleetSort());
+	});
+	const diskByProject = createMemo(() => new Map(diskGroups()));
 
 	const counts = createMemo(() => {
 		const fleet = props.store.fleet();
@@ -221,7 +244,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	return (
 		<div class="screen-fill">
 			<Topbar store={props.store} active="fleet" />
-			<main class="container">
+			<main class="container" ref={fleetMain}>
 				<div class="fleet-head">
 					<div>
 						<h1>fleet</h1>
@@ -240,6 +263,53 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 						+ new session
 					</button>
 				</div>
+
+				<fieldset class="fleet-sort" aria-label="Fleet sorting" aria-describedby="fleet-sort-help">
+					<div class="fleet-sort-field">
+						<label for="fleet-sort-key">Sort by</label>
+						<select
+							id="fleet-sort-key"
+							value={fleetSort().key}
+							onChange={(event) => {
+								const key = event.currentTarget.value as FleetSortKey;
+								setFleetSort({ key, direction: isFleetDateSort(key) ? "desc" : "asc" });
+							}}
+						>
+							<For each={FLEET_SORT_OPTIONS}>
+								{(option) => <option value={option.key}>{option.label}</option>}
+							</For>
+						</select>
+					</div>
+					<div class="fleet-sort-field">
+						<label for="fleet-sort-direction">Order</label>
+						<select
+							id="fleet-sort-direction"
+							value={fleetSort().direction}
+							disabled={fleetSort().key === "default"}
+							onChange={(event) =>
+								setFleetSort({ ...fleetSort(), direction: event.currentTarget.value as FleetSortDirection })
+							}
+						>
+							<option value="asc">
+								{fleetSort().key === "default"
+									? "Default order"
+									: isFleetDateSort(fleetSort().key)
+										? "Oldest first"
+										: "Ascending (A–Z)"}
+							</option>
+							<option value="desc">
+								{fleetSort().key === "default"
+									? "Default order"
+									: isFleetDateSort(fleetSort().key)
+										? "Newest first"
+										: "Descending (Z–A)"}
+							</option>
+						</select>
+					</div>
+				</fieldset>
+				<p id="fleet-sort-help" class="fleet-sort-help muted small">
+					{SORT_HELP[fleetSort().key]}
+				</p>
 
 				<Show when={props.store.fleetError()}>
 					<div class="settings-error" role="alert">
@@ -268,8 +338,12 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					<Show when={liveRuntimes().length > 0}>
 						<section class="live-sessions">
 							<div class="session-grid">
-								<For each={liveRuntimes()}>
-									{(runtime) => <SessionCard store={props.store} runtime={runtime} />}
+								<For each={liveRuntimes().map((runtime) => runtime.key)}>
+									{(key) => (
+										<Show when={liveByKey().get(key)}>
+											{(runtime) => <SessionCard store={props.store} runtime={runtime()} />}
+										</Show>
+									)}
 								</For>
 							</div>
 						</section>
@@ -281,24 +355,25 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 							<Show when={resumeError()}>
 								<p class="pair-error">{resumeError()}</p>
 							</Show>
-							<For each={diskGroups()}>
-								{([project, sessions]) => {
+							<For each={diskGroups().map(([project]) => project)}>
+								{(project) => {
+									const sessions = () => diskByProject().get(project) ?? [];
 									const expanded = () => expandedGroups()[project] ?? false;
-									const visible = () => (expanded() ? sessions : sessions.slice(0, 3));
+									const visible = () => (expanded() ? sessions() : sessions().slice(0, 3));
 									const newSessionCwd = () => {
-										const candidate = sessions.find(
+										const candidate = sessions().find(
 											(session) => session.resolvedCwd || session.cwdAvailable !== false,
 										);
 										if (!candidate) return undefined;
 										return project === "/tmp" ? project : (candidate.resolvedCwd ?? candidate.cwd);
 									};
-									const unavailable = () => sessions.every((session) => session.cwdAvailable === false);
+									const unavailable = () => sessions().every((session) => session.cwdAvailable === false);
 									return (
 										<section class="project-group">
 											<div class="group-head">
 												<h3>{project ? shortenPath(project) : "(not recorded)"}</h3>
 												<span class="muted small">
-													{sessions.length} on disk{unavailable() ? " · original path unavailable" : ""}
+													{sessions().length} on disk{unavailable() ? " · original path unavailable" : ""}
 												</span>
 												<Show when={newSessionCwd()}>
 													{(cwd) => (
@@ -319,7 +394,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 												{(session) => (
 													<div class="disk-row">
 														<span class="name" classList={{ muted: !session.name }}>
-															{session.name ?? `“${session.firstMessage.slice(0, 60)}…”`}
+															{diskSessionDisplayName(session)}
 														</span>
 														<span class="meta">
 															{session.cwdAvailable === false ? "original path unavailable · " : ""}
@@ -344,7 +419,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 													</div>
 												)}
 											</For>
-											<Show when={sessions.length > 3}>
+											<Show when={sessions().length > 3}>
 												<button
 													type="button"
 													class="disk-more"
@@ -352,7 +427,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 														setExpandedGroups((current) => ({ ...current, [project]: !expanded() }))
 													}
 												>
-													{expanded() ? "show fewer ←" : `all ${sessions.length} on disk →`}
+													{expanded() ? "show fewer ←" : `all ${sessions().length} on disk →`}
 												</button>
 											</Show>
 										</section>
