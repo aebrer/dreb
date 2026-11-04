@@ -720,14 +720,14 @@ describe("ensureSubscribed", () => {
 		expect(display).toBeDefined();
 
 		// handleAgentEvent is mocked: simulate the display state it maintains. The final
-		// agent_end of a retried run arrives while the retry is still being tracked...
+		// agent_end of a retried run arrives while the retry is still being tracked, so it
+		// does not complete the turn...
 		display.retryInProgress = true;
 		fireEvent({ type: "agent_end", messages: [] });
 		await settle(400);
 		expect(mockSafeSend.mock.calls.filter((c: any[]) => c[2]?.includes("DONE"))).toHaveLength(0);
 
-		// ...and the failed auto_retry_end that follows clears it and ends the turn.
-		display.retryInProgress = false;
+		// ...and the failed auto_retry_end that follows ends it.
 		fireEvent({ type: "auto_retry_end", success: false, attempt: 1, finalError: "declined" });
 		await settle(400);
 
@@ -753,7 +753,6 @@ describe("ensureSubscribed", () => {
 		display.retryInProgress = true;
 		fireEvent({ type: "agent_end", messages: [] });
 		await settle(50);
-		display.retryInProgress = false;
 		fireEvent({ type: "auto_retry_end", success: true, attempt: 1 });
 		await settle(400);
 
