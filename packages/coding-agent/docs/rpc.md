@@ -2044,7 +2044,7 @@ On final failure (max retries exceeded):
 }
 ```
 
-A retry cycle also ends with `success: false` when a retried request fails with an error that is not retried, such as a safety refusal. `attempt` is the number of retries made and `finalError` is that request's `errorMessage`. Like the max-retries failure, this `auto_retry_end` arrives after the final `agent_end`.
+A retry cycle also ends with `success: false` when a retried request fails with an error that is not retried, such as a safety refusal. `attempt` is the number of retries made and `finalError` is that request's `errorMessage`. Like the max-retries failure, this `auto_retry_end` arrives after the failed request's `agent_end`.
 
 ### background_agent_start / subagent_arbitration / background_agent_end / background_agent_event
 
