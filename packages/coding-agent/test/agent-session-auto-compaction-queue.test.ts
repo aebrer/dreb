@@ -567,6 +567,55 @@ describe("AgentSession auto-compaction queue resume", () => {
 		});
 	});
 
+	it.each([
+		[
+			"a LiteLLM proxy rejecting a Bedrock request",
+			String.raw`400 {"err_msg":"litellm.ContextWindowExceededError: litellm.BadRequestError: BedrockException: Context Window Error - {\"message\":\"Input is too long.\"}\nmodel=claude-opus-5-5. context_window_fallbacks=None. fallbacks=None.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing model","err_code":"BAD_REQUEST","status_code":400}`,
+		],
+		[
+			"Anthropic's request byte cap",
+			'413 {"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}',
+		],
+		["a gateway body-size limit", "413 Payload Too Large"],
+	])("should compact and retry after %s, far below the token window", async (_label, errorMessage) => {
+		let callCount = 0;
+		session.agent.streamFn = () => {
+			callCount += 1;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				// Byte caps reject requests whose token count is far below the context window.
+				const message = callCount === 1 ? createAssistant("error", errorMessage) : createAssistant("stop");
+				stream.push({ type: "start", partial: message });
+				if (message.stopReason === "error") {
+					stream.push({ type: "error", reason: "error", error: message });
+				} else {
+					stream.push({ type: "done", reason: "stop", message });
+				}
+			});
+			return stream;
+		};
+		const events: Array<{ type: string; reason?: string; willRetry?: boolean; errorMessage?: string }> = [];
+		session.subscribe((event) => {
+			if (event.type === "auto_compaction_start") events.push({ type: event.type, reason: event.reason });
+			if (event.type === "auto_compaction_end") {
+				events.push({ type: event.type, willRetry: event.willRetry, errorMessage: event.errorMessage });
+			}
+			if (event.type === "auto_retry_start" || event.type === "auto_retry_end") events.push({ type: event.type });
+		});
+
+		await session.prompt("describe these slides");
+		await vi.advanceTimersByTimeAsync(100);
+		await session.agent.waitForIdle();
+
+		expect(events).toEqual([
+			{ type: "auto_compaction_start", reason: "overflow" },
+			{ type: "auto_compaction_end", willRetry: true, errorMessage: undefined },
+		]);
+		expect(compactGate.calls).toBe(1);
+		expect(callCount).toBe(2);
+		expect(session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+	});
+
 	it("should not compact genuine output-limit exhaustion that could fit in context", async () => {
 		const model = session.model!;
 		const message = createAssistant(

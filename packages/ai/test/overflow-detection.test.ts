@@ -159,6 +159,88 @@ describe("GitHub Copilot overflow errors", () => {
 	});
 });
 
+describe("request-size rejections", () => {
+	// Reported verbatim: a LiteLLM proxy in front of Amazon Bedrock, reached through the
+	// Anthropic SDK, which formats a body without a top-level `message` as `${status} ${JSON}`.
+	const LITELLM_BEDROCK_INPUT_TOO_LONG = String.raw`400 {"err_msg":"litellm.ContextWindowExceededError: litellm.BadRequestError: BedrockException: Context Window Error - {\"message\":\"Input is too long.\"}\nmodel=claude-opus-5-5. context_window_fallbacks=None. fallbacks=None.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing model","err_code":"BAD_REQUEST","status_code":400}`;
+
+	const ANTHROPIC_REQUEST_TOO_LARGE = `413 ${JSON.stringify({
+		type: "error",
+		error: { type: "request_too_large", message: "Request exceeds the maximum allowed number of bytes." },
+	})}`;
+
+	const NGINX_413_PAGE =
+		"413 <html>\r\n<head><title>413 Request Entity Too Large</title></head>\r\n<body>\r\n<center><h1>413 Request Entity Too Large</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+
+	it.each([
+		["the reported LiteLLM proxy rejection of a Bedrock request", LITELLM_BEDROCK_INPUT_TOO_LONG],
+		["Bedrock's bare wording", "Input is too long."],
+		["Bedrock's bare wording from an in-stream validation exception", "Validation error: Input is too long."],
+		["Bedrock's model wording", "Validation error: Input is too long for requested model."],
+		[
+			"LiteLLM's exception as an OpenAI-compatible proxy surfaces it",
+			'400 litellm.ContextWindowExceededError: litellm.BadRequestError: BedrockException: Context Window Error - {"message":"Input is too long."}',
+		],
+		[
+			"LiteLLM's exception wrapping another backend",
+			"400 litellm.ContextWindowExceededError: litellm.BadRequestError: OllamaException - upstream rejected the request",
+		],
+		["Anthropic's byte cap through the Anthropic SDK", ANTHROPIC_REQUEST_TOO_LARGE],
+		[
+			"Anthropic's byte cap through an OpenAI-compatible proxy",
+			"413 Request exceeds the maximum allowed number of bytes.",
+		],
+		["a gateway 413 Payload Too Large", "413 Payload Too Large"],
+		["a gateway 413 Content Too Large", "413 Content Too Large"],
+		["a gateway 413 Request Entity Too Large", "413 Request Entity Too Large"],
+		["nginx's multi-line HTML 413 page", NGINX_413_PAGE],
+		["a 413 reported after a wrapper prefix", "got status: 413 Payload Too Large."],
+	])("classifies %s as overflow", (_label, errorMessage) => {
+		expect(isContextOverflow(createErrorMessage({ errorMessage }))).toBe(true);
+	});
+
+	it("never classifies a refusal as overflow, even when it reads like a size rejection", () => {
+		const explanation = "Input is too long to review safely (request_too_large).";
+		const refusal = createErrorMessage({
+			errorMessage: `Request declined by the model's safety filter: ${explanation}`,
+			refusal: { explanation },
+		});
+		expect(isContextOverflow(refusal, 100)).toBe(false);
+	});
+
+	it.each([
+		[
+			"Groq's per-minute token limit (413)",
+			"413 Request too large for model `llama-3.3-70b-versatile` in organization `org_test` service tier `on_demand` on tokens per minute (TPM): Limit 12000, Requested 20000, please reduce your message size and try again.",
+		],
+		[
+			"OpenAI's per-minute token limit",
+			"429 Request too large for gpt-4o in organization org-test on tokens per min (TPM): Limit 30000, Requested 50000. The input or output tokens must be reduced in order to run successfully. Visit https://platform.openai.com/account/rate-limits to learn more.",
+		],
+		[
+			"Anthropic's rate limit",
+			`429 ${JSON.stringify({
+				type: "error",
+				error: {
+					type: "rate_limit_error",
+					message: "Number of request tokens has exceeded your per-minute rate limit",
+				},
+			})}`,
+		],
+		["an overload", "529 overloaded"],
+		["a non-413 status that mentions a large payload", '400 Bad Request: payload too large for field "metadata"'],
+	])("does not classify %s as overflow", (_label, errorMessage) => {
+		expect(isContextOverflow(createErrorMessage({ errorMessage }))).toBe(false);
+	});
+
+	it.each(["400 status code (no body)", "413 status code (no body)"])(
+		"still classifies Cerebras' bodiless %s as overflow",
+		(errorMessage) => {
+			expect(isContextOverflow(createErrorMessage({ errorMessage }))).toBe(true);
+		},
+	);
+});
+
 describe("safety refusals", () => {
 	const OVERFLOW_LOOKING_REFUSAL =
 		"Request declined by the model's safety filter: Declined because the prompt is too long to review safely.";

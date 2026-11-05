@@ -333,8 +333,7 @@ Only host-validated decision metadata is persisted/emitted. Raw arbiter prompts,
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `terminal.showImages` | boolean | `true` | Show images in terminal (if supported) |
-
-| `images.autoResize` | boolean | `true` | Resize images to 2000x2000 max |
+| `images.autoResize` | boolean | `true` | Resize images sent to the model to 2000x2000 max and under 4.5 MB of base64. A resized image is re-encoded as whichever of PNG or JPEG is smaller; images with transparency stay PNG when the PNG fits |
 | `images.blockImages` | boolean | `false` | Block all images from being sent to LLM |
 
 ### Shell

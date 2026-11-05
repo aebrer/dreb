@@ -604,6 +604,8 @@ if (message.refusal) {
 
 Use `isContextOverflow(message, model.contextWindow)` to detect recognized provider context-limit errors or successful responses whose full input usage exceeds the configured window. The latter compares `usage.input + usage.cacheRead + usage.cacheWrite`; output tokens do not count toward that input-only check. A conservative registry window can be lower than the server's hard limit (for example, Copilot Opus 4.8 can accept requests above its configured 200K window). Detection does not raise the registry limit or modify the response.
 
+Requests rejected for their size in bytes count as overflow too, even when their token count is far below `contextWindow`. These include Anthropic's `413 request_too_large`, Amazon Bedrock's `Input is too long`, a LiteLLM proxy's `ContextWindowExceededError`, and a gateway's HTTP 413 with a standard reason phrase (`Request Entity Too Large`, `Payload Too Large`, or `Content Too Large`). Token-based checks cannot anticipate a byte cap, so recognizing the rejection is what lets a caller compact and retry. Rate-limit errors are not overflow, including per-minute token limits worded "Request too large".
+
 ### Aborting Requests
 
 The abort signal allows you to cancel in-progress requests. Aborted requests have `stopReason === 'aborted'`:

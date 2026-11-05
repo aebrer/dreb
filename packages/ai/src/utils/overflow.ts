@@ -3,12 +3,22 @@ import type { AssistantMessage } from "../types.js";
 /**
  * Regex patterns to detect context overflow errors from different providers.
  *
- * These patterns match error messages returned when the input exceeds
- * the model's context window.
+ * These patterns match error messages returned when the request is too large:
+ * either the input exceeds the model's context window, or the request body
+ * exceeds a provider or gateway byte cap. A byte cap can reject a request whose
+ * token count is far below the context window, so token-based checks cannot
+ * anticipate it; recognizing the rejection is what lets compaction recover.
  *
  * Provider-specific patterns (with example error messages):
  *
- * - Anthropic: "prompt is too long: 213462 tokens > 200000 maximum"
+ * - Anthropic: "prompt is too long: 213462 tokens > 200000 maximum", or for the
+ *   request byte cap "413 {"type":"error","error":{"type":"request_too_large",
+ *   "message":"Request exceeds the maximum allowed number of bytes."}}"
+ * - Amazon Bedrock: "Input is too long for requested model", or bare "Input is too long."
+ * - LiteLLM proxy (any backend): "litellm.ContextWindowExceededError: ..."
+ * - HTTP gateways (load balancers, reverse proxies, body-size limits): a 413 status
+ *   with its standard reason phrase "Request Entity Too Large", "Payload Too Large",
+ *   or "Content Too Large" — possibly inside a multi-line HTML error page
  * - OpenAI: "Your input exceeds the context window of this model"
  * - Google: "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)"
  * - xAI: "This model's maximum prompt length is 131072 but the request contains 537812 tokens"
@@ -46,14 +56,21 @@ export function isOutputLimitExhaustion(message: AssistantMessage): boolean {
 
 const OVERFLOW_PATTERNS = [
 	/prompt is too long/i, // Anthropic
-	/input is too long for requested model/i, // Amazon Bedrock
+	/request_too_large/i, // Anthropic request byte cap (error type)
+	/exceeds the maximum allowed number of bytes/i, // Anthropic request byte cap (message, when a proxy drops the type)
+	/input is too long/i, // Amazon Bedrock ("... for requested model", or bare "Input is too long.")
+	/ContextWindowExceededError/i, // LiteLLM proxy (exception class for any backend's context or size error)
 	/exceeds the context window/i, // OpenAI (Completions & Responses API)
 	/input token count.*exceeds the maximum/i, // Google (Gemini)
 	/maximum prompt length is \d+/i, // xAI (Grok)
 	/reduce the length of the messages/i, // Groq
 	/maximum context length is \d+ tokens/i, // OpenRouter (all backends)
 	/exceeds the limit of \d+/i, // GitHub Copilot
-	/^413\b.*request entity too large/i, // GitHub Copilot (body rejected before token check)
+	// HTTP 413 with a standard reason phrase: GitHub Copilot (body rejected before the token
+	// check) and generic gateways. The `s` flag lets the phrase sit on a later line, as in
+	// nginx's HTML error page. Not a bare 413: Groq's "413 Request too large for model ... on
+	// tokens per minute" is a rate limit.
+	/\b413\b.*\b(?:request entity|payload|content) too large\b/is,
 	/exceeds the available context size/i, // llama.cpp server
 	/greater than the context length/i, // LM Studio
 	/context window exceeds limit/i, // MiniMax
@@ -82,7 +99,10 @@ const OVERFLOW_PATTERNS = [
  * ## Reliability by Provider
  *
  * **Reliable detection (returns error with detectable message):**
- * - Anthropic: "prompt is too long: X tokens > Y maximum"
+ * - Anthropic: "prompt is too long: X tokens > Y maximum", or "request_too_large" (413) for the byte cap
+ * - Amazon Bedrock: "Input is too long [for requested model]"
+ * - LiteLLM proxy (any backend): "ContextWindowExceededError"
+ * - HTTP gateways: 413 with "Request Entity Too Large" / "Payload Too Large" / "Content Too Large"
  * - OpenAI (Completions & Responses): "exceeds the context window"
  * - Google Gemini: "input token count exceeds the maximum"
  * - xAI (Grok): "maximum prompt length is X but request contains Y"
