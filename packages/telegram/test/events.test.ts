@@ -208,6 +208,106 @@ describe("agent_end", () => {
 		expect(state.pendingRetry).toBe(true);
 	});
 
+	// The core compacts after a context overflow instead of retrying, so it emits auto_compaction_*
+	// rather than auto_retry_*, and nothing would clear pendingRetry. Each message below is an
+	// overflow that also contains a retry token ("502" in a dated model ID, "500" in a token count).
+	const OVERFLOW_WITH_RETRY_TOKEN = String.raw`400 {"err_msg":"litellm.ContextWindowExceededError: litellm.BadRequestError: BedrockException: Context Window Error - {\"message\":\"Input is too long.\"}\nmodel=us.anthropic.claude-3-7-sonnet-20250219-v1:0. context_window_fallbacks=None. fallbacks=None.","err_code":"BAD_REQUEST","status_code":400}`;
+
+	it.each([
+		["a LiteLLM size rejection naming a dated Bedrock model", OVERFLOW_WITH_RETRY_TOKEN],
+		["an Anthropic context overflow with a large token count", "prompt is too long: 250000 tokens > 200000 maximum"],
+	])("shows %s and finishes instead of expecting a retry", async (_label, errorMessage) => {
+		const send = vi.fn();
+		const state = makeState();
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "agent_end",
+			messages: [{ stopReason: "error", provider: "anthropic", model: "claude-test", errorMessage }],
+		});
+
+		expect(send).toHaveBeenCalledWith(`❌ anthropic/claude-test: ${errorMessage}`, true);
+		expect(state.pendingRetry).toBe(false);
+		expect(state.done).toBe(true);
+	});
+
+	it("finishes the compacted retry of an overflow whose text contains a retry token", async () => {
+		const send = vi.fn();
+		const api = mockApi();
+		const state = makeState();
+
+		// Core order for overflow recovery: the rejected run ends, the core compacts, then it
+		// continues the agent in a new run.
+		await handleAgentEvent(send, api, state, {
+			type: "agent_end",
+			messages: [{ stopReason: "error", errorMessage: OVERFLOW_WITH_RETRY_TOKEN }],
+		});
+		await handleAgentEvent(send, api, state, { type: "auto_compaction_start", reason: "overflow" });
+		await handleAgentEvent(send, api, state, {
+			type: "auto_compaction_end",
+			result: { summary: "summary", firstKeptEntryId: "e1", tokensBefore: 470000 },
+			aborted: false,
+			willRetry: true,
+		});
+		expect(state.pendingRetry).toBe(false);
+
+		await handleAgentEvent(send, api, state, { type: "agent_start" });
+		await handleAgentEvent(send, api, state, {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "text", text: "The slides show..." }] },
+		});
+		await handleAgentEvent(send, api, state, {
+			type: "agent_end",
+			messages: [{ role: "assistant", stopReason: "stop" }],
+		});
+
+		expect(send).toHaveBeenCalledWith("🗜 Context compacted (was 470k tokens)");
+		expect(send).toHaveBeenCalledWith("The slides show...", true);
+		expect(state.pendingRetry).toBe(false);
+		expect(state.retryInProgress).toBe(false);
+		expect(state.done).toBe(true);
+	});
+
+	it("shows why overflow recovery failed when the compacted retry is rejected again", async () => {
+		const send = vi.fn();
+		const api = mockApi();
+		const state = makeState();
+		const recoveryFailed =
+			"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.";
+
+		await handleAgentEvent(send, api, state, {
+			type: "agent_end",
+			messages: [{ stopReason: "error", errorMessage: OVERFLOW_WITH_RETRY_TOKEN }],
+		});
+		await handleAgentEvent(send, api, state, { type: "auto_compaction_start", reason: "overflow" });
+		await handleAgentEvent(send, api, state, {
+			type: "auto_compaction_end",
+			result: { summary: "summary", firstKeptEntryId: "e1", tokensBefore: 470000 },
+			aborted: false,
+			willRetry: true,
+		});
+		await handleAgentEvent(send, api, state, { type: "agent_start" });
+		await handleAgentEvent(send, api, state, {
+			type: "agent_end",
+			messages: [{ stopReason: "error", errorMessage: OVERFLOW_WITH_RETRY_TOKEN }],
+		});
+		await handleAgentEvent(send, api, state, {
+			type: "auto_compaction_end",
+			result: undefined,
+			aborted: false,
+			willRetry: false,
+			errorMessage: recoveryFailed,
+		});
+
+		const errorSends = send.mock.calls.filter(([text]) => String(text).startsWith("❌"));
+		expect(errorSends).toEqual([
+			[`❌ ${OVERFLOW_WITH_RETRY_TOKEN}`, true],
+			[`❌ ${OVERFLOW_WITH_RETRY_TOKEN}`, true],
+			[`❌ ${recoveryFailed}`, true],
+		]);
+		expect(state.pendingRetry).toBe(false);
+		expect(state.done).toBe(true);
+	});
+
 	it("does NOT set done when background agents are still running", async () => {
 		const send = vi.fn();
 		const state = makeState({ visibleToolResultCount: 1 });
@@ -406,6 +506,53 @@ describe("auto_retry_end", () => {
 		});
 
 		expect(state.retryInProgress).toBe(false);
+		expect(send).not.toHaveBeenCalled();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// auto_compaction_end
+// ---------------------------------------------------------------------------
+
+describe("auto_compaction_end", () => {
+	it("reports a successful compaction", async () => {
+		const send = vi.fn();
+
+		await handleAgentEvent(send, mockApi(), makeState(), {
+			type: "auto_compaction_end",
+			result: { summary: "summary", firstKeptEntryId: "e1", tokensBefore: 120400 },
+			aborted: false,
+			willRetry: false,
+		});
+
+		expect(send).toHaveBeenCalledWith("🗜 Context compacted (was 120k tokens)");
+	});
+
+	it("shows why a compaction failed", async () => {
+		const send = vi.fn();
+		const errorMessage = "Context overflow recovery failed: 529 overloaded";
+
+		await handleAgentEvent(send, mockApi(), makeState(), {
+			type: "auto_compaction_end",
+			result: undefined,
+			aborted: false,
+			willRetry: false,
+			errorMessage,
+		});
+
+		expect(send).toHaveBeenCalledWith(`❌ ${errorMessage}`, true);
+	});
+
+	it("stays quiet when compaction was cancelled", async () => {
+		const send = vi.fn();
+
+		await handleAgentEvent(send, mockApi(), makeState(), {
+			type: "auto_compaction_end",
+			result: undefined,
+			aborted: true,
+			willRetry: false,
+		});
+
 		expect(send).not.toHaveBeenCalled();
 	});
 });
