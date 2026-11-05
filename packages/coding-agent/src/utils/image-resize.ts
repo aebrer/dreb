@@ -48,7 +48,11 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
 	};
 }
 
-/** Whether any pixel is not fully opaque (Photon stores pixels as RGBA). */
+/**
+ * Whether any pixel is not fully opaque (Photon stores pixels as RGBA).
+ * `get_raw_pixels` copies the whole raster out of WASM, so call this on a resized image only:
+ * on the source it would allocate memory proportional to the input, however large.
+ */
 function hasTransparency(image: PhotonImageType): boolean {
 	const pixels = image.get_raw_pixels();
 	for (let alpha = 3; alpha < pixels.length; alpha += 4) {
@@ -67,8 +71,9 @@ function hasTransparency(image: PhotonImageType): boolean {
  * Strategy for staying under maxBytes:
  * 1. First resize to maxWidth/maxHeight
  * 2. Encode as PNG and as JPEG at jpegQuality, and pick the smaller one. An image
- *    with transparency keeps PNG whenever it fits: JPEG has no alpha channel, so
- *    transparent pixels would become their stored color (often black).
+ *    with transparency (checked on the resized pixels) keeps PNG whenever it fits:
+ *    JPEG has no alpha channel, so transparent pixels would become their stored
+ *    color (often black).
  * 3. If neither fits, try JPEG with decreasing quality below jpegQuality
  * 4. If still too large, progressively reduce dimensions until 1x1
  */
@@ -120,14 +125,15 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		}
 
 		const fallbackQualities = FALLBACK_JPEG_QUALITIES.filter((quality) => quality < opts.jpegQuality);
-		const keepPngWhenItFits = hasTransparency(image);
 
 		function encodeWithinLimit(width: number, height: number): EncodedCandidate | undefined {
 			const resized = photon!.resize(image!, width, height, photon!.SamplingFilter.Lanczos3);
 
 			try {
 				const png = encodeCandidate(resized.get_bytes(), "image/png");
-				if (keepPngWhenItFits && png.encodedSize < opts.maxBytes) {
+				// Transparency only matters when the PNG fits, and a fitting PNG always ends the
+				// search, so at most one raster is scanned per call, never larger than the output.
+				if (png.encodedSize < opts.maxBytes && hasTransparency(resized)) {
 					return png;
 				}
 

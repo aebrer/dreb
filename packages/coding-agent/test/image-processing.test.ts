@@ -2,10 +2,10 @@
  * Tests for image processing utilities using Photon.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { convertToPng } from "../src/utils/image-convert.js";
 import { formatDimensionNote, resizeImage } from "../src/utils/image-resize.js";
-import { loadPhoton } from "../src/utils/photon.js";
+import { loadPhoton, type PhotonImageType } from "../src/utils/photon.js";
 
 type Photon = NonNullable<Awaited<ReturnType<typeof loadPhoton>>>;
 
@@ -25,10 +25,18 @@ interface SyntheticImage {
 	content: "photographic" | "flat";
 	/** Make the left quarter fully transparent, stored as transparent black like most encoders do. */
 	transparentRegion?: boolean;
+	/** Make the left quarter half transparent (alpha 128), keeping its color, like a shadow or overlay. */
+	translucentRegion?: boolean;
 }
 
 /** RGBA pixels from a seeded generator, so every run encodes identical fixtures. */
-function synthesizePixels({ width, height, content, transparentRegion }: SyntheticImage): Uint8Array {
+function synthesizePixels({
+	width,
+	height,
+	content,
+	transparentRegion,
+	translucentRegion,
+}: SyntheticImage): Uint8Array {
 	const pixels = new Uint8Array(width * height * 4);
 	let seed = 12345;
 	const noise = () => {
@@ -51,7 +59,7 @@ function synthesizePixels({ width, height, content, transparentRegion }: Synthet
 				pixels[i + 1] = band === 1 ? 255 : 30;
 				pixels[i + 2] = band === 2 ? 200 : 30;
 			}
-			pixels[i + 3] = 255;
+			pixels[i + 3] = translucentRegion && x < width / 4 ? 128 : 255;
 		}
 	}
 	return pixels;
@@ -263,6 +271,55 @@ describe("resizeImage", () => {
 			expect(result).not.toBeNull();
 			expect(result!.mimeType).toBe("image/png");
 			expect((await pixelAt(result!.data, 10, 200))[3]).toBe(0);
+		});
+
+		it("keeps PNG for a partly transparent image whose JPEG would be smaller", async () => {
+			const input = await encodeSynthetic(
+				{ width: 801, height: 450, content: "photographic", translucentRegion: true },
+				"png",
+			);
+			const sizes = await encodedSizesAt(input, 800, 449);
+			const [pngSize, jpegSize] = [sizes.png, sizes.jpeg(80)];
+			sizes.dispose();
+			expect(jpegSize).toBeLessThan(pngSize);
+
+			const result = await resizeImage(
+				{ type: "image", data: input, mimeType: "image/png" },
+				{ maxWidth: 800, maxHeight: 800 },
+			);
+
+			expect(result).not.toBeNull();
+			expect(result!.mimeType).toBe("image/png");
+			const alpha = (await pixelAt(result!.data, 10, 200))[3];
+			expect(alpha).toBeGreaterThan(0);
+			expect(alpha).toBeLessThan(255);
+		});
+
+		it("checks transparency on the resized pixels, never copying the full-size source", async () => {
+			// Copying the source raster out of WASM costs memory proportional to the input, which
+			// is unbounded; the resized raster is bounded by maxWidth x maxHeight.
+			const input = await encodeSynthetic({ width: 1601, height: 900, content: "flat" }, "png");
+			const photon = await getPhoton();
+			const getRawPixels = photon.PhotonImage.prototype.get_raw_pixels;
+			const scanned: string[] = [];
+			const spy = vi.spyOn(photon.PhotonImage.prototype, "get_raw_pixels").mockImplementation(function (
+				this: PhotonImageType,
+			) {
+				scanned.push(`${this.get_width()}x${this.get_height()}`);
+				return getRawPixels.call(this);
+			});
+			try {
+				const result = await resizeImage(
+					{ type: "image", data: input, mimeType: "image/png" },
+					{ maxWidth: 800, maxHeight: 800 },
+				);
+
+				expect(result).not.toBeNull();
+				expect([result!.width, result!.height]).toEqual([800, 450]);
+			} finally {
+				spy.mockRestore();
+			}
+			expect(scanned).toEqual(["800x450"]);
 		});
 
 		it("still falls back to JPEG for a transparent image whose PNG does not fit", async () => {

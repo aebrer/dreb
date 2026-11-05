@@ -241,6 +241,30 @@ describe("request-size rejections", () => {
 	);
 });
 
+describe("throttling errors", () => {
+	// Amazon Bedrock's per-minute token quota. Its text matches the generic "too many tokens"
+	// fallback, but waiting clears it and compacting does not.
+	const BEDROCK_TOKEN_THROTTLE = "Too many tokens, please wait before trying again.";
+
+	it.each([
+		["from the stream", `Throttling error: ${BEDROCK_TOKEN_THROTTLE}`],
+		["as an SDK exception", BEDROCK_TOKEN_THROTTLE],
+		[
+			"through a LiteLLM proxy",
+			`429 litellm.RateLimitError: BedrockException - {"message":"${BEDROCK_TOKEN_THROTTLE}"}`,
+		],
+		["with the AWS exception name", `ThrottlingException: ${BEDROCK_TOKEN_THROTTLE}`],
+	])("does not classify Bedrock's token throttle %s as overflow", (_label, errorMessage) => {
+		expect(isContextOverflow(createErrorMessage({ errorMessage }), 200000)).toBe(false);
+	});
+
+	it("still classifies a non-throttle 'too many tokens' error as overflow", () => {
+		const errorMessage =
+			"400 too many tokens: total number of tokens in the prompt cannot exceed 4081 - received 4502";
+		expect(isContextOverflow(createErrorMessage({ errorMessage }))).toBe(true);
+	});
+});
+
 describe("safety refusals", () => {
 	const OVERFLOW_LOOKING_REFUSAL =
 		"Request declined by the model's safety filter: Declined because the prompt is too long to review safely.";

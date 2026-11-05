@@ -34,6 +34,10 @@ import type { AssistantMessage } from "../types.js";
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
  * - z.ai: May accept overflow silently - handled via full input usage > contextWindow
  * - Ollama: Silently truncates input - not detectable via error message
+ *
+ * Rate limits are never overflow, even when worded like one. Amazon Bedrock throttles with
+ * "Too many tokens, please wait before trying again.", which the generic "too many tokens"
+ * fallback would match; THROTTLING_PATTERNS excludes it first.
  */
 const LENGTH_RETRY_EXHAUSTED_PATTERN =
 	/^Response truncated at (?:the configured output token limit|token limit) after \d+ attempts?(?: — output exceeded the model's maximum token budget)?(?:\nProvider detail: .+)?$/is;
@@ -53,6 +57,15 @@ export function isOutputLimitExhaustion(message: AssistantMessage): boolean {
 		LENGTH_RETRY_EXHAUSTED_PATTERN.test(message.errorMessage)
 	);
 }
+
+/**
+ * Throttling errors, checked before OVERFLOW_PATTERNS. Waiting clears a throttle and compacting
+ * does not, so a match is never overflow and is left to backoff retry instead.
+ */
+const THROTTLING_PATTERNS = [
+	/\bthrottl/i, // AWS ThrottlingException, and Bedrock's in-stream "Throttling error: ..."
+	/please wait before trying again/i, // Amazon Bedrock throttle text, kept when a client or proxy drops the exception name
+];
 
 const OVERFLOW_PATTERNS = [
 	/prompt is too long/i, // Anthropic
@@ -95,6 +108,9 @@ const OVERFLOW_PATTERNS = [
  *    and return successfully (the server's hard limit may be higher). For these,
  *    we compare input + cacheRead + cacheWrite against the configured window;
  *    output tokens are not part of the input size.
+ *
+ * Safety refusals and throttling errors (such as Bedrock's "Too many tokens, please wait
+ * before trying again.") are never overflow, whatever their text matches.
  *
  * ## Reliability by Provider
  *
@@ -150,6 +166,11 @@ export function isContextOverflow(
 
 	// Case 1: Check error message patterns
 	if (message.stopReason === "error" && message.errorMessage) {
+		// A throttle can read like an overflow ("Too many tokens, please wait before trying again.").
+		if (THROTTLING_PATTERNS.some((p) => p.test(message.errorMessage!))) {
+			return false;
+		}
+
 		// Check known patterns
 		if (OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!))) {
 			return true;

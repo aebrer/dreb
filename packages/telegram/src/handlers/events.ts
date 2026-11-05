@@ -215,7 +215,7 @@ export interface EventDisplayState {
  * Mirrors the core's _isRetryableError check as a defensive Layer 2.
  */
 const RETRYABLE_ERROR_PATTERN =
-	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|ended without|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
+	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|throttl|wait before trying again|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|ended without|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
 
 function isRetryableError(message: { errorMessage?: string; refusal?: unknown }): boolean {
 	// Like the core, never expect a retry after a safety refusal: its provider-supplied

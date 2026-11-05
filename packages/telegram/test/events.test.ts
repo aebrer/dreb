@@ -192,6 +192,22 @@ describe("agent_end", () => {
 		expect(state.toolCount).toBe(0);
 	});
 
+	it.each([
+		"Throttling error: Too many tokens, please wait before trying again.",
+		"Too many tokens, please wait before trying again.",
+	])("expects a retry after Bedrock's token throttle: %s", async (errorMessage) => {
+		const send = vi.fn();
+		const state = makeState();
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "agent_end",
+			messages: [{ stopReason: "error", errorMessage }],
+		});
+
+		expect(state.done).toBe(false);
+		expect(state.pendingRetry).toBe(true);
+	});
+
 	it("does NOT set done when background agents are still running", async () => {
 		const send = vi.fn();
 		const state = makeState({ visibleToolResultCount: 1 });

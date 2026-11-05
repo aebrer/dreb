@@ -173,6 +173,31 @@ describe("AgentSession retry", () => {
 		expect(created.session.isRetrying).toBe(false);
 	});
 
+	it.each([
+		["from the stream", "Throttling error: Too many tokens, please wait before trying again."],
+		["as an SDK exception", "Too many tokens, please wait before trying again."],
+	])("backs off and retries Bedrock's token throttle %s instead of compacting", async (_label, errorMessage) => {
+		// Same provider/model as the session so the overflow-compaction path is reachable: the text
+		// matches the generic "too many tokens" overflow fallback, but it is a per-minute quota.
+		const model = findModel("anthropic", "sonnet")!;
+		const created = createSession({
+			failCount: 1,
+			failure: { provider: model.provider, model: model.id, errorMessage },
+		});
+		const events: string[] = [];
+		created.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") events.push(`retry-start:${event.attempt}`);
+			if (event.type === "auto_retry_end") events.push(`retry-end:success=${event.success}`);
+			if (event.type === "auto_compaction_start") events.push(`compaction-start:${event.reason}`);
+		});
+
+		await created.session.prompt("Test");
+
+		expect(created.getCallCount()).toBe(2);
+		expect(events).toEqual(["retry-start:1", "retry-end:success=true"]);
+		expect(created.session.isRetrying).toBe(false);
+	});
+
 	describe("safety refusals", () => {
 		// Matches the retry regex ("terminated", "timed out") and an overflow pattern
 		// ("prompt is too long"): only the structured refusal marker may stop recovery.
