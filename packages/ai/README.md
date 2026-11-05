@@ -551,7 +551,7 @@ Every `AssistantMessage` includes a `stopReason` field that indicates how the ge
 - `"stop"` - Normal completion, the model finished its response
 - `"length"` - Output hit the maximum token limit
 - `"toolUse"` - Model is calling tools and expects tool results
-- `"error"` - An error occurred during generation
+- `"error"` - An error occurred during generation, including a safety refusal (see [Safety Refusals](#safety-refusals))
 - `"aborted"` - Request was cancelled via abort signal
 
 `AssistantMessage` may also include `responseId`, a provider-specific upstream response or message identifier when the underlying API exposes one. Do not assume it is always present across providers.
@@ -577,6 +577,26 @@ if (message.stopReason === 'error' || message.stopReason === 'aborted') {
   console.error('Request failed:', message.errorMessage);
   // message.content contains any partial content received before the error
   // message.usage contains partial token counts and costs
+}
+```
+
+### Safety Refusals
+
+When a provider's safety system declines a request, the turn ends with `stopReason: "error"` and the message carries an optional `refusal` field (`{ category?: string; explanation?: string }`). Branch on the presence of `refusal`, not on the `errorMessage` text. Currently the Anthropic provider sets it for `stop_reason: "refusal"` (streaming safety classifiers) and for the proxy-emitted `"sensitive"` stop reason. `category` and `explanation` come from Anthropic's `stop_details` and are omitted when the API (or a proxy) does not supply them. The explanation is not stable text: display it, don't parse it.
+
+`errorMessage` always starts with `Request declined by the model's safety filter`, followed by the details when present:
+
+```
+Request declined by the model's safety filter (category: cyber): This request was declined because it could enable cyber harm.
+Request declined by the model's safety filter.
+```
+
+Re-sending the same context to the same model is normally declined again, so dreb never retries refusals automatically: `isContextOverflow()` returns `false` for them, the agent loop and coding-agent auto-retry skip them, and coding-agent does not run automatic compaction after them (which would resume the refused request). To continue, rephrase or remove the declined turn, or switch to a different model. Any partial output is kept on the message for display; errored assistant messages are not replayed to the provider.
+
+```typescript
+const message = await stream.result();
+if (message.refusal) {
+  console.warn(`Declined (${message.refusal.category ?? 'no category'}):`, message.refusal.explanation);
 }
 ```
 

@@ -705,6 +705,61 @@ describe("ensureSubscribed", () => {
 		expect(doneCalls).toHaveLength(0);
 	});
 
+	it("sends DONE once a failed retry cycle ends after the final agent_end", async () => {
+		const api = createApi();
+		const { bridge, fireEvent } = createBridge();
+		const userState = createUserState({ bridge: bridge as any });
+		const { createEventDisplay } = await import("../src/handlers/events.js");
+
+		sendPrompt(api, userState, defaultOpts());
+		await settle();
+		mockSafeSend.mockClear();
+
+		const mockCreateEventDisplay = vi.mocked(createEventDisplay);
+		const display = mockCreateEventDisplay.mock.results[mockCreateEventDisplay.mock.results.length - 1]?.value;
+		expect(display).toBeDefined();
+
+		// handleAgentEvent is mocked: simulate the display state it maintains. The final
+		// agent_end of a retried run arrives while the retry is still being tracked, so it
+		// does not complete the turn...
+		display.retryInProgress = true;
+		fireEvent({ type: "agent_end", messages: [] });
+		await settle(400);
+		expect(mockSafeSend.mock.calls.filter((c: any[]) => c[2]?.includes("DONE"))).toHaveLength(0);
+
+		// ...and the failed auto_retry_end that follows ends it.
+		fireEvent({ type: "auto_retry_end", success: false, attempt: 1, finalError: "declined" });
+		await settle(400);
+
+		const doneCalls = mockSafeSend.mock.calls.filter((c: any[]) => c[2]?.includes("DONE"));
+		expect(doneCalls).toHaveLength(1);
+		expect(bridge.refreshSessionInfo).toHaveBeenCalled();
+	});
+
+	it("does not complete on a successful auto_retry_end (the retried run completes itself)", async () => {
+		const api = createApi();
+		const { bridge, fireEvent } = createBridge();
+		const userState = createUserState({ bridge: bridge as any });
+		const { createEventDisplay } = await import("../src/handlers/events.js");
+
+		sendPrompt(api, userState, defaultOpts());
+		await settle();
+		mockSafeSend.mockClear();
+
+		const mockCreateEventDisplay = vi.mocked(createEventDisplay);
+		const display = mockCreateEventDisplay.mock.results[mockCreateEventDisplay.mock.results.length - 1]?.value;
+		expect(display).toBeDefined();
+
+		display.retryInProgress = true;
+		fireEvent({ type: "agent_end", messages: [] });
+		await settle(50);
+		fireEvent({ type: "auto_retry_end", success: true, attempt: 1 });
+		await settle(400);
+
+		const doneCalls = mockSafeSend.mock.calls.filter((c: any[]) => c[2]?.includes("DONE"));
+		expect(doneCalls).toHaveLength(0);
+	});
+
 	it("persists session on agent_end completion", async () => {
 		const api = createApi();
 		const { bridge, fireEvent } = createBridge();

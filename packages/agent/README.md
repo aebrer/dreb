@@ -207,7 +207,8 @@ const agent = new Agent({
   onWarning: (code, message) => console.warn(`[${code}] ${message}`),
 
   // Stream drop retry: number of retries when a provider stream ends without
-  // its terminal event (default: 3). Set to 0 to disable.
+  // its terminal event (default: 3). Set to 0 to disable. Messages with a
+  // `refusal` (provider safety refusal) are never retried.
   streamRetries: 3,
 
   // Base delay for exponential backoff between stream retries in ms (default: 1000)
@@ -445,6 +446,8 @@ const agent = new Agent({
     }),
 });
 ```
+
+The proxy server streams `ProxyAssistantMessageEvent`s (the `AssistantMessageEvent`s without the bandwidth-heavy `partial` field). Its `error` event should forward `errorMessage` and, for a safety refusal, the message's `refusal` object, so the reconstructed message keeps `refusal` and is never retried as a transient failure.
 
 ## Low-Level API
 

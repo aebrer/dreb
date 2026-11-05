@@ -9,6 +9,7 @@ import { calculateCost, getClaudeEffort, getClaudeThinkingOffMode, supportsAdapt
 import type {
 	Api,
 	AssistantMessage,
+	AssistantRefusal,
 	CacheRetention,
 	Context,
 	ImageContent,
@@ -281,6 +282,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
 			stream.push({ type: "start", partial: output });
 			let receivedMessageDelta = false;
+			// The turn's outcome follows the final stop reason received: a safety refusal ends it
+			// as an error (see isRefusalStopReason); every other stop reason completes it.
+			let refused = false;
+			let doneReason: DoneStopReason = "stop";
+			let refusalDetails: AssistantRefusal | undefined;
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
@@ -419,8 +425,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				} else if (event.type === "message_delta") {
 					receivedMessageDelta = true;
 					if (event.delta.stop_reason) {
-						output.stopReason = mapStopReason(event.delta.stop_reason);
+						refused = isRefusalStopReason(event.delta.stop_reason);
+						if (!refused) {
+							doneReason = mapStopReason(event.delta.stop_reason);
+							output.stopReason = doneReason;
+						}
 					}
+					// A later delta without stop_details must not erase details already captured.
+					refusalDetails = readRefusalStopDetails(event.delta) ?? refusalDetails;
 					// Only update usage fields if present (not null).
 					// Preserves input_tokens from message_start when proxies omit it in message_delta.
 					if (event.usage.input_tokens != null) {
@@ -450,11 +462,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				throw new Error("Stream ended without message_delta — connection likely dropped");
 			}
 
-			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+			if (refused) {
+				// Set only once the turn has really ended as a refusal, so aborts and
+				// dropped streams never carry refusal details.
+				output.refusal = refusalDetails ?? {};
+				throw new Error(formatRefusalErrorMessage(output.refusal));
 			}
 
-			stream.push({ type: "done", reason: output.stopReason, message: output });
+			stream.push({ type: "done", reason: doneReason, message: output });
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) delete (block as any).index;
@@ -965,7 +980,48 @@ function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.
 	});
 }
 
-function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
+/** Stop reasons that mean a safety system declined the request. */
+function isRefusalStopReason(reason: string): boolean {
+	// "sensitive" is emitted by some Anthropic-compatible proxies (not yet in SDK types).
+	return reason === "refusal" || reason === "sensitive";
+}
+
+/** Stop reason of a turn that completed, i.e. the `reason` of a `done` event. */
+type DoneStopReason = Extract<StopReason, "stop" | "length" | "toolUse">;
+
+function nonBlankString(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Read Anthropic's `stop_details` (`{ type, category, explanation }`) from a `message_delta`.
+ * The pinned SDK types do not declare it, and proxies may strip or mangle it, so only
+ * non-blank string fields are kept. Returns undefined when no usable object is present.
+ */
+function readRefusalStopDetails(delta: object): AssistantRefusal | undefined {
+	const details = (delta as { stop_details?: unknown }).stop_details;
+	if (typeof details !== "object" || details === null || Array.isArray(details)) return undefined;
+	const { category, explanation } = details as { category?: unknown; explanation?: unknown };
+	const refusal: AssistantRefusal = {};
+	const normalizedCategory = nonBlankString(category);
+	if (normalizedCategory !== undefined) refusal.category = normalizedCategory;
+	const normalizedExplanation = nonBlankString(explanation);
+	if (normalizedExplanation !== undefined) refusal.explanation = normalizedExplanation;
+	return refusal;
+}
+
+/** Stable wording consumers and users can rely on; details are appended when available. */
+function formatRefusalErrorMessage(refusal: AssistantRefusal): string {
+	const base = refusal.category
+		? `Request declined by the model's safety filter (category: ${refusal.category})`
+		: "Request declined by the model's safety filter";
+	return refusal.explanation ? `${base}: ${refusal.explanation}` : `${base}.`;
+}
+
+/** Map a completing stop reason. Refusals never reach this: they are checked first (see isRefusalStopReason). */
+function mapStopReason(reason: Anthropic.Messages.StopReason | string): DoneStopReason {
 	switch (reason) {
 		case "end_turn":
 			return "stop";
@@ -973,16 +1029,12 @@ function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReas
 			return "length";
 		case "tool_use":
 			return "toolUse";
-		case "refusal":
-			return "error";
 		case "pause_turn": // Stop is good enough -> resubmit
 			return "stop";
 		case "stop_sequence":
 			return "stop"; // We don't supply stop sequences, so this should never happen
-		case "sensitive": // Content flagged by safety filters (not yet in SDK types)
-			return "error";
 		default:
-			// Handle unknown stop reasons gracefully (API may add new values)
+			// Unknown stop reasons fail loudly (the API may add new values)
 			throw new Error(`Unhandled stop reason: ${reason}`);
 	}
 }
