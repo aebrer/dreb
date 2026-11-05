@@ -38,15 +38,19 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
 
 - **Fleet** (home) — live-first: every live session in one grid at the top
   (Default orders by effective project path, then runtime start time;
-  [Fleet sorting](#fleet-sorting) offers browser-local alternatives; each card shows its
-  project path, status chip, current activity, live subagents, task progress,
-  ctx%, model, cost, last-assistant preview, and terminal provider-error reason). Below, past sessions grouped by project — three
-  compact rows each with an "all N on disk" expander — with resume/delete.
+  [Fleet sorting](#fleet-sorting) integrates browser-local sorting buttons into
+  the section header; each card shows its project path, status chip, current
+  activity, live subagents, task progress, ctx%, model, cost, last-assistant
+  preview, and terminal provider-error reason). Below, one native past-session
+  table with global column headings is grouped by project — three compact rows
+  each with an "all N on disk" expander — with resume/delete.
   Sessions remain listed when their historical project path is missing; resume
   then asks for an existing runtime directory and shows both paths without
-  changing the persisted session header. At <=700px, cards stack; long session names, status chips, project paths,
+  changing the persisted session header. At <=700px, cards and past-session
+  table rows stack; long session names, status chips, project paths,
   activity/subagent text, and past-session labels wrap within cards or rows
-  rather than spilling off-screen. `+ new session` anywhere.
+  rather than spilling off-screen. Accessible table headings, keyboard sorting
+  buttons, and 44px touch targets are preserved. `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
   inline provider/API failures with partial output preserved, compaction summaries,
@@ -114,11 +118,29 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
 
 ### Fleet sorting
 
-Fleet home exposes labelled native sort-key and direction controls. **Default**
-keeps live cards in effective-project-path ascending, then runtime-start
-ascending order, with stable ties; historical rows use newest `modified` first
-and groups newest first. Default has a fixed order. The five non-default keys
-support both directions (oldest/newest dates or ascending/descending text):
+Fleet home integrates native sorting buttons into its headers instead of a
+separate sort-key/direction toolbar. The live section header offers **Session**,
+**Created**, **Started**, **Last activity**, **Project**, and **Reset** above the
+card grid. Session selects Session name, Created selects Session created,
+Started selects Runtime started (live only), and Project selects Project path.
+
+Past sessions use **one native grouped table**, not separate project tables,
+with global **Session**, **Created**, **Last activity**, **Messages**, and
+**Actions** column headings. The first three contain sorting buttons; Messages
+is informational, not sortable. **Project** and **Reset** sit in the past
+section header. Project-header rows and three-row previews/expansion remain.
+
+Click a sort header to select its key (dates initially descending/newest-first,
+text ascending); clicking the selected key reverses direction. Arrows and
+accessible button state show the selection, and sortable table headings expose
+`aria-sort`. **Reset** restores **Default**. Small screens stack rows while
+preserving accessible headings, keyboard buttons, and 44px touch targets.
+
+**Default** keeps live cards in effective-project-path ascending, then
+runtime-start ascending order, with stable ties; historical rows use newest
+`modified` first and groups newest first. Default has a fixed order. The five
+non-default keys support both directions (oldest/newest dates or
+ascending/descending text):
 
 | Key | Live grid | Past sessions |
 |---|---|---|
@@ -149,8 +171,10 @@ selected sorts update only for their selected key (for example, a rename or
 newly matched creation date). Session and subagent fleet sidebars remain in
 stable effective-path/runtime-start order under every Fleet preference.
 
-The browser-only key/direction pair is stored in `localStorage` at
-`dreb.dashboard.fleetSort`; it never writes host settings or session files.
+One shared browser-only key/direction pair applies across the live and past
+sections and all project groups, not independent project preferences. It is
+stored in `localStorage` at `dreb.dashboard.fleetSort`; it never writes host
+settings or session files.
 Missing, malformed, or invalid preferences use Default; storage failures leave
 the choice usable in memory. Sorting uses existing snapshots/inventory and adds
 no polling, network requests, transcript hydration, data fields, or dependencies.

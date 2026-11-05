@@ -192,8 +192,27 @@ async function open(rawPreference?: string, delayed = false): Promise<void> {
 }
 
 async function select(sort: FleetSortPreference): Promise<void> {
-	await page.getByLabel("Sort by", { exact: true }).selectOption(sort.key);
-	if (sort.key !== "default") await page.getByLabel("Order", { exact: true }).selectOption(sort.direction);
+	if (sort.key === "default") {
+		await page.getByRole("button", { name: "Reset Fleet sorting", exact: true }).first().click();
+		return;
+	}
+	const section = sort.key === "started" ? ".live-sessions" : ".past-sessions";
+	const button = page.locator(`${section} [data-sort-key="${sort.key}"]`);
+	await button.click();
+	if ((await button.getAttribute("data-sort-direction")) !== sort.direction) await button.click();
+}
+
+async function expectPreference(sort: FleetSortPreference): Promise<void> {
+	const buttons = page.locator(`.fleet-sort-header[data-sort-key="${sort.key}"]`);
+	for (const button of await buttons.all()) {
+		expect(await button.getAttribute("aria-pressed")).toBe("true");
+		expect(await button.getAttribute("data-sort-direction")).toBe(sort.direction);
+	}
+	const column = page.locator(".fleet-session-table th[aria-sort]");
+	if (["name", "created", "activity"].includes(sort.key)) {
+		expect(await column.count()).toBe(1);
+		expect(await column.getAttribute("aria-sort")).toBe(sort.direction === "asc" ? "ascending" : "descending");
+	} else expect(await column.count()).toBe(0);
 }
 const expensiveCalls = () => calls.filter((call) => /\/api\/(fleet|sessions)|\/hydrate$/.test(call));
 
@@ -277,8 +296,7 @@ describe("Fleet sorting in the real App", () => {
 			await expectOrder(".session-card .name", liveNames);
 			await expectOrder(".group-head h3", projects);
 			await expectOrder(".disk-row .name", rows);
-			expect(await page.getByLabel("Sort by", { exact: true }).inputValue()).toBe(sort.key);
-			expect(await page.getByLabel("Order", { exact: true }).inputValue()).toBe(sort.direction);
+			await expectPreference(sort);
 		},
 		60_000,
 	);
@@ -287,8 +305,10 @@ describe("Fleet sorting in the real App", () => {
 		"retains safe Default on startup with preference %j",
 		async (raw) => {
 			await open(raw);
-			expect(await page.getByLabel("Sort by", { exact: true }).inputValue()).toBe("default");
-			expect(await page.getByLabel("Order", { exact: true }).isDisabled()).toBe(true);
+			expect(await page.locator('.fleet-sort-header[aria-pressed="true"]').count()).toBe(0);
+			expect(await page.getByRole("button", { name: "Reset Fleet sorting", exact: true }).first().isDisabled()).toBe(
+				true,
+			);
 			await expectOrder(".session-card .name", ["Zulu", "Alpha", "Middle"]);
 			await expectOrder(".disk-row .name", ["Zebra", "Yarrow", "Xylophone", "Cedar", "Beta"]);
 		},
@@ -355,11 +375,10 @@ describe("Fleet sorting in the real App", () => {
 		await expectOrder(".group-head h3", ["/past/b", "/past/a"]);
 		expect(await group.locator(".disk-row").count()).toBe(4);
 		await page.waitForFunction(() => document.activeElement?.textContent === "show fewer ←");
-		await page.getByLabel("Sort by", { exact: true }).focus();
+		const activity = page.locator('.past-sessions [data-sort-key="activity"]');
+		await activity.focus();
 		await select({ key: "activity", direction: "desc" });
-		expect(await page.getByLabel("Sort by", { exact: true }).evaluate((el) => document.activeElement === el)).toBe(
-			true,
-		);
+		expect(await activity.evaluate((el) => document.activeElement === el)).toBe(true);
 	});
 
 	it("keeps the session sidebar stable regardless of the saved Fleet order", async () => {
@@ -372,64 +391,160 @@ describe("Fleet sorting in the real App", () => {
 	});
 
 	it.each([320, 390, 700, 701, 1024])(
-		"contains real native controls and keyboard focus navigation at %ipx",
+		"contains integrated table headings and native keyboard navigation at %ipx",
 		async (width) => {
 			await page.setViewportSize({ width, height: 900 });
 			await open();
-			const key = page.getByLabel("Sort by", { exact: true });
-			await key.focus();
-			// macOS headless Chromium does not drive native select options with keys
-			// (also reproducible with a standalone select, outside this App). Exercise
-			// native change wiring there; Linux CI additionally drives option keys.
-			if (process.platform === "darwin") {
-				await key.selectOption("activity");
-			} else {
-				await key.press("Space");
-				await key.press("Home");
-				await key.press("ArrowDown");
-				await key.press("Enter");
-			}
-			expect(await key.inputValue()).toBe("activity");
-			await expectOrder(".session-card .name", ["Alpha", "Zulu", "Middle"]);
-			const order = page.getByLabel("Order", { exact: true });
-			await key.press("Tab");
-			expect(await order.evaluate((el) => document.activeElement === el)).toBe(true);
-			await order.press("Shift+Tab");
-			expect(await key.evaluate((el) => document.activeElement === el)).toBe(true);
-			await key.press("Tab");
-			if (process.platform === "darwin") {
-				await order.selectOption("asc");
-			} else {
-				await order.press("Space");
-				await order.press("Home");
-				await order.press("Enter");
-			}
-			await expectOrder(".session-card .name", ["Middle", "Zulu", "Alpha"]);
+			const name = page.locator('.live-sessions [data-sort-key="name"]');
+			const created = page.locator('.live-sessions [data-sort-key="created"]');
+			await name.focus();
+			await name.press("Enter");
+			await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu"]);
+			await expectPreference({ key: "name", direction: "asc" });
+			await name.press("Space");
+			await expectOrder(".session-card .name", ["Zulu", "Middle", "Alpha"]);
+			await expectPreference({ key: "name", direction: "desc" });
+			await name.press("Tab");
+			expect(await created.evaluate((el) => document.activeElement === el)).toBe(true);
+			await created.press("Enter");
+			await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu"]);
+			await expectPreference({ key: "created", direction: "desc" });
+			await created.press("Shift+Tab");
+			expect(await name.evaluate((el) => document.activeElement === el)).toBe(true);
+			await name.press("Space");
+			await expectPreference({ key: "name", direction: "asc" });
 			const bounds = await page.evaluate(() => {
 				const controls = [
-					...document.querySelectorAll<HTMLElement>(
-						".fleet-sort select, .fleet-sort label, #fleet-sort-help, .fleet-head .btn",
-					),
+					...document.querySelectorAll<HTMLElement>(".fleet-sort-header, .fleet-sort-reset, .fleet-head .btn"),
 				];
+				const table = document.querySelector<HTMLElement>(".fleet-session-table")!;
+				const columns = [...table.querySelectorAll("thead th")];
+				const cells = [...table.querySelector(".disk-row")!.children];
 				return {
-					selectCount: document.querySelectorAll(".fleet-sort select").length,
-					documentFits: document.documentElement.scrollWidth <= window.innerWidth,
+					selectCount: document.querySelectorAll(".fleet-sort, #fleet-sort-key, #fleet-sort-direction").length,
+					documentFits: document.documentElement.scrollWidth <= innerWidth + 1,
 					controlsFit: controls.every((e) => {
 						const r = e.getBoundingClientRect();
-						return r.left >= 0 && r.right <= window.innerWidth && r.width > 0 && r.height > 0;
+						return (
+							r.left >= 0 &&
+							r.right <= innerWidth + 1 &&
+							r.width > 0 &&
+							r.height > 0 &&
+							e.scrollWidth <= e.clientWidth + 1
+						);
 					}),
-					touchTargets: [...document.querySelectorAll(".fleet-sort select")].every(
-						(e) => e.getBoundingClientRect().height >= 44,
+					tableFits: table.getBoundingClientRect().right <= innerWidth + 1,
+					headingsSingleLine: [...document.querySelectorAll(".fleet-sort-header")].every(
+						(e) => getComputedStyle(e).whiteSpace === "nowrap",
 					),
-					focused: document.activeElement?.id,
+					touchTargets: [
+						...document.querySelectorAll(
+							".fleet-sort-header, .fleet-sort-reset, .fleet-session-table .disk-row .btn",
+						),
+					].every((e) => e.getBoundingClientRect().height >= 44),
+					columnsAligned: columns.every(
+						(column, i) =>
+							Math.abs(column.getBoundingClientRect().left - cells[i].getBoundingClientRect().left) <= 1,
+					),
 				};
 			});
-			expect(bounds.selectCount).toBe(2);
+			expect(bounds.selectCount).toBe(0);
 			expect(bounds.documentFits).toBe(true);
 			expect(bounds.controlsFit).toBe(true);
+			expect(bounds.tableFits).toBe(true);
+			expect(bounds.headingsSingleLine).toBe(true);
 			if (width <= 700) expect(bounds.touchTargets).toBe(true);
-			expect(bounds.focused).toBe("fleet-sort-direction");
+			else expect(bounds.columnsAligned).toBe(true);
 		},
 		60_000,
 	);
+
+	it("uses one accessible table/header across projects and resets the shared sort", async () => {
+		await open();
+		const table = page.getByRole("table");
+		expect(await table.count()).toBe(1);
+		expect(await table.getByRole("columnheader").count()).toBe(5);
+		expect(await table.getByRole("columnheader", { name: "Messages", exact: true }).getByRole("button").count()).toBe(
+			0,
+		);
+		expect(await table.locator("thead").count()).toBe(1);
+		expect(await table.locator("tbody.project-group").count()).toBe(2);
+		expect(await table.locator("tbody .fleet-sort-header").count()).toBe(0);
+		const baseline = expensiveCalls();
+		await select({ key: "name", direction: "desc" });
+		await expectPreference({ key: "name", direction: "desc" });
+		await page.locator(".past-sessions .fleet-sort-reset").click();
+		await expectOrder(".session-card .name", ["Zulu", "Alpha", "Middle"]);
+		expect(await page.locator("th[aria-sort]").count()).toBe(0);
+		expect(await page.locator('.fleet-sort-header[aria-pressed="true"]').count()).toBe(0);
+		expect(expensiveCalls()).toEqual(baseline);
+	});
+
+	it("retains a focused row action when fresh metadata replaces and moves its surviving row", async () => {
+		await open();
+		await select({ key: "name", direction: "asc" });
+		const group = page
+			.locator(".project-group")
+			.filter({ has: page.getByRole("heading", { name: "/past/a", exact: true }) });
+		await group.getByRole("button", { name: "all 4 on disk →", exact: true }).click();
+		const action = group
+			.locator(".disk-row")
+			.filter({ has: page.getByText("Aardvark", { exact: true }) })
+			.getByRole("button", { name: "resume", exact: true });
+		await action.evaluate((el) => el.setAttribute("data-original-row-action", "true"));
+		await action.focus();
+		inventory = inventory.map((s) => ({ ...s, name: s.id === "pa-a" ? "ZZZ" : s.name }));
+		await page.evaluate(() =>
+			(window as unknown as { __sse: { emit(e: unknown): void } }).__sse.emit({ type: "disk_sessions_changed" }),
+		);
+		await expectOrder(".disk-row .name", ["Beta", "Cedar", "Xylophone", "Yarrow", "Zebra", "ZZZ"]);
+		await page.waitForFunction(() => document.activeElement?.getAttribute("data-original-row-action") === "true");
+		expect(await page.locator('[data-original-row-action="true"]').count()).toBe(1);
+	});
+
+	it("keeps history headers usable when live sessions disappear with Started selected", async () => {
+		await open();
+		await select({ key: "started", direction: "desc" });
+		await page.evaluate(() =>
+			(window as unknown as { __sse: { fleetSnapshot(r: unknown[]): void } }).__sse.fleetSnapshot([]),
+		);
+		await page.waitForFunction(() => !document.querySelector(".live-sessions"));
+		expect(await page.locator(".fleet-history-note").textContent()).toContain("Past sessions stay newest first");
+		await page.locator('.past-sessions [data-sort-key="name"]').click();
+		await expectPreference({ key: "name", direction: "asc" });
+		expect(await page.locator(".fleet-history-note").count()).toBe(0);
+		await page.locator(".past-sessions .fleet-sort-reset").click();
+		expect(await page.locator(".past-sessions .fleet-sort-reset").isDisabled()).toBe(true);
+	});
+
+	it.each([320, 701])("contains long actual table values and unavailable paths at %ipx", async (width) => {
+		const long = "unbroken-session-and-project-identifier".repeat(12);
+		inventory = inventory.map((s) =>
+			s.id === "pb-b"
+				? {
+						...s,
+						cwd: `/unavailable/${long}`,
+						name: long,
+						created: "invalid",
+						modified: "invalid",
+						cwdAvailable: false,
+					}
+				: s,
+		);
+		await page.setViewportSize({ width, height: 900 });
+		await open();
+		await select({ key: "name", direction: "asc" });
+		const row = page.locator(".disk-row").filter({ has: page.getByText(long, { exact: true }) });
+		expect(await row.locator("time").count()).toBe(0);
+		expect(await row.locator(".disk-created").textContent()).toBe("—");
+		expect(await row.locator(".disk-activity").textContent()).toBe("—");
+		expect(await row.locator(".disk-path-status").textContent()).toBe("original path unavailable");
+		expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+		for (const action of await row.locator(".actions button").all()) {
+			const r = await action.boundingBox();
+			expect(r).not.toBeNull();
+			expect(r!.x).toBeGreaterThanOrEqual(0);
+			expect(r!.x + r!.width).toBeLessThanOrEqual(width + 1);
+		}
+	});
 });

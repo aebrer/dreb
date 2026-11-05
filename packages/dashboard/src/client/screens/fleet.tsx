@@ -8,20 +8,18 @@ import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
+import { FleetSortHeader, FleetSortReset, fleetColumnSort } from "../components/fleet-sort-headers.js";
 import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { SessionCardSummary, sessionCardStatus } from "../components/session-card-summary.js";
 import {
 	diskSessionDisplayName,
-	FLEET_SORT_OPTIONS,
-	type FleetSortDirection,
 	type FleetSortKey,
-	isFleetDateSort,
 	runtimeDisplayName,
 	sortFleetDiskGroups,
 	sortFleetRuntimes,
 } from "../state/fleet-sorting.js";
 import { createFleetStatsRefresh } from "../state/fleet-stats-refresh.js";
-import { fleetSort, setFleetSort } from "../state/preferences.js";
+import { fleetSort } from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
 
 export { fleetGroupKey } from "../state/fleet-sorting.js";
@@ -39,6 +37,17 @@ const SORT_HELP: Record<FleetSortKey, string> = {
 
 function shortenPath(path: string): string {
 	return path.replace(/^\/home\/[^/]+/, "~");
+}
+
+function SessionTime(props: { value: string; label: string }): JSX.Element {
+	const timestamp = () => Date.parse(props.value);
+	return (
+		<Show when={Number.isFinite(timestamp())} fallback={<span title={`Unknown ${props.label}`}>—</span>}>
+			<time dateTime={props.value} title={new Date(timestamp()).toLocaleString()}>
+				{relativeTime(props.value)}
+			</time>
+		</Show>
+	);
 }
 
 function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.Element {
@@ -264,52 +273,9 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					</button>
 				</div>
 
-				<fieldset class="fleet-sort" aria-label="Fleet sorting" aria-describedby="fleet-sort-help">
-					<div class="fleet-sort-field">
-						<label for="fleet-sort-key">Sort by</label>
-						<select
-							id="fleet-sort-key"
-							value={fleetSort().key}
-							onChange={(event) => {
-								const key = event.currentTarget.value as FleetSortKey;
-								setFleetSort({ key, direction: isFleetDateSort(key) ? "desc" : "asc" });
-							}}
-						>
-							<For each={FLEET_SORT_OPTIONS}>
-								{(option) => <option value={option.key}>{option.label}</option>}
-							</For>
-						</select>
-					</div>
-					<div class="fleet-sort-field">
-						<label for="fleet-sort-direction">Order</label>
-						<select
-							id="fleet-sort-direction"
-							value={fleetSort().direction}
-							disabled={fleetSort().key === "default"}
-							onChange={(event) =>
-								setFleetSort({ ...fleetSort(), direction: event.currentTarget.value as FleetSortDirection })
-							}
-						>
-							<option value="asc">
-								{fleetSort().key === "default"
-									? "Default order"
-									: isFleetDateSort(fleetSort().key)
-										? "Oldest first"
-										: "Ascending (A–Z)"}
-							</option>
-							<option value="desc">
-								{fleetSort().key === "default"
-									? "Default order"
-									: isFleetDateSort(fleetSort().key)
-										? "Newest first"
-										: "Descending (Z–A)"}
-							</option>
-						</select>
-					</div>
-				</fieldset>
-				<p id="fleet-sort-help" class="fleet-sort-help muted small">
+				<output id="fleet-sort-help" class="fleet-visually-hidden">
 					{SORT_HELP[fleetSort().key]}
-				</p>
+				</output>
 
 				<Show when={props.store.fleetError()}>
 					<div class="settings-error" role="alert">
@@ -336,7 +302,22 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					}
 				>
 					<Show when={liveRuntimes().length > 0}>
-						<section class="live-sessions">
+						<section class="live-sessions" aria-labelledby="live-sessions-heading">
+							<div class="fleet-section-head">
+								<h2 id="live-sessions-heading">live sessions</h2>
+								<fieldset
+									class="fleet-live-headers"
+									aria-label="Sort live sessions"
+									aria-describedby="fleet-sort-help"
+								>
+									<FleetSortHeader sortKey="name" label="Session" />
+									<FleetSortHeader sortKey="created" label="Created" />
+									<FleetSortHeader sortKey="started" label="Started" />
+									<FleetSortHeader sortKey="activity" label="Last activity" />
+									<FleetSortHeader sortKey="path" label="Project" />
+									<FleetSortReset />
+								</fieldset>
+							</div>
 							<div class="session-grid">
 								<For each={liveRuntimes().map((runtime) => runtime.key)}>
 									{(key) => (
@@ -350,90 +331,191 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					</Show>
 
 					<Show when={diskGroups().length > 0}>
-						<section class="past-sessions">
-							<h2 class="past-sessions-head">past sessions</h2>
+						<section class="past-sessions" aria-labelledby="past-sessions-heading">
+							<div class="fleet-section-head">
+								<h2 id="past-sessions-heading" class="past-sessions-head">
+									past sessions
+								</h2>
+								<fieldset class="fleet-project-order" aria-label="Sort past projects">
+									<FleetSortHeader sortKey="path" label="Project" />
+									<FleetSortReset />
+								</fieldset>
+							</div>
+							<Show when={fleetSort().key === "started"}>
+								<p class="fleet-history-note muted small">
+									Runtime started applies to live sessions only. Past sessions stay newest first.
+								</p>
+							</Show>
 							<Show when={resumeError()}>
 								<p class="pair-error">{resumeError()}</p>
 							</Show>
-							<For each={diskGroups().map(([project]) => project)}>
-								{(project) => {
-									const sessions = () => diskByProject().get(project) ?? [];
-									const expanded = () => expandedGroups()[project] ?? false;
-									const visible = () => (expanded() ? sessions() : sessions().slice(0, 3));
-									const newSessionCwd = () => {
-										const candidate = sessions().find(
-											(session) => session.resolvedCwd || session.cwdAvailable !== false,
+							<table class="fleet-session-table" aria-describedby="fleet-sort-help">
+								<caption class="fleet-visually-hidden">
+									Past sessions grouped by project. Click a heading to sort all groups; click again to reverse.
+									Messages are informational.
+								</caption>
+								<thead>
+									<tr>
+										<th scope="col" id="fleet-session-column" aria-sort={fleetColumnSort("name")}>
+											<FleetSortHeader sortKey="name" label="Session" />
+										</th>
+										<th
+											scope="col"
+											id="fleet-created-column"
+											class="fleet-date-column"
+											aria-sort={fleetColumnSort("created")}
+										>
+											<FleetSortHeader sortKey="created" label="Created" />
+										</th>
+										<th
+											scope="col"
+											id="fleet-activity-column"
+											class="fleet-date-column"
+											aria-sort={fleetColumnSort("activity")}
+										>
+											<FleetSortHeader sortKey="activity" label="Last activity" />
+										</th>
+										<th
+											scope="col"
+											id="fleet-messages-column"
+											class="fleet-messages-column fleet-static-heading"
+										>
+											Messages
+										</th>
+										<th
+											scope="col"
+											id="fleet-actions-column"
+											class="fleet-actions-column fleet-static-heading"
+										>
+											Actions
+										</th>
+									</tr>
+								</thead>
+								<For each={diskGroups().map(([project]) => project)}>
+									{(project) => {
+										const sessions = () => diskByProject().get(project) ?? [];
+										const expanded = () => expandedGroups()[project] ?? false;
+										const visible = () => (expanded() ? sessions() : sessions().slice(0, 3));
+										const byPath = createMemo(
+											() => new Map(sessions().map((session) => [session.path, session])),
 										);
-										if (!candidate) return undefined;
-										return project === "/tmp" ? project : (candidate.resolvedCwd ?? candidate.cwd);
-									};
-									const unavailable = () => sessions().every((session) => session.cwdAvailable === false);
-									return (
-										<section class="project-group">
-											<div class="group-head">
-												<h3>{project ? shortenPath(project) : "(not recorded)"}</h3>
-												<span class="muted small">
-													{sessions().length} on disk{unavailable() ? " · original path unavailable" : ""}
-												</span>
-												<Show when={newSessionCwd()}>
-													{(cwd) => (
-														<button
-															type="button"
-															class="btn btn-small"
-															onClick={() => {
-																setNewSessionCwd(cwd());
-																setShowNewSession(true);
-															}}
-														>
-															+ new
-														</button>
+										const newSessionCwd = () => {
+											const candidate = sessions().find(
+												(session) => session.resolvedCwd || session.cwdAvailable !== false,
+											);
+											if (!candidate) return undefined;
+											return project === "/tmp" ? project : (candidate.resolvedCwd ?? candidate.cwd);
+										};
+										const unavailable = () => sessions().every((session) => session.cwdAvailable === false);
+										return (
+											<tbody class="project-group">
+												<tr class="fleet-project-row">
+													<th scope="rowgroup" colSpan={5}>
+														<div class="group-head">
+															<h3>{project ? shortenPath(project) : "(not recorded)"}</h3>
+															<span class="muted small">
+																{sessions().length} on disk
+																{unavailable() ? " · original path unavailable" : ""}
+															</span>
+															<Show when={newSessionCwd()}>
+																{(cwd) => (
+																	<button
+																		type="button"
+																		class="btn btn-small"
+																		onClick={() => {
+																			setNewSessionCwd(cwd());
+																			setShowNewSession(true);
+																		}}
+																	>
+																		+ new
+																	</button>
+																)}
+															</Show>
+														</div>
+													</th>
+												</tr>
+												<For each={visible().map((session) => session.path)}>
+													{(path) => (
+														<Show when={byPath().get(path)}>
+															{(session) => (
+																<tr class="disk-row">
+																	<td class="fleet-name-cell" headers="fleet-session-column">
+																		<span class="name" classList={{ muted: !session().name }}>
+																			{diskSessionDisplayName(session())}
+																		</span>
+																		<Show when={session().cwdAvailable === false}>
+																			<span class="meta disk-path-status">
+																				original path unavailable
+																			</span>
+																		</Show>
+																	</td>
+																	<td
+																		class="disk-created"
+																		headers="fleet-created-column"
+																		data-label="Created"
+																	>
+																		<SessionTime value={session().created} label="session creation" />
+																	</td>
+																	<td
+																		class="disk-activity"
+																		headers="fleet-activity-column"
+																		data-label="Last activity"
+																	>
+																		<SessionTime value={session().modified} label="last activity" />
+																	</td>
+																	<td
+																		class="disk-messages"
+																		headers="fleet-messages-column"
+																		data-label="Messages"
+																	>
+																		{session().messageCount}
+																	</td>
+																	<td headers="fleet-actions-column" class="fleet-actions-cell">
+																		<span class="actions">
+																			<button
+																				type="button"
+																				class="btn btn-small"
+																				onClick={() => resume(session())}
+																			>
+																				resume
+																			</button>
+																			<button
+																				type="button"
+																				class="btn btn-small btn-danger"
+																				onClick={() => setConfirmDelete(session())}
+																			>
+																				delete
+																			</button>
+																		</span>
+																	</td>
+																</tr>
+															)}
+														</Show>
 													)}
+												</For>
+												<Show when={sessions().length > 3}>
+													<tr class="fleet-more-row">
+														<td colSpan={5}>
+															<button
+																type="button"
+																class="disk-more"
+																onClick={() =>
+																	setExpandedGroups((current) => ({
+																		...current,
+																		[project]: !expanded(),
+																	}))
+																}
+															>
+																{expanded() ? "show fewer ←" : `all ${sessions().length} on disk →`}
+															</button>
+														</td>
+													</tr>
 												</Show>
-											</div>
-											<For each={visible()}>
-												{(session) => (
-													<div class="disk-row">
-														<span class="name" classList={{ muted: !session.name }}>
-															{diskSessionDisplayName(session)}
-														</span>
-														<span class="meta">
-															{session.cwdAvailable === false ? "original path unavailable · " : ""}
-															{session.messageCount} msgs · {relativeTime(session.modified)}
-														</span>
-														<span class="actions">
-															<button
-																type="button"
-																class="btn btn-small"
-																onClick={() => resume(session)}
-															>
-																resume
-															</button>
-															<button
-																type="button"
-																class="btn btn-small btn-danger"
-																onClick={() => setConfirmDelete(session)}
-															>
-																delete
-															</button>
-														</span>
-													</div>
-												)}
-											</For>
-											<Show when={sessions().length > 3}>
-												<button
-													type="button"
-													class="disk-more"
-													onClick={() =>
-														setExpandedGroups((current) => ({ ...current, [project]: !expanded() }))
-													}
-												>
-													{expanded() ? "show fewer ←" : `all ${sessions().length} on disk →`}
-												</button>
-											</Show>
-										</section>
-									);
-								}}
-							</For>
+											</tbody>
+										);
+									}}
+								</For>
+							</table>
 						</section>
 					</Show>
 				</Show>
