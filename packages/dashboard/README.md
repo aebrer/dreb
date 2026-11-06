@@ -39,7 +39,9 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
 - **Fleet** (home) — live-first: every live session in one grid at the top
   (Default orders by effective project path, then runtime start time;
   [Fleet sorting](#fleet-sorting) integrates browser-local sorting buttons into
-  the section header; each card shows its project path, status chip, current
+  the section header, and [Fleet search and filters](#fleet-search-and-filters)
+  narrows live and past sessions by displayed name or project path, with the
+  live/needs-attention counts acting as a live-only attention filter; each card shows its project path, status chip, current
   activity, live subagents, task progress, ctx%, model, cost, last-assistant
   preview, and terminal provider-error reason). Below, one native past-session
   table with global column headings is grouped by project — three compact rows
