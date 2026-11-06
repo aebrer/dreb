@@ -416,7 +416,10 @@ describe("cancellation markers (status after a reload)", () => {
 		// Reload: the live registry is gone; only disk state remains. The mocked children never
 		// wrote session logs, so both stops are recovered from their markers alone.
 		const stoppedDirs = [sessionDirOf(queued), sessionDirOf(running)];
-		pruneBackgroundAgents(-1);
+		// Prune every finished entry regardless of age. A small negative age is not
+		// enough: a backward wall-clock step (e.g. VM/WSL time sync) makes freshly
+		// started entries look "from the future" and they would survive the prune.
+		pruneBackgroundAgents(Number.NEGATIVE_INFINITY);
 		expect(getBackgroundAgents()).toHaveLength(0);
 		expect(rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsDir)).toBe(2);
 		const recovered = getBackgroundAgents();

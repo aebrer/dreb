@@ -1,4 +1,4 @@
-/** Real App/Fleet controls, reload and SSE ordering in Chromium, not a static DOM replica. */
+/** Real App/Fleet sorting and filtering, reload and SSE updates in Chromium, not a static DOM replica. */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -215,6 +215,15 @@ async function expectPreference(sort: FleetSortPreference): Promise<void> {
 	} else expect(await column.count()).toBe(0);
 }
 const expensiveCalls = () => calls.filter((call) => /\/api\/(fleet|sessions)|\/hydrate$/.test(call));
+
+async function emitEvent(event: Record<string, unknown>, key = ""): Promise<void> {
+	await page.evaluate(
+		({ event, key }) => {
+			(window as unknown as { __sse: { emit(event: unknown, key: string): void } }).__sse.emit(event, key);
+		},
+		{ event, key },
+	);
+}
 
 // Matrix deliberately separates the three timestamps and uses >3 rows/project.
 const cases: Array<[FleetSortPreference, string[], string[], string[]]> = [
@@ -582,4 +591,311 @@ describe("Fleet sorting in the real App", () => {
 			expect(r!.x + r!.width).toBeLessThanOrEqual(width + 1);
 		}
 	});
+});
+
+describe("Fleet filtering in the real App", () => {
+	it("searches current displayed names and full or shown project paths case-insensitively without fetching", async () => {
+		inventory = inventory.map((s) =>
+			s.id === "pb-b" ? { ...s, cwd: "/home/alice/Archive/PastRepo", resolvedCwd: "/canonical/resume-target" } : s,
+		);
+		await open();
+		const baseline = expensiveCalls();
+		const search = page.getByRole("searchbox", { name: "Search sessions", exact: true });
+		await search.fill("  aLPHa  ");
+		await expectOrder(".session-card .name", ["Alpha"]);
+		await expectOrder(".disk-row .name", []);
+		await emitEvent({ type: "session_name_changed", name: "Current Display Label" }, "b");
+		await expectOrder(".session-card .name", []); // the stale runtime name is no longer displayed or searchable
+		expect(await search.inputValue()).toBe("  aLPHa  ");
+		await search.fill("  CURRENT display LABEL  ");
+		await expectOrder(".session-card .name", ["Current Display Label"]);
+
+		runtimes = runtimes.map((r) => (r.key === "a" ? { ...r, cwd: "/home/alice/Work/LiveRepo" } : r));
+		await emitEvent({ type: "fleet_snapshot", runtimes });
+		for (const query of [" /HOME/ALICE/WORK/LIVEREPO ", "~/wORK/liVErepo"]) {
+			await search.fill(query);
+			await expectOrder(".session-card .name", ["Zulu"]);
+			await expectOrder(".session-card .session-project", ["~/Work/LiveRepo"]);
+			await expectOrder(".disk-row .name", []);
+		}
+		for (const query of ["/HOME/ALICE/ARCHIVE/PASTREPO", " ~/aRCHIVE/pASTrepo "]) {
+			await search.fill(query);
+			await expectOrder(".session-card .name", []);
+			await expectOrder(".group-head h3", ["~/Archive/PastRepo"]);
+			await expectOrder(".disk-row .name", ["Beta"]);
+		}
+		await search.fill("canonical/resume-target");
+		await expectOrder(".disk-row .name", []); // history searches its original/displayed path, not a resume target
+		expect(expensiveCalls()).toEqual(baseline);
+	});
+
+	it("searches all history before its three-row preview and uses the displayed unnamed-session fallback", async () => {
+		const firstMessage = `Visible fallback ${"x".repeat(60)}hidden-tail`;
+		inventory.push({ ...disk("unnamed", "/past/fallback", "", 1, 1), name: undefined, firstMessage });
+		await open();
+		const baseline = expensiveCalls();
+		const search = page.getByRole("searchbox", { name: "Search sessions", exact: true });
+		expect(await page.locator(".disk-row .name").allTextContents()).not.toContain("Aardvark");
+		await search.fill("  AaRDvArk  ");
+		await expectOrder(".group-head h3", ["/past/a"]);
+		await expectOrder(".disk-row .name", ["Aardvark"]);
+		expect(await page.locator(".fleet-filter-results").textContent()).toContain("1 matching past sessions");
+		await search.fill(" /PAST/A ");
+		await expectOrder(".disk-row .name", ["Zebra", "Yarrow", "Xylophone"]);
+		expect(await page.locator(".fleet-filter-results").textContent()).toContain("4 matching past sessions");
+		await page.getByRole("button", { name: "all 4 matches →", exact: true }).click();
+		await expectOrder(".disk-row .name", ["Zebra", "Yarrow", "Xylophone", "Aardvark"]);
+		await search.fill("“vISIBLE FALLBACK");
+		await expectOrder(".disk-row .name", [`“${firstMessage.slice(0, 60)}…”`]);
+		await search.fill("hidden-tail");
+		await expectOrder(".disk-row .name", []);
+		expect(expensiveCalls()).toEqual(baseline);
+	});
+
+	it("toggles total attention counts for live sessions only, combines search, and never leaks hidden live files into history", async () => {
+		runtimes = runtimes.map((r) => ({
+			...r,
+			needsAttention: r.key !== "b",
+			...(r.key === "c" ? {} : { error: "synthetic failure" }),
+		}));
+		await open();
+		const baseline = expensiveCalls();
+		const live = page.getByRole("button", { name: "3 live", exact: true });
+		const attention = page.getByRole("button", { name: "2 needs attention", exact: true });
+		const search = page.getByRole("searchbox", { name: "Search sessions", exact: true });
+		expect(await live.getAttribute("aria-pressed")).toBe("true");
+		expect(await attention.getAttribute("aria-pressed")).toBe("false");
+		await attention.click();
+		await expectOrder(".session-card .name", ["Zulu", "Middle"]); // flagged errors included; unflagged errors excluded
+		expect(await attention.getAttribute("aria-pressed")).toBe("true");
+		expect(await live.getAttribute("aria-pressed")).toBe("false");
+		await expectOrder(".disk-row .name", ["Zebra", "Yarrow", "Xylophone", "Cedar", "Beta"]);
+		expect(await page.locator(".fleet-filter-results").textContent()).toContain("live sessions only");
+		await search.fill("Middle");
+		await expectOrder(".session-card .name", ["Middle"]);
+		await search.fill("Alpha");
+		await expectOrder(".session-card .name", []);
+		await expectOrder(".disk-row .name", []); // Alpha's matching file is live, even though attention hid its card
+		await search.fill("/historical/a");
+		await expectOrder(".session-card .name", []);
+		await expectOrder(".disk-row .name", []); // a search-hidden live file is not historical either
+		await search.fill("Cedar");
+		await expectOrder(".session-card .name", []);
+		await expectOrder(".disk-row .name", ["Cedar"]); // attention never filters past matches
+		expect(await live.textContent()).toBe("3 live");
+		expect(await attention.textContent()).toBe("2 needs attention");
+		expect(await page.locator(".fleet-counts").textContent()).toContain("9 on disk");
+		await search.fill("Alpha");
+		await live.click();
+		await expectOrder(".session-card .name", ["Alpha"]);
+		expect(await search.inputValue()).toBe("Alpha");
+		await attention.click();
+		await expectOrder(".session-card .name", []);
+		await attention.click();
+		await expectOrder(".session-card .name", ["Alpha"]);
+		expect(await attention.getAttribute("aria-pressed")).toBe("false");
+		expect(expensiveCalls()).toEqual(baseline);
+	});
+
+	it("keeps the query and attention filter active through live name/attention SSE and inventory changes", async () => {
+		runtimes = runtimes.map((r) => ({ ...r, needsAttention: r.key === "b" }));
+		await open();
+		const baseline = expensiveCalls();
+		const search = page.getByRole("searchbox", { name: "Search sessions", exact: true });
+		await search.fill("  nEeDlE  ");
+		await page.getByRole("button", { name: "1 needs attention", exact: true }).click();
+		await expectOrder(".session-card .name", []);
+		await emitEvent({ type: "session_name_changed", name: "Needle Alpha" }, "b");
+		await expectOrder(".session-card .name", ["Needle Alpha"]);
+		runtimes = runtimes.map((r) => ({
+			...r,
+			needsAttention: r.key === "c",
+			state: { ...r.state, sessionName: r.key === "c" ? "Needle Middle" : r.state.sessionName },
+		}));
+		await emitEvent({ type: "fleet_snapshot", runtimes });
+		await expectOrder(".session-card .name", ["Needle Middle"]);
+		await emitEvent({ type: "session_name_changed", name: "Unrelated" }, "c");
+		await expectOrder(".session-card .name", []);
+		await emitEvent({ type: "session_name_changed", name: "Needle Zulu" }, "a");
+		await expectOrder(".session-card .name", []); // a matching name still requires attention
+		runtimes = runtimes.map((r) => ({ ...r, needsAttention: r.key !== "b" }));
+		await emitEvent({ type: "fleet_snapshot", runtimes });
+		await expectOrder(".session-card .name", ["Needle Zulu"]);
+		expect(expensiveCalls()).toEqual(baseline);
+
+		inventory = inventory.map((s) => (s.id === "pa-a" || s.id === "pb-b" ? { ...s, name: `Needle ${s.name}` } : s));
+		await emitEvent({ type: "disk_sessions_changed" });
+		await expectOrder(".group-head h3", ["/past/b", "/past/a"]); // rank by the first matching member, not hidden previews
+		await expectOrder(".disk-row .name", ["Needle Beta", "Needle Aardvark"]);
+		expect(await page.locator(".fleet-filter-results").textContent()).toContain(
+			"1 matching live sessions · 2 matching past sessions",
+		);
+		inventory = inventory.map((s) => (s.id === "pb-b" ? { ...s, name: "Unrelated Beta" } : s));
+		await emitEvent({ type: "disk_sessions_changed" });
+		await expectOrder(".disk-row .name", ["Needle Aardvark"]);
+		expect(await search.inputValue()).toBe("  nEeDlE  ");
+		expect(
+			await page.getByRole("button", { name: "2 needs attention", exact: true }).getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(expensiveCalls()).toEqual([...baseline, "GET /api/sessions", "GET /api/sessions"]);
+		runtimes = runtimes.map((r) => ({ ...r, needsAttention: false }));
+		await emitEvent({ type: "fleet_snapshot", runtimes });
+		await expectOrder(".session-card .name", []);
+		const zeroAttention = page.getByRole("button", { name: "0 needs attention", exact: true });
+		expect(await zeroAttention.getAttribute("aria-pressed")).toBe("true");
+		expect(await zeroAttention.isEnabled()).toBe(true);
+		await zeroAttention.press("Space");
+		await expectOrder(".session-card .name", ["Needle Zulu", "Needle Alpha"]);
+		expect(await search.inputValue()).toBe("  nEeDlE  ");
+		expect(expensiveCalls()).toEqual([...baseline, "GET /api/sessions", "GET /api/sessions"]);
+	});
+
+	it("keeps sorting, Clear filters, Reset sorting and expanded project state independent", async () => {
+		runtimes = runtimes.map((r) => ({ ...r, needsAttention: r.key === "c" }));
+		await open();
+		const baseline = expensiveCalls();
+		const search = page.getByRole("searchbox", { name: "Search sessions", exact: true });
+		const attention = page.getByRole("button", { name: "1 needs attention", exact: true });
+		const group = page
+			.locator(".project-group")
+			.filter({ has: page.getByRole("heading", { name: "/past/a", exact: true }) });
+		await group.getByRole("button", { name: "all 4 on disk →", exact: true }).click();
+		await select({ key: "path", direction: "desc" });
+		await search.fill("/past");
+		await attention.click();
+		await expectOrder(".group-head h3", ["/past/b", "/past/a"]);
+		await expectOrder(".disk-row .name", ["Beta", "Cedar", "Aardvark", "Xylophone", "Yarrow", "Zebra"]);
+		await search.fill("Beta");
+		await expectOrder(".group-head h3", ["/past/b"]);
+		await search.fill("/past");
+		await expectOrder(".group-head h3", ["/past/b", "/past/a"]);
+		expect(await group.locator(".disk-row").count()).toBe(4);
+		await page.getByRole("button", { name: "Reset Fleet sorting", exact: true }).first().click();
+		expect(await search.inputValue()).toBe("/past");
+		expect(await attention.getAttribute("aria-pressed")).toBe("true");
+		await expectOrder(".session-card .name", []);
+		await expectOrder(".group-head h3", ["/past/a", "/past/b"]);
+		await expectOrder(".disk-row .name", ["Zebra", "Yarrow", "Xylophone", "Aardvark", "Cedar", "Beta"]);
+		await select({ key: "name", direction: "asc" });
+		await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+		expect(await search.inputValue()).toBe("");
+		expect(await attention.getAttribute("aria-pressed")).toBe("false");
+		await expectPreference({ key: "name", direction: "asc" });
+		await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu"]);
+		await expectOrder(".group-head h3", ["/past/a", "/past/b"]);
+		await expectOrder(".disk-row .name", ["Aardvark", "Xylophone", "Yarrow", "Zebra", "Beta", "Cedar"]);
+		expect(await group.getByRole("button", { name: "show fewer ←", exact: true }).isVisible()).toBe(true);
+		expect(await page.getByRole("button", { name: "Clear filters", exact: true }).isDisabled()).toBe(true);
+		expect(expensiveCalls()).toEqual(baseline);
+	});
+
+	it("resets screen-local filters on reload and route return while persisting sorting and keeping the sidebar unfiltered", async () => {
+		runtimes = runtimes.map((r) => ({ ...r, needsAttention: r.key === "c" }));
+		await open();
+		const baseline = expensiveCalls();
+		await select({ key: "name", direction: "asc" });
+		const search = page.getByRole("searchbox", { name: "Search sessions", exact: true });
+		await search.fill("Middle");
+		await page.getByRole("button", { name: "1 needs attention", exact: true }).click();
+		await expectOrder(".session-card .name", ["Middle"]);
+		expect(expensiveCalls()).toEqual(baseline);
+		await page.reload({ waitUntil: "domcontentloaded" });
+		await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu"]);
+		await page.locator(".project-group").first().waitFor();
+		await expectPreference({ key: "name", direction: "asc" });
+		expect(await search.inputValue()).toBe("");
+		expect(await page.getByRole("button", { name: "3 live", exact: true }).getAttribute("aria-pressed")).toBe("true");
+		expect(await page.getByRole("button", { name: "Clear filters", exact: true }).isDisabled()).toBe(true);
+		const reloadedCalls = expensiveCalls();
+		await search.fill("Middle");
+		await page.getByRole("button", { name: "1 needs attention", exact: true }).click();
+		await expectOrder(".session-card .name", ["Middle"]);
+		expect(expensiveCalls()).toEqual(reloadedCalls);
+		await page.locator(".session-card").getByRole("button", { name: "open", exact: true }).click();
+		await expectOrder(".fleet-sidebar-entry .name", ["Zulu", "Alpha"]); // both hidden cards remain in stable path order
+		expect(new URL(page.url()).hash).toBe("#/session/c");
+		expect(calls.filter((c) => c === "GET /api/runtimes/c/hydrate")).toHaveLength(1);
+		await page.getByRole("link", { name: "← fleet", exact: true }).click();
+		await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu"]);
+		await expectPreference({ key: "name", direction: "asc" });
+		expect(await search.inputValue()).toBe("");
+		expect(
+			await page.getByRole("button", { name: "1 needs attention", exact: true }).getAttribute("aria-pressed"),
+		).toBe("false");
+	});
+
+	it.each([320, 390, 700, 701, 1280])(
+		"keeps labelled native filter controls usable with no matches and no toolbar at %ipx",
+		async (width) => {
+			runtimes = runtimes.map((r) => ({ ...r, needsAttention: r.key === "c" }));
+			await page.setViewportSize({ width, height: 900 });
+			await open();
+			const baseline = expensiveCalls();
+			const live = page.getByRole("button", { name: "3 live", exact: true });
+			const attention = page.getByRole("button", { name: "1 needs attention", exact: true });
+			const search = page.getByRole("searchbox", { name: "Search sessions", exact: true });
+			const clear = page.getByRole("button", { name: "Clear filters", exact: true });
+			await live.focus();
+			await live.press("Tab");
+			expect(await attention.evaluate((el) => document.activeElement === el)).toBe(true);
+			await attention.press("Enter");
+			await expectOrder(".session-card .name", ["Middle"]);
+			expect(await attention.getAttribute("aria-pressed")).toBe("true");
+			await attention.press("Space");
+			await expectOrder(".session-card .name", ["Zulu", "Alpha", "Middle"]);
+			expect(await live.getAttribute("aria-pressed")).toBe("true");
+			await attention.press("Enter");
+			await search.focus();
+			await search.pressSequentially("no-such-session");
+			await expectOrder(".session-card .name", []);
+			await expectOrder(".disk-row .name", []);
+			expect(await page.getByText("No live sessions match these filters.", { exact: true }).isVisible()).toBe(true);
+			expect(await page.getByText("No past sessions match this search.", { exact: true }).isVisible()).toBe(true);
+			expect(await page.getByText("No sessions yet.", { exact: true }).count()).toBe(0);
+			expect(await page.getByRole("button", { name: "+ create your first session", exact: true }).count()).toBe(0);
+			expect(await page.getByRole("button", { name: "+ new session", exact: true }).isEnabled()).toBe(true);
+			expect(await page.locator(".fleet-filter-results").textContent()).toContain(
+				"0 matching live sessions · 0 matching past sessions",
+			);
+			const bounds = await page
+				.locator(".fleet-count-filter, .fleet-search-field input, .fleet-clear-filters")
+				.evaluateAll((controls) => ({
+					documentFits: document.documentElement.scrollWidth <= innerWidth + 1,
+					controlsFit: controls.every((e) => {
+						const r = e.getBoundingClientRect();
+						return r.left >= 0 && r.right <= innerWidth + 1 && r.width > 0 && r.height > 0;
+					}),
+					touchTargets: controls.every((e) => {
+						const r = e.getBoundingClientRect();
+						return r.width >= 44 && r.height >= 44;
+					}),
+				}));
+			expect(bounds.documentFits).toBe(true);
+			expect(bounds.controlsFit).toBe(true);
+			if (width <= 700) expect(bounds.touchTargets).toBe(true);
+			expect(await page.getByRole("toolbar").count()).toBe(0);
+			expect(await page.locator(".fleet-sort, #fleet-sort-key, #fleet-sort-direction").count()).toBe(0);
+			await live.press("Space");
+			expect(await attention.getAttribute("aria-pressed")).toBe("false");
+			expect(await search.inputValue()).toBe("no-such-session");
+			await expectOrder(".session-card .name", []);
+			const nameSort = page.locator('.live-sessions [data-sort-key="name"]');
+			await nameSort.press("Enter"); // sorting stays operable even with no visible rows
+			await expectPreference({ key: "name", direction: "asc" });
+			await attention.press("Enter");
+			await search.focus();
+			await search.press("Tab");
+			expect(await clear.evaluate((el) => document.activeElement === el)).toBe(true);
+			await clear.press("Enter");
+			await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu"]);
+			await expectOrder(".disk-row .name", ["Aardvark", "Xylophone", "Yarrow", "Beta", "Cedar"]);
+			expect(await search.inputValue()).toBe("");
+			expect(await live.getAttribute("aria-pressed")).toBe("true");
+			expect(await clear.isDisabled()).toBe(true);
+			await expectPreference({ key: "name", direction: "asc" });
+			expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+			expect(expensiveCalls()).toEqual(baseline);
+		},
+		60_000,
+	);
 });

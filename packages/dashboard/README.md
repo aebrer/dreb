@@ -39,7 +39,9 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
 - **Fleet** (home) — live-first: every live session in one grid at the top
   (Default orders by effective project path, then runtime start time;
   [Fleet sorting](#fleet-sorting) integrates browser-local sorting buttons into
-  the section header; each card shows its project path, status chip, current
+  the section header, and [Fleet search and filters](#fleet-search-and-filters)
+  narrows live and past sessions by displayed name or project path, with the
+  live/needs-attention counts acting as a live-only attention filter; each card shows its project path, status chip, current
   activity, live subagents, task progress, ctx%, model, cost, last-assistant
   preview, and terminal provider-error reason). Below, one native past-session
   table with global column headings is grouped by project — three compact rows
@@ -116,6 +118,39 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
 
+### Fleet search and filters
+
+**Search sessions** matches a case-insensitive substring of the displayed session
+name or project path across live cards and saved sessions. Leading/trailing
+spaces are ignored. Live names include current local renames and their displayed
+fallback; historical unnamed rows use their displayed first-message fallback.
+Full project paths and displayed `~/…` aliases are searchable. Live cards search
+their effective runtime CWD; historical rows search their recorded CWD, never a
+canonical resume-directory replacement or opaque session-file path. `/tmp`
+grouping and exact-file action identities stay unchanged. This is metadata
+search, not full-text conversation search.
+
+Click the **needs attention** count to show only flagged live sessions; click it
+again or the **live** count to show all live sessions. These native pressed-state
+buttons filter live cards only: historical search results remain unaffected.
+The heading counts remain global inventory totals; the result line reports all
+matching live and past sessions, not just the visible three-row previews.
+
+Search is applied to complete historical inventory before grouping, sorting and
+previews; project groups rank by their leading matching member. All live files
+remain excluded from history even when their live card is hidden. Search and
+attention combine with the existing shared sort and expansion state.
+**Clear filters** resets search/attention only; sorting's **Reset** leaves filters
+intact. No-match messages keep the controls available rather than claiming an
+existing inventory is empty. Controls are labelled, keyboard-operable and have
+44px touch targets at <=700px.
+
+Filters are local to the mounted Fleet screen and clear on reload or navigation;
+only the existing sorting preference persists. Filtering uses existing
+snapshots, with no new polling, network requests, transcript hydration, host
+settings, session writes or dependencies. Session/subagent sidebars stay
+unfiltered and stably ordered.
+
 ### Fleet sorting
 
 Fleet home integrates native sorting buttons into its headers instead of a
@@ -155,7 +190,7 @@ inventory arrives; live cards render without waiting, and runtime `createdAt`
 is never substituted for Session created. A new session's file is written with
 its first assistant reply, so the client re-reads inventory once after that turn
 ends and the session moves into its creation position. While Session created is
-selected, a visible note counts live sessions with no known creation date yet. Missing or invalid dates sort last
+selected, a visible note counts displayed (filtered) live sessions with no known creation date yet. Missing or invalid dates sort last
 in both directions. Equal primary values use stable identity tiebreaks that do
 not reverse with direction; name/path comparisons are case-insensitive with
 deterministic fallback.
