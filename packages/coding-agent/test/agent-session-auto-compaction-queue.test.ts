@@ -174,6 +174,43 @@ describe("AgentSession auto-compaction queue resume", () => {
 		return () => callCount;
 	}
 
+	/**
+	 * Answer each request with the next scripted response: an error message, or `{ answer }` for a
+	 * successful reply with that text. Returns the request count.
+	 */
+	function respondInSequence(...responses: Array<string | { answer: string }>): () => number {
+		let callCount = 0;
+		session.agent.streamFn = () => {
+			const response = responses[callCount] ?? { answer: "unexpected extra request" };
+			callCount += 1;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (typeof response === "string") {
+					const message = createAssistant("error", response);
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+				} else {
+					const message = createAssistant("stop");
+					message.content = [{ type: "text", text: response.answer }];
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				}
+			});
+			return stream;
+		};
+		return () => callCount;
+	}
+
+	/** A retryable error, then a size rejection of the retried request. */
+	const RETRIED_THEN_REJECTED_FOR_SIZE = [
+		[
+			"Bedrock's token throttle",
+			"Throttling error: Too many tokens, please wait before trying again.",
+			"Input is too long.",
+		],
+		["a server error", "503 Service Unavailable", "413 Payload Too Large"],
+	] as const;
+
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `dreb-auto-compaction-queue-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
@@ -705,6 +742,77 @@ describe("AgentSession auto-compaction queue resume", () => {
 		compactGate.release();
 	});
 
+	it.each(RETRIED_THEN_REJECTED_FOR_SIZE)(
+		"should send the compacted request when a retried request is rejected for its size after %s",
+		async (_label, retryableError, sizeRejection) => {
+			settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } });
+			const calls = respondInSequence(retryableError, sizeRejection, { answer: "The slides show the roadmap." });
+			const events: Array<{ type: string; reason?: string; willRetry?: boolean; success?: boolean }> = [];
+			session.subscribe((event) => {
+				if (event.type === "auto_retry_start") events.push({ type: event.type });
+				if (event.type === "auto_retry_end") events.push({ type: event.type, success: event.success });
+				if (event.type === "auto_compaction_start") events.push({ type: event.type, reason: event.reason });
+				if (event.type === "auto_compaction_end") events.push({ type: event.type, willRetry: event.willRetry });
+			});
+
+			const prompted = session.prompt("describe these slides");
+			await vi.advanceTimersByTimeAsync(200);
+			await prompted;
+
+			// Backoff retry, then one compact-and-retry that actually sends the compacted request.
+			expect(events).toEqual([
+				{ type: "auto_retry_start" },
+				{ type: "auto_retry_end", success: false },
+				{ type: "auto_compaction_start", reason: "overflow" },
+				{ type: "auto_compaction_end", willRetry: true },
+			]);
+			expect(compactGate.calls).toBe(1);
+			expect(calls()).toBe(3);
+			expect(session.agent.state.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "The slides show the roadmap." }],
+			});
+			// Both failed attempts stay in the session as history, but not in the context.
+			const isError = (message: { role: string; stopReason?: string }) =>
+				message.role === "assistant" && message.stopReason === "error";
+			expect(session.agent.state.messages.filter((message) => isError(message as never))).toEqual([]);
+			const persistedErrors = sessionManager
+				.getEntries()
+				.flatMap((entry) => (entry.type === "message" && isError(entry.message as never) ? [entry.message] : []));
+			expect(persistedErrors.map((message) => (message as AssistantMessage).errorMessage)).toEqual([
+				retryableError,
+				sizeRejection,
+			]);
+		},
+	);
+
+	it("should remove every trailing error a threshold compaction rebuilds and resume the interrupted turn", async () => {
+		// Exhausted retries leave every failed attempt in the session; only the last is in the context.
+		const user = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "hello" }],
+			timestamp: Date.now() - 1,
+		};
+		const lastAttempt = createAssistant("error", "529 overloaded_error");
+		sessionManager.appendMessage(user);
+		sessionManager.appendMessage(createAssistant("error", "529 overloaded_error"));
+		sessionManager.appendMessage(lastAttempt);
+		session.agent.replaceMessages([user, lastAttempt]);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(session.agent.state.messages.map((message) => message.role)).toEqual(["compactionSummary", "user"]);
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
 	describe("print mode", () => {
 		/** First request rejected for its size, then the compacted retry answers. */
 		function rejectFirstRequestForSize(answer: string): () => number {
@@ -786,6 +894,25 @@ describe("AgentSession auto-compaction queue resume", () => {
 			expect(output.errors).toEqual(["413 Payload Too Large"]);
 			expect(exitCode).toBe(1);
 		});
+
+		it.each(RETRIED_THEN_REJECTED_FOR_SIZE)(
+			"prints the answer of the compacted retry when a retried request is rejected for its size after %s",
+			async (_label, retryableError, sizeRejection) => {
+				settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } });
+				const calls = respondInSequence(retryableError, sizeRejection, { answer: "The slides show the roadmap." });
+				const output = captureOutput();
+
+				const run = runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+				await vi.advanceTimersByTimeAsync(200);
+				const exitCode = await run;
+
+				expect(calls()).toBe(3);
+				expect(compactGate.calls).toBe(1);
+				expect(output.stdout).toEqual(["The slides show the roadmap.\n"]);
+				expect(output.errors).toEqual([]);
+				expect(exitCode).toBe(0);
+			},
+		);
 	});
 
 	it("should not compact genuine output-limit exhaustion that could fit in context", async () => {

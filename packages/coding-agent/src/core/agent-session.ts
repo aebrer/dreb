@@ -3174,12 +3174,21 @@ export class AgentSession {
 
 			// Rebuilding from persisted entries can reintroduce the assistant error
 			// that triggered compaction. It is historical evidence, not valid retry
-			// context, regardless of how the compaction was classified.
+			// context, regardless of how the compaction was classified. Earlier errors
+			// from the same request come back too: an auto-retry removes each failed
+			// attempt from the context but keeps it in the session, so a retried request
+			// that was then rejected for its size ends in several errors. Drop them all,
+			// so the context ends where the failed request started, as before compaction.
 			let removedTrailingError = false;
 			const rebuiltMessages = this.agent.state.messages;
-			const rebuiltTail = rebuiltMessages[rebuiltMessages.length - 1];
-			if (rebuiltTail?.role === "assistant" && (rebuiltTail as AssistantMessage).stopReason === "error") {
-				this.agent.replaceMessages(rebuiltMessages.slice(0, -1));
+			let keptLength = rebuiltMessages.length;
+			while (keptLength > 0) {
+				const rebuiltTail = rebuiltMessages[keptLength - 1];
+				if (rebuiltTail.role !== "assistant" || (rebuiltTail as AssistantMessage).stopReason !== "error") break;
+				keptLength--;
+			}
+			if (keptLength < rebuiltMessages.length) {
+				this.agent.replaceMessages(rebuiltMessages.slice(0, keptLength));
 				removedTrailingError = true;
 			}
 
