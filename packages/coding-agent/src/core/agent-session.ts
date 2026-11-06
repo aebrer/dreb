@@ -367,6 +367,14 @@ export class AgentSession {
 	private _retryPromise: Promise<void> | undefined = undefined;
 	private _retryResolve: (() => void) | undefined = undefined;
 
+	// Context recovery state. A run that ends in an error can be followed by an automatic
+	// continuation: compact-and-retry after an overflow, a K3 context-tier upgrade, or a compaction
+	// that removed the trailing error. prompt() waits for it, as it does for an auto-retry.
+	private _recoveryPromise: Promise<void> | undefined = undefined;
+	private _recoveryResolve: (() => void) | undefined = undefined;
+	/** Count of scheduled automatic continuations, so agent_end processing can tell whether it scheduled one. */
+	private _automaticContinuations = 0;
+
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
@@ -1085,12 +1093,13 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent): void => {
-		// Create retry promise synchronously before queueing async processing.
-		// Agent.emit() calls this handler synchronously, and prompt() calls waitForRetry()
-		// as soon as agent.prompt() resolves. If _retryPromise is created only inside
-		// _processAgentEvent, slow earlier queued events can delay agent_end processing
-		// and waitForRetry() can miss the in-flight retry.
+		// Create the retry and recovery promises synchronously before queueing async processing.
+		// Agent.emit() calls this handler synchronously, and prompt() calls _waitForAutomaticFollowUps()
+		// as soon as agent.prompt() resolves. If they were created only inside _processAgentEvent, slow
+		// earlier queued events can delay agent_end processing and prompt() can miss the in-flight
+		// retry or context recovery.
 		this._createRetryPromiseForAgentEnd(event);
+		this._createRecoveryPromiseForAgentEnd(event);
 
 		this._agentEventsInFlight++;
 		this._agentEventQueue = this._agentEventQueue.then(
@@ -1198,6 +1207,26 @@ export class AgentSession {
 		});
 	}
 
+	/**
+	 * Like the retry promise, created synchronously so prompt() cannot resolve between an error run's
+	 * agent_end and the automatic continuation that context recovery may schedule while processing it.
+	 * Resolved once a processed agent_end schedules no continuation, or when a continuation cannot start.
+	 */
+	private _createRecoveryPromiseForAgentEnd(event: AgentEvent): void {
+		if (event.type !== "agent_end" || this._recoveryPromise) {
+			return;
+		}
+
+		const lastAssistant = this._findLastAssistantInMessages(event.messages);
+		if (lastAssistant?.stopReason !== "error") {
+			return;
+		}
+
+		this._recoveryPromise = new Promise((resolve) => {
+			this._recoveryResolve = resolve;
+		});
+	}
+
 	private _findLastAssistantInMessages(messages: AgentMessage[]): AssistantMessage | undefined {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
@@ -1211,6 +1240,7 @@ export class AgentSession {
 	private async _processAgentEvent(event: AgentEvent): Promise<void> {
 		// The finally runs inline: an extra async wrapper here would add microtask hops to every
 		// queued event and delay event delivery relative to prompt() resolution.
+		const automaticContinuationsBefore = this._automaticContinuations;
 		try {
 			// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 			// This ensures the UI sees the updated queue state
@@ -1346,11 +1376,40 @@ export class AgentSession {
 			}
 		} finally {
 			this._agentEventsInFlight--;
+			// Context recovery ends at the first agent_end whose processing schedules no continuation,
+			// including one whose processing threw. A backoff retry is tracked by the retry promise.
+			if (event.type === "agent_end" && this._automaticContinuations === automaticContinuationsBefore) {
+				this._resolveRecovery();
+			}
 			// This event is handled and persisted. If the parent is now idle, deliver cancellation
 			// notices deferred while it was busy. After a run's final agent_end, that places them
 			// after everything the run persisted.
 			this._flushPendingCancellationNotices();
 		}
+	}
+
+	/** Resolve the pending context recovery promise */
+	private _resolveRecovery(): void {
+		if (this._recoveryResolve) {
+			this._recoveryResolve();
+			this._recoveryResolve = undefined;
+			this._recoveryPromise = undefined;
+		}
+	}
+
+	/**
+	 * Continue the agent after an automatic compaction or a K3 context-tier upgrade. During context
+	 * recovery, prompt() keeps waiting until the continued run's agent_end is processed; if the
+	 * continuation cannot start, recovery ends here.
+	 */
+	private _scheduleAutomaticContinuation(failurePrefix: string): void {
+		this._automaticContinuations++;
+		setTimeout(() => {
+			this.agent.continue().catch((err) => {
+				this._resolveRecovery();
+				this.warnInSession(`${failurePrefix}: ${err instanceof Error ? err.message : String(err)}`);
+			});
+		}, 100);
 	}
 
 	/** Resolve the pending retry promise */
@@ -1943,7 +2002,7 @@ export class AgentSession {
 		}
 
 		await this.agent.prompt(messages);
-		await this.waitForRetry();
+		await this._waitForAutomaticFollowUps();
 	}
 
 	/**
@@ -2250,6 +2309,8 @@ export class AgentSession {
 	 */
 	async abort(): Promise<void> {
 		this.abortRetry();
+		// Like abortRetry(), release prompt() callers waiting for automatic context recovery.
+		this._resolveRecovery();
 		this.agent.abort();
 		await this.agent.waitForIdle();
 	}
@@ -2826,13 +2887,7 @@ export class AgentSession {
 				// for history, but we don't want it in context for the retry)
 				this._removeLastAssistantMessage();
 				if (!requestWillFollow) {
-					setTimeout(() => {
-						this.agent.continue().catch((err) => {
-							this.warnInSession(
-								`Agent failed to continue after context window upgrade: ${err instanceof Error ? err.message : String(err)}`,
-							);
-						});
-					}, 100);
+					this._scheduleAutomaticContinuation("Agent failed to continue after context window upgrade");
 				}
 				return;
 			}
@@ -3144,14 +3199,7 @@ export class AgentSession {
 			this._emit({ type: "auto_compaction_end", result, aborted: false, willRetry: nextRequestWillFollow });
 
 			if (shouldContinue) {
-				setTimeout(() => {
-					this.agent.continue().catch((err) => {
-						// Agent failed to continue after auto-compaction — surface to session
-						this.warnInSession(
-							`Agent failed to continue after compaction: ${err instanceof Error ? err.message : String(err)}`,
-						);
-					});
-				}, 100);
+				this._scheduleAutomaticContinuation("Agent failed to continue after compaction");
 			}
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
@@ -3707,7 +3755,7 @@ export class AgentSession {
 				finalError: message.errorMessage,
 			});
 			this._retryAttempt = 0;
-			this._resolveRetry(); // Resolve so waitForRetry() completes
+			this._resolveRetry(); // Resolve so prompt() stops waiting for the retry
 			return false;
 		}
 
@@ -3768,12 +3816,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Wait for any in-progress retry to complete.
-	 * Returns immediately if no retry is in progress.
+	 * Wait until the session stops continuing on its own: an in-progress auto-retry (its backoff and the
+	 * retried run) and automatic context recovery (compact-and-retry after an overflow, and the continued
+	 * run). Either can lead to the other, so wait until neither is pending.
+	 * Returns immediately if neither is in progress.
 	 */
-	private async waitForRetry(): Promise<void> {
-		if (this._retryPromise) {
-			await this._retryPromise;
+	private async _waitForAutomaticFollowUps(): Promise<void> {
+		for (;;) {
+			const pending = this._retryPromise ?? this._recoveryPromise;
+			if (!pending) return;
+			await pending;
 		}
 	}
 

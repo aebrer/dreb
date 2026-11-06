@@ -150,6 +150,7 @@ await session.prompt("After you're done, also check X", { streamingBehavior: "fo
 - **Extension commands** (e.g., `/mycommand`): Execute immediately, even during streaming. They manage their own LLM interaction via `dreb.sendMessage()`.
 - **File-based prompt templates** (from `.md` files): Expanded to their content before sending/queueing.
 - **During streaming without `streamingBehavior`**: Throws an error. Use `steer()` or `followUp()` directly, or specify the option.
+- **Automatic retries and context recovery**: `prompt()` resolves only after automatic backoff retries and overflow compact-and-retry (see [compaction.md](compaction.md#when-it-triggers)) have finished, so the last message in `session.messages` is the request's final response. Overflow recovery removes the rejected response before it compacts, so if recovery then gives up (for example because compaction failed), the last message is not an assistant message; `auto_compaction_end` carries the failure in `errorMessage`.
 
 For explicit queueing during streaming:
 

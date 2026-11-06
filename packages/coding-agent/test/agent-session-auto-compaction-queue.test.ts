@@ -6,9 +6,12 @@ import { type AssistantMessage, type AssistantMessageEvent, EventStream, findMod
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
+import { log } from "../src/core/logger.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
+import * as outputGuard from "../src/core/output-guard.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import { runPrintMode } from "../src/modes/print-mode.js";
 import { createTestResourceLoader } from "./utilities.js";
 
 // Test hook for serialization tests: hold compact() in flight (hold/release)
@@ -153,6 +156,22 @@ describe("AgentSession auto-compaction queue resume", () => {
 		sessionManager.appendMessage(user);
 		sessionManager.appendMessage(assistant);
 		session.agent.replaceMessages([user, assistant]);
+	}
+
+	/** Reject every request for its size, as a gateway body-size limit does. Returns the request count. */
+	function rejectEveryRequestForSize(): () => number {
+		let callCount = 0;
+		session.agent.streamFn = () => {
+			callCount += 1;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistant("error", "413 Payload Too Large");
+				stream.push({ type: "start", partial: message });
+				stream.push({ type: "error", reason: "error", error: message });
+			});
+			return stream;
+		};
+		return () => callCount;
 	}
 
 	beforeEach(() => {
@@ -553,8 +572,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 			return stream;
 		};
 
-		await session.prompt("write a response that fills the output budget");
+		// prompt() waits for the compacted retry, which starts on a timer.
+		const prompted = session.prompt("write a response that fills the output budget");
 		await vi.advanceTimersByTimeAsync(100);
+		await prompted;
 
 		expect(callCount).toBe(6);
 		expect(requestedMaxTokens).toEqual(Array(6).fill(model.maxTokens));
@@ -603,17 +624,168 @@ describe("AgentSession auto-compaction queue resume", () => {
 			if (event.type === "auto_retry_start" || event.type === "auto_retry_end") events.push({ type: event.type });
 		});
 
-		await session.prompt("describe these slides");
-		await vi.advanceTimersByTimeAsync(100);
-		await session.agent.waitForIdle();
+		compactGate.hold();
+		let settled = false;
+		const prompted = session.prompt("describe these slides").then(() => {
+			settled = true;
+		});
 
+		// The rejected run has ended and compaction is in flight: prompt() must still be waiting.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events).toEqual([{ type: "auto_compaction_start", reason: "overflow" }]);
+		expect(settled).toBe(false);
+
+		// Compaction is done, but the compacted retry starts on a timer: still waiting.
+		compactGate.release();
+		await vi.advanceTimersByTimeAsync(50);
+		expect(events).toHaveLength(2);
+		expect(settled).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(50);
+		await prompted;
+
+		// prompt() resolved only once the compacted retry ended, so its answer is already the last message.
+		expect(session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
 		expect(events).toEqual([
 			{ type: "auto_compaction_start", reason: "overflow" },
 			{ type: "auto_compaction_end", willRetry: true, errorMessage: undefined },
 		]);
 		expect(compactGate.calls).toBe(1);
 		expect(callCount).toBe(2);
-		expect(session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+	});
+
+	it("resolves prompt() when overflow recovery gives up", async () => {
+		const calls = rejectEveryRequestForSize();
+		compactGate.failFirstN = 1;
+		const compactionErrors: Array<string | undefined> = [];
+		session.subscribe((event) => {
+			if (event.type === "auto_compaction_end") compactionErrors.push(event.errorMessage);
+		});
+
+		await session.prompt("describe these slides");
+
+		expect(compactionErrors).toEqual(["Context overflow recovery failed: summary failed"]);
+		expect(calls()).toBe(1);
+		// The rejected response was removed to compact and retry, so nothing answers the prompt.
+		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
+	});
+
+	it("resolves prompt() when the compacted retry cannot start", async () => {
+		rejectEveryRequestForSize();
+		const continueSpy = vi
+			.spyOn(session.agent, "continue")
+			.mockRejectedValue(new Error("No messages to continue from"));
+		const warningSpy = vi.spyOn(session, "warnInSession").mockImplementation(() => {});
+
+		const prompted = session.prompt("describe these slides");
+		await vi.advanceTimersByTimeAsync(100);
+		await prompted;
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(warningSpy).toHaveBeenCalledWith(
+			"Agent failed to continue after compaction: No messages to continue from",
+		);
+	});
+
+	it("releases prompt() when the session is aborted during overflow recovery", async () => {
+		rejectEveryRequestForSize();
+		compactGate.hold();
+		let settled = false;
+		const prompted = session.prompt("describe these slides").then(() => {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(settled).toBe(false);
+
+		await session.abort();
+		await prompted;
+
+		expect(settled).toBe(true);
+		session.abortCompaction();
+		compactGate.release();
+	});
+
+	describe("print mode", () => {
+		/** First request rejected for its size, then the compacted retry answers. */
+		function rejectFirstRequestForSize(answer: string): () => number {
+			let callCount = 0;
+			session.agent.streamFn = () => {
+				callCount += 1;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message =
+						callCount === 1 ? createAssistant("error", "413 Payload Too Large") : createAssistant("stop");
+					if (message.stopReason === "stop") message.content = [{ type: "text", text: answer }];
+					stream.push({ type: "start", partial: message });
+					if (message.stopReason === "error") {
+						stream.push({ type: "error", reason: "error", error: message });
+					} else {
+						stream.push({ type: "done", reason: "stop", message });
+					}
+				});
+				return stream;
+			};
+			return () => callCount;
+		}
+
+		function captureOutput(): { stdout: string[]; errors: unknown[] } {
+			const stdout: string[] = [];
+			vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((text) => {
+				stdout.push(text);
+			});
+			vi.spyOn(outputGuard, "flushRawStdout").mockResolvedValue();
+			const errors: unknown[] = [];
+			vi.spyOn(log, "error").mockImplementation((message) => {
+				errors.push(message);
+			});
+			return { stdout, errors };
+		}
+
+		it("prints the answer of the compacted retry after a request is rejected for its size", async () => {
+			const calls = rejectFirstRequestForSize("The slides show the roadmap.");
+			const output = captureOutput();
+
+			const run = runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+			await vi.advanceTimersByTimeAsync(100);
+			const exitCode = await run;
+
+			expect(calls()).toBe(2);
+			expect(compactGate.calls).toBe(1);
+			expect(output.stdout).toEqual(["The slides show the roadmap.\n"]);
+			expect(output.errors).toEqual([]);
+			expect(exitCode).toBe(0);
+		});
+
+		it("fails loudly when recovery from a size rejection gives up", async () => {
+			const calls = rejectFirstRequestForSize("unreachable");
+			compactGate.failFirstN = 1;
+			const output = captureOutput();
+
+			const exitCode = await runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+
+			expect(calls()).toBe(1);
+			expect(output.stdout).toEqual([]);
+			expect(output.errors).toEqual(["Context overflow recovery failed: summary failed"]);
+			expect(exitCode).toBe(1);
+		});
+
+		it("reports the rejection when recovery ends without an error of its own", async () => {
+			const calls = rejectFirstRequestForSize("unreachable");
+			const output = captureOutput();
+			compactGate.hold();
+
+			const run = runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+			// A cancelled compaction ends without a result or an error message, and no retry follows.
+			await vi.advanceTimersByTimeAsync(0);
+			session.abortCompaction();
+			compactGate.release();
+			const exitCode = await run;
+
+			expect(calls()).toBe(1);
+			expect(output.stdout).toEqual([]);
+			expect(output.errors).toEqual(["413 Payload Too Large"]);
+			expect(exitCode).toBe(1);
+		});
 	});
 
 	it("should not compact genuine output-limit exhaustion that could fit in context", async () => {

@@ -751,7 +751,7 @@ describe("AgentSession retry", () => {
 		// Regression: when auto-retry fires and the retry response includes tool_use,
 		// session.prompt() must wait for the entire tool loop to finish before returning.
 		// Previously, _resolveRetry() on the first successful message_end would unblock
-		// waitForRetry() while the agent was still executing tools.
+		// prompt()'s retry wait while the agent was still executing tools.
 		let callCount = 0;
 		const toolExecuted = { value: false };
 
