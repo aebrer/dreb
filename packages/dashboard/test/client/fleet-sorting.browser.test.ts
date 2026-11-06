@@ -326,6 +326,41 @@ describe("Fleet sorting in the real App", () => {
 		expect(calls.filter((c) => c === "GET /api/sessions")).toHaveLength(1);
 	});
 
+	it("moves a new session to its creation position once its first turn saves the file, without reload or disk events", async () => {
+		await open(JSON.stringify({ key: "created", direction: "desc" }));
+		await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu"]);
+		const base = runtimes;
+		const fresh = (messageCount: number, isStreaming: boolean): RuntimeInfoDto => {
+			const r = runtime("n", "Newest", 9, 9);
+			r.state.messageCount = messageCount;
+			r.state.isStreaming = isStreaming;
+			return r;
+		};
+		const snapshot = async (next: RuntimeInfoDto[]) => {
+			runtimes = next;
+			await page.evaluate((next) => {
+				(window as unknown as { __sse: { fleetSnapshot(r: unknown[]): void } }).__sse.fleetSnapshot(next);
+			}, next);
+		};
+		const note = page.locator(".live-sessions .fleet-live-note");
+
+		// A runtime starts. Its creation-time inventory read cannot include the unsaved file.
+		await snapshot([...base, fresh(0, false)]);
+		await expectOrder(".session-card .name", ["Alpha", "Middle", "Zulu", "Newest"]);
+		await note.waitFor();
+		expect(await note.textContent()).toBe("1 live session has no known creation date yet, so it is listed last.");
+		// The first turn runs; the file may not exist until it ends.
+		await snapshot([...base, fresh(1, true)]);
+		// The first assistant reply saved the file and the turn ended.
+		inventory = [...inventory, disk("n", "/n", "Newest", 9, 9)];
+		await snapshot([...base, fresh(2, false)]);
+		await expectOrder(".session-card .name", ["Newest", "Alpha", "Middle", "Zulu"]);
+		await note.waitFor({ state: "detached" });
+		// Startup, the membership change, and one post-turn re-read; no fleet refetch or reload.
+		expect(calls.filter((c) => c === "GET /api/sessions")).toHaveLength(3);
+		expect(calls.filter((c) => c === "GET /api/fleet/live")).toHaveLength(1);
+	});
+
 	it("updates explicit activity order while preserving focused card identity and without a fleet refetch", async () => {
 		await open();
 		const emit = async (next: RuntimeInfoDto[]) =>

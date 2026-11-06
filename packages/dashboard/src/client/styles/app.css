@@ -158,7 +158,8 @@ body {
 	flex-shrink: 0;
 }
 
-.fleet-history-note {
+.fleet-history-note,
+.fleet-live-note {
 	margin-bottom: var(--space-3);
 }
 
@@ -333,15 +334,6 @@ body {
 /* Live sessions come first — the fleet's primary content. */
 .live-sessions {
 	margin-bottom: var(--space-6);
-}
-
-/* Past sessions: secondary stratum, tighter than live cards. */
-.past-sessions-head {
-	font-size: var(--fs-h3);
-	color: var(--muted);
-	border-bottom: var(--hairline);
-	padding-bottom: var(--space-2);
-	margin-bottom: var(--space-4);
 }
 
 .project-group {

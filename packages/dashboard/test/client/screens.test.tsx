@@ -7307,8 +7307,13 @@ describe("dashboard client regressions", () => {
 			header(el, "created").click(); // oldest original creation first
 			expect(names(el)).toEqual(["old", "recent"]); // unknown remains last, not runtime-start substitution
 			expect(el.querySelector("#fleet-sort-help")?.textContent).toContain("Unknown dates");
+			// Sighted users see why the card is last, not only screen-reader help.
+			expect(el.querySelector(".live-sessions .fleet-live-note")?.textContent).toBe(
+				"1 live session has no known creation date yet, so it is listed last.",
+			);
 			setFleet({ runtimes: [old, recent], diskSessions: [disk("old", "/original", 2), disk("recent", "/a", 1)] });
 			expect(names(el)).toEqual(["recent", "old"]);
+			expect(el.querySelector(".fleet-live-note")).toBeNull();
 			header(el, "started").click();
 			header(el, "started").click(); // oldest runtime start first
 			expect(names(el)).toEqual(["recent", "old"]);
@@ -7317,6 +7322,18 @@ describe("dashboard client regressions", () => {
 			);
 			header(el, "created").click(); // newest original first: the opposite of newest runtime first
 			expect(names(el)).toEqual(["old", "recent"]);
+		});
+
+		it("explains every unknown live creation date only while Session created is selected", () => {
+			const runtimes = ["a", "b", "c"].map((key) => runtimeInfo(key, `/${key}`));
+			const { el } = fixture(runtimes, []);
+			expect(el.querySelector(".fleet-live-note")).toBeNull(); // Default needs no creation date
+			header(el, "created").click();
+			expect(el.querySelector(".fleet-live-note")?.textContent).toBe(
+				"3 live sessions have no known creation date yet, so they are listed last.",
+			);
+			header(el, "name").click();
+			expect(el.querySelector(".fleet-live-note")).toBeNull();
 		});
 
 		it("sorts full groups before truncation and preserves group DOM, expansion and focus across movement", async () => {

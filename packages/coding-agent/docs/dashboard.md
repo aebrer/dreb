@@ -188,6 +188,13 @@ and paths.
 available; live cards do not wait for the inventory scan. Never substitute runtime
 `createdAt`, or match by name or project path, for original creation. Late
 matching inventory can move a previously unknown entry to its known position.
+A new session's file is written only with its first assistant reply, after the
+inventory read that accompanies its creation (or `/new`). The client therefore
+re-reads the disk list once that runtime is idle with messages newer than the
+read that missed its file, so the session moves to its creation position after
+its first turn instead of staying last. While Session created is selected, a
+visible note under the live heading counts live sessions with no known creation
+date yet.
 Missing or invalid dates sort **after known dates in both directions**. Equal
 primary values retain deterministic identity tiebreaks; reversing direction
 does not reverse those ties. Name/path comparisons are case-insensitive with
@@ -215,7 +222,9 @@ or session files. Missing, malformed, or invalid preferences fall back to Defaul
 unavailable storage leaves the selection usable in memory. Sorting uses existing
 snapshots and inventory only:
 no new polling, network requests, transcript hydration, data fields, or
-dependencies are added.
+dependencies are added. Choosing or changing a sort never fetches anything; the
+only related inventory read is the post-first-turn re-read for an unindexed live
+session file described above, which happens regardless of the selected sort.
 
 ### Fleet sidebar controls and session switching
 
@@ -427,7 +436,13 @@ paths remain visible but do not enter operational project-root inventories.
 Internal parent paths and complete searchable transcript text never cross this
 browser boundary. After creating, resuming, stopping, or deleting a session, the
 client narrowly refreshes the disk list through `GET /api/sessions` rather than
-reloading the whole fleet. While the
+reloading the whole fleet. Session files are written only with their first
+assistant reply, so the client also re-reads the disk list when a `fleet_snapshot`
+shows a live runtime idle with messages newer than the last inventory read and its
+session file still missing from inventory. Each such file triggers at most one
+read per newer message count (a pending read already counts), never while
+streaming and never before the initial inventory load; once indexed it never
+triggers again. While the
 Fleet screen or a session/subagent fleet sidebar is visible, it polls live-runtime
 stats on a shared 30-second cadence. That poll is single-flight, retains a
 card's last good stats if an update fails, and surfaces failures in the visible

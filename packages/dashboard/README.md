@@ -152,7 +152,10 @@ ascending/descending text):
 
 There is no status sort. Original creation stays **unknown** until matching
 inventory arrives; live cards render without waiting, and runtime `createdAt`
-is never substituted for Session created. Missing or invalid dates sort last
+is never substituted for Session created. A new session's file is written with
+its first assistant reply, so the client re-reads inventory once after that turn
+ends and the session moves into its creation position. While Session created is
+selected, a visible note counts live sessions with no known creation date yet. Missing or invalid dates sort last
 in both directions. Equal primary values use stable identity tiebreaks that do
 not reverse with direction; name/path comparisons are case-insensitive with
 deterministic fallback.
@@ -177,7 +180,8 @@ stored in `localStorage` at `dreb.dashboard.fleetSort`; it never writes host
 settings or session files.
 Missing, malformed, or invalid preferences use Default; storage failures leave
 the choice usable in memory. Sorting uses existing snapshots/inventory and adds
-no polling, network requests, transcript hydration, data fields, or dependencies.
+no polling, network requests, transcript hydration, data fields, or dependencies;
+changing a sort never fetches anything.
 See the [full Fleet sorting contract](../coding-agent/docs/dashboard.md#fleet-sorting).
 
 ### Fleet sidebar
@@ -310,7 +314,11 @@ when it does), and bounds its first-message preview to 256 Unicode characters.
 Missing historical paths remain display metadata but are not used as memory/project
 roots or recent runtime choices. Internal parent paths and complete searchable
 transcript text never cross this boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
-create, resume, stop, or delete, rather than reloading the whole fleet. While the
+create, resume, stop, or delete, rather than reloading the whole fleet. Because a
+session file is written only with its first assistant reply, it also re-reads
+inventory once a `fleet_snapshot` shows an idle live runtime with messages newer
+than the last read and its file still unindexed (at most once per newer message
+count, counting a pending read; never while streaming or before the initial load). While the
 Fleet screen or a session/subagent fleet sidebar is visible, it refreshes
 per-runtime stats on a shared 30-second cadence; the refresh is
 single-flight, preserves each card's last good values, and exposes refresh
