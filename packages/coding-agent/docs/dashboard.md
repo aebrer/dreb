@@ -138,19 +138,100 @@ networking window above.
 
 | Screen | What it does |
 |---|---|
-| **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Live cards keep a deterministic order by project path, then session start time; needs-attention cards badge the browser tab without jumping around. Below the grid: past sessions grouped by their historical project, three compact rows per group with an "all N on disk" expander, resume and delete. Sessions remain visible when that historical directory is missing; resume opens an explicit runtime-directory chooser instead of mutating or hiding the session. |
-| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, a shared dismissible banner region for model fallback, extension notices, retry/compaction/paused/provider status, and local action results, a controls-only dock line with elapsed time plus ■ stop and explicitly labelled retry/compaction aborts, a persistent session-header live indicator, and an info bar with cwd, original-session provenance when a historical session is resumed in a different runtime directory, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, a TUI-parity latest-100 median TPS indicator (`~31 tok/s [100] · 10% ↑ median [10000]`), and a stats popover. A fleet sidebar lists every other live session beside the transcript with the fleet cards' project, status/reasons, activity/latest-assistant preview, running/done subagent summaries, task progress, model, context, cost, message count, last activity, and any original-session provenance, deterministically ordered by project path then session start time (the fleet page's comparator), so needs-attention/error entries are emphasized — a filled attention chip or outlined error chip plus an entry border — without moving position; clicking an entry navigates to that session, desktop collapse and pointer/keyboard-resizable width persist browser-locally (default expanded, 260px), the hidden toggle border reflects the highest-priority other-session status, and neither sidebar nor toggle renders when no other live sessions exist. The subagent drill-in shows the same sidebar with its parent session excluded. Closed-session banners offer direct resume when the captured runtime directory still exists and an explicit directory chooser when the historical directory is missing or should be replaced. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. Registered built-in slash commands are discovered generically, deduplicated ahead of colliding resource commands, and intercepted before prompting: dashboard actions cover settings, model, scoped-models, export/import, name/session stats, fork/tree, new/compact/dream, resume/reload, and quit. `/scoped-models` deep-links to the Settings editor with the session's current cwd as project context; login/logout show an explicit not-yet-implemented notice, while copy/hotkeys/buddy give terminal-only guidance. Future built-ins are intercepted automatically. The RPC prompt boundary rejects any built-in that reaches it during command-loading races or failures, so slash text cannot leak to the model. Attachments are retained and the command is visibly rejected rather than silently discarded. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications for the viewed session render in its banner region; other sessions' and app-global notices use the fixed top-center toast stack. |
+| **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Default keeps live cards in stable effective-project-path/runtime-start order; status changes never determine card order. [Fleet sorting](#fleet-sorting) integrates browser-local sorting buttons into the live section header, with live activity reordering only when Last activity is explicitly selected; needs-attention cards still badge the browser tab. Below the grid: one native past-session table with global column headings, grouped by historical project, three compact rows per group with an "all N on disk" expander, resume and delete. Sessions remain visible when that historical directory is missing; resume opens an explicit runtime-directory chooser instead of mutating or hiding the session. |
+| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, a shared dismissible banner region for model fallback, extension notices, retry/compaction/paused/provider status, and local action results, a controls-only dock line with elapsed time plus ■ stop and explicitly labelled retry/compaction aborts, a persistent session-header live indicator, and an info bar with cwd, original-session provenance when a historical session is resumed in a different runtime directory, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, a TUI-parity latest-100 median TPS indicator (`~31 tok/s [100] · 10% ↑ median [10000]`), and a stats popover. A fleet sidebar lists every other live session beside the transcript with the fleet cards' project, status/reasons, activity/latest-assistant preview, running/done subagent summaries, task progress, model, context, cost, message count, last activity, and any original-session provenance, deterministically ordered by effective project path then runtime start time independently of the Fleet page's selected sort, so needs-attention/error entries are emphasized — a filled attention chip or outlined error chip plus an entry border — without moving position; clicking an entry navigates to that session, desktop collapse and pointer/keyboard-resizable width persist browser-locally (default expanded, 260px), the hidden toggle border reflects the highest-priority other-session status, and neither sidebar nor toggle renders when no other live sessions exist. The subagent drill-in shows the same sidebar with its parent session excluded. Closed-session banners offer direct resume when the captured runtime directory still exists and an explicit directory chooser when the historical directory is missing or should be replaced. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. Registered built-in slash commands are discovered generically, deduplicated ahead of colliding resource commands, and intercepted before prompting: dashboard actions cover settings, model, scoped-models, export/import, name/session stats, fork/tree, new/compact/dream, resume/reload, and quit. `/scoped-models` deep-links to the Settings editor with the session's current cwd as project context; login/logout show an explicit not-yet-implemented notice, while copy/hotkeys/buddy give terminal-only guidance. Future built-ins are intercepted automatically. The RPC prompt boundary rejects any built-in that reaches it during command-loading races or failures, so slash text cannot leak to the model. Attachments are retained and the command is visibly rejected rather than silently discarded. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications for the viewed session render in its banner region; other sessions' and app-global notices use the fixed top-center toast stack. |
 | **Subagent view** | Transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. While the child is running, a composer sends the user's text unchanged to that specific child as steering input, displays its pending steering queue, and reports its effective `one-at-a-time` or `all` delivery mode, and the dock shows a **■ stop** (styled like the session view's) that stops only that child — see [Stopping a subagent](#stopping-a-subagent). Completed, failed, cancelled, rehydrated, and unavailable children remain read-only. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
 | **Memories** | Dreb-only memory management for `~/.dreb/memory` and `.dreb/memory` under active/disk project roots. It lists existing `MEMORY.md` indexes and direct child `.md` entries only (no Claude paths, create, or rename), shows entry frontmatter or metadata errors so malformed files can be repaired, renders sanitized Markdown preview beside a raw editor, and uses exact SHA-256 revisions so stale saves/deletes return conflicts while preserving drafts. The index view is complete, not truncated, and warns when it exceeds the 200-line memory-index convention. Entry deletion requires both entry and index revisions, removes only matching safe Markdown-link index lines (`file.md` / `./file.md`), writes the cleaned index atomically before unlinking the entry, and rolls back loudly if the unlink fails. |
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, opt-in continuation of pending work after successful automatic compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The continuation option is off by default, can keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. The tab-title card exposes the default-enabled generator toggle and an exact authenticated `provider/model` picker; an unset model clearly retains Explore-agent routing, a pinned model can be cleared back to that route, and edits apply to new unnamed sessions. The scoped-models editor controls model cycling for new sessions only: grouped search, model/provider/all toggles, responsive controls, accessible up/down partial-scope ordering, and save/reset. An absent `enabledModels` is future-inclusive all models in registry order and cannot be reordered; a partial scope is a non-empty ordered list of canonical `provider/model` references. Editing legacy glob, fuzzy, or thinking-suffix values saves normalized exact references. The selected context reads effective global + project settings but writes global; a project-level `enabledModels` shadow is warned. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions, including **Max concurrent subagents** (default 4). Setting it to 0 starts new parents without the subagent tool and tells the parent model to perform normally delegated work itself; positive values cap running children per parent session. Context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards plus system/light/dark mode and a font picker with 36 explicit choices plus Theme default (the existing IBM Plex Mono/JetBrains Mono/Fira Code/Iosevka/OpenDyslexic/Atkinson Hyperlegible plus 15 sans-serif and 15 serif families), regular-face previews in the open listbox, saved per browser. Shows the current rotating pairing code on the host/local dashboard, the 1–3650 day lifetime used only for future pairings (180-day default), and paired-device expiry dates with unpair. |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
+### Fleet sorting
+
+Fleet home integrates native sorting buttons into its headers instead of a
+separate sort-key/direction toolbar. The live section header offers **Session**,
+**Created**, **Started**, **Last activity**, **Project**, and **Reset** above the
+unchanged live card grid. Session selects Session name, Created selects Session
+created, Started selects Runtime started (live only), and Project selects Project
+path.
+
+Past sessions use **one native grouped table**, not a separate table per project.
+Its global column headings are **Session**, **Created**, **Last activity**,
+**Messages** (informational, not sortable), and **Actions**. The first three
+headings contain sorting buttons; **Project** and **Reset** are in the past
+section header. Project-header rows and three-row previews/expansion remain.
+
+Click a sort header to select its key: dates initially sort descending
+(newest-first), names and paths ascending. Clicking the selected key reverses
+its direction. Arrows and accessible button state communicate the selected key
+and direction; sortable table headings also expose `aria-sort`. **Reset** restores
+**Default**. Sorting buttons support native keyboard activation. At <=700px,
+they provide 44px touch targets and table rows stack while accessible column
+headings and sorting buttons remain available.
+
+The six modes remain **Default**, **Last activity**, **Session created**,
+**Runtime started (live only)**, **Session name**, and **Project path**; there is
+no status sort. Default has a fixed order. Every non-default key supports both
+directions: oldest/newest for dates and ascending/descending text order for names
+and paths.
+
+| Key | Live grid | Past sessions |
+|---|---|---|
+| **Default** | Effective project path ascending, then current runtime start ascending, with stable identity ties | Newest `modified` first within each project; groups newest first, with stable ties |
+| **Last activity** | Existing runtime `lastActivity` | Existing `modified` conversation-activity value, not a newly defined filesystem mtime |
+| **Session created** | Original inventory `created`, matched only by inventory `path` to `runtime.state.sessionFile` | Original inventory `created` |
+| **Runtime started (live only)** | Current live runtime `createdAt` | Default newest-first rows and groups in either direction; past sessions have no current runtime start |
+| **Session name** | The name or fallback displayed on the live card | The name or first-message fallback displayed on the historical row |
+| **Project path** | Effective runtime `cwd` | Recorded historical `cwd` |
+
+**Session created** for a live card is **unknown** until matching inventory is
+available; live cards do not wait for the inventory scan. Never substitute runtime
+`createdAt`, or match by name or project path, for original creation. Late
+matching inventory can move a previously unknown entry to its known position.
+A new session's file is written only with its first assistant reply, after the
+inventory read that accompanies its creation (or `/new`). The client therefore
+re-reads the disk list once that runtime is idle with messages newer than the
+read that missed its file, so the session moves to its creation position after
+its first turn instead of staying last. While Session created is selected, a
+visible note under the live heading counts live sessions with no known creation
+date yet.
+Missing or invalid dates sort **after known dates in both directions**. Equal
+primary values retain deterministic identity tiebreaks; reversing direction
+does not reverse those ties. Name/path comparisons are case-insensitive with
+deterministic fallback.
+
+Historical project groups remain intact, including existing `/tmp` folding.
+Sort **all rows in each group before taking the first three** for its collapsed
+preview. For non-default keys applicable to history, rank groups by the selected
+primary value of their leading sorted member, with a stable project-key tie.
+Default ranks groups newest-first; Runtime started explicitly leaves both
+historical rows and groups on that default in either direction. Expansion state,
+resume-directory selection, and resume/delete targets are unchanged by sorting.
+
+Selecting **Last activity** explicitly opts Fleet into live reordering as
+existing updates arrive. Default never moves cards for activity or attention
+changes. Other selected sorts respond to their selected key, including live
+renames or newly available original creation dates. Session and subagent fleet
+sidebars always keep their stable effective-path/runtime-start order, regardless
+of the Fleet selection.
+
+One shared key/direction pair applies across the live and past sections and all
+project groups; project headers do not have independent preferences. It persists
+only in browser `localStorage` under `dreb.dashboard.fleetSort`, not host settings
+or session files. Missing, malformed, or invalid preferences fall back to Default;
+unavailable storage leaves the selection usable in memory. Sorting uses existing
+snapshots and inventory only:
+no new polling, network requests, transcript hydration, data fields, or
+dependencies are added. Choosing or changing a sort never fetches anything; the
+only related inventory read is the post-first-turn re-read for an unindexed live
+session file described above, which happens regardless of the selected sort.
+
 ### Fleet sidebar controls and session switching
 
-The sidebar uses the same display summary as fleet-page cards, but its entire
-card navigates rather than adding a destructive stop-runtime button. Activity
-prefers working text, then a suggested-next command, then the latest nonblank
+The sidebar uses the same display summary as fleet-page cards, but keeps its
+stable effective-project-path/runtime-start order independently of Fleet sorting.
+Its entire card navigates rather than adding a destructive stop-runtime button.
+Activity prefers working text, then a suggested-next command, then the latest nonblank
 assistant text (bounded to 200 characters), with the server's preview as fallback
 for an unvisited transcript. It shows running/done counts and up to three live
 subagent summaries; unavailable optional metadata is omitted.
@@ -355,7 +436,13 @@ paths remain visible but do not enter operational project-root inventories.
 Internal parent paths and complete searchable transcript text never cross this
 browser boundary. After creating, resuming, stopping, or deleting a session, the
 client narrowly refreshes the disk list through `GET /api/sessions` rather than
-reloading the whole fleet. While the
+reloading the whole fleet. Session files are written only with their first
+assistant reply, so the client also re-reads the disk list when a `fleet_snapshot`
+shows a live runtime idle with messages newer than the last inventory read and its
+session file still missing from inventory. Each such file triggers at most one
+read per newer message count (a pending read already counts), never while
+streaming and never before the initial inventory load; once indexed it never
+triggers again. While the
 Fleet screen or a session/subagent fleet sidebar is visible, it polls live-runtime
 stats on a shared 30-second cadence. That poll is single-flight, retains a
 card's last good stats if an update fails, and surfaces failures in the visible
@@ -369,8 +456,11 @@ authoritative initial-load or resync fleet preview is the fallback. `ctx%` is
 never estimated in the browser: it comes from authoritative session state or
 stats. Immediately after compaction, the session reports a conservative estimate
 over its rebuilt message context until fresh provider usage becomes available.
-Live card ordering remains deterministic by project path and then session start
-time, not mutable activity.
+Default Fleet ordering and all session/subagent fleet sidebars remain stable by
+effective project path, then runtime start time, not mutable activity. Fleet home
+honors its [explicitly selected sort](#fleet-sorting) on these existing updates;
+only selecting Last activity opts it into activity-driven reordering. Sorting
+adds no polling or network work and does not change this refresh cadence.
 
 A session drill-in hydrates through one `GET /api/runtimes/:key/hydrate` request.
 The server backs it with one `getDashboardSnapshot` RPC call and its matching
@@ -577,9 +667,11 @@ concurrency slot, or between chain steps — the drill-in dock shows a
 
 ## Responsive behavior
 
-Single breakpoint at 700px. At <=700px, fleet cards stack; long session names,
-status chips, project paths, activity and subagent text, and past-session
-labels wrap within their cards or rows rather than spilling off-screen. The
+Single breakpoint at 700px. At <=700px, fleet cards and past-session table rows
+stack; long session names, status chips, project paths, activity and subagent
+text, and past-session labels wrap within their cards or rows rather than
+spilling off-screen. The grouped table preserves accessible column headings;
+header sorting buttons remain keyboard-operable with 44px touch targets. The
 session view prioritizes read-and-steer (model/thinking switchers collapse into
 ⋯, and task/subagent panels default collapsed), and the file table shows name +
 download only. The session fleet sidebar becomes a fixed overlay drawer —

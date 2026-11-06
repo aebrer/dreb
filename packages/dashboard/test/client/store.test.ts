@@ -2457,6 +2457,109 @@ describe("fleet snapshot and inventory store foundation", () => {
 		expect(api.sessions).not.toHaveBeenCalled();
 	});
 
+	describe("live session files written after the last inventory read", () => {
+		const file = "/sessions/new.jsonl";
+		function liveFile(messageCount: number, streaming = false): RuntimeInfoDto {
+			const runtime = fleetSnapshot("new", messageCount);
+			runtime.state.sessionFile = file;
+			runtime.state.isStreaming = streaming;
+			return runtime;
+		}
+		const saved = {
+			path: file,
+			id: "new",
+			cwd: "/tmp/project",
+			created: "2026-01-02T00:00:00.000Z",
+			modified: "2026-01-02T00:01:00.000Z",
+			messageCount: 2,
+			firstMessage: "hi",
+		};
+
+		it("re-reads inventory once the turn that wrote a new session file ends, then never again", async () => {
+			vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [liveFile(0)], diskSessions: [] });
+			const store = await makeStartedStore();
+			vi.mocked(api.sessions).mockClear();
+
+			// Mid-turn the file may not exist yet: no scan.
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(1, true)] });
+			await flushAsyncWork();
+			expect(api.sessions).not.toHaveBeenCalled();
+
+			// The first assistant reply persisted the file and the turn ended.
+			vi.mocked(api.sessions).mockResolvedValueOnce({ sessions: [saved] });
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(2)] });
+			await flushAsyncWork();
+			expect(api.sessions).toHaveBeenCalledTimes(1);
+			expect(store.fleet().diskSessions.map((session) => session.path)).toEqual([file]);
+
+			// Indexed now: repeated idle snapshots and later turns do not scan again.
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(2)] });
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(4)] });
+			await flushAsyncWork();
+			expect(api.sessions).toHaveBeenCalledTimes(1);
+			expect(api.fleet).toHaveBeenCalledTimes(1);
+		});
+
+		it("re-reads a still-missing file only after newer messages, not on every idle snapshot", async () => {
+			vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [liveFile(0)], diskSessions: [] });
+			await makeStartedStore();
+			vi.mocked(api.sessions).mockClear();
+			vi.mocked(api.sessions).mockResolvedValue({ sessions: [] }); // e.g. aborted before any reply
+
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(1)] });
+			await flushAsyncWork();
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(1)] });
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(1)] });
+			await flushAsyncWork();
+			expect(api.sessions).toHaveBeenCalledTimes(1);
+
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(3)] });
+			await flushAsyncWork();
+			expect(api.sessions).toHaveBeenCalledTimes(2);
+		});
+
+		it("does not stack a re-read on top of a pending one", async () => {
+			vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [liveFile(0)], diskSessions: [] });
+			const store = await makeStartedStore();
+			vi.mocked(api.sessions).mockClear();
+			const pending = deferred<{ sessions: (typeof saved)[] }>();
+			vi.mocked(api.sessions).mockReturnValueOnce(pending.promise);
+
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(2)] });
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(2)] });
+			await flushAsyncWork();
+			expect(api.sessions).toHaveBeenCalledTimes(1);
+
+			pending.resolve({ sessions: [saved] });
+			await flushAsyncWork();
+			expect(store.fleet().diskSessions.map((session) => session.path)).toEqual([file]);
+		});
+
+		it("waits for the first inventory read before re-reading for missing live files", async () => {
+			const initial = deferred<{ sessions: (typeof saved)[] }>();
+			vi.mocked(api.fleet).mockResolvedValueOnce({
+				runtimes: [liveFile(0)],
+				diskSessions: [],
+				diskSessionsComplete: false,
+			});
+			vi.mocked(api.sessions).mockReturnValueOnce(initial.promise);
+			await makeStartedStore();
+			expect(api.sessions).toHaveBeenCalledTimes(1); // live-first startup inventory
+
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(2)] });
+			await flushAsyncWork();
+			expect(api.sessions).toHaveBeenCalledTimes(1);
+
+			// That startup read began before these messages, so it cannot vouch for the file.
+			vi.mocked(api.sessions).mockResolvedValueOnce({ sessions: [saved] });
+			initial.resolve({ sessions: [] });
+			await flushAsyncWork();
+			emit("", { type: "fleet_snapshot", runtimes: [liveFile(2)] });
+			await flushAsyncWork();
+			expect(api.sessions).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	it("surfaces membership inventory failures without discarding the previous disk rows", async () => {
 		vi.mocked(api.fleet).mockResolvedValueOnce({
 			runtimes: [fleetSnapshot("live")],

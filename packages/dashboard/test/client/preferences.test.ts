@@ -1,8 +1,12 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_FLEET_SORT, FLEET_SORT_OPTIONS } from "../../src/client/state/fleet-sorting.js";
 import {
+	FLEET_SORT_KEY,
+	fleetSort,
 	IMAGE_DISPLAY_MODE_KEY,
 	imageDisplayMode,
+	reloadFleetSortPreference,
 	reloadImageDisplayModePreference,
 	reloadSessionSidebarCollapsedPreference,
 	reloadSessionSidebarWidthPreference,
@@ -10,6 +14,7 @@ import {
 	SESSION_SIDEBAR_WIDTH_KEY,
 	sessionSidebarCollapsed,
 	sessionSidebarWidth,
+	setFleetSort,
 	setImageDisplayMode,
 	setSessionSidebarCollapsed,
 	setSessionSidebarWidth,
@@ -52,6 +57,80 @@ describe("dashboard image display preference", () => {
 		setImageDisplayMode("originals");
 		expect(imageDisplayMode()).toBe("originals");
 		failure.mockRestore();
+	});
+});
+
+describe("Fleet sorting preference", () => {
+	beforeEach(() => {
+		const values = new Map<string, string>();
+		Object.defineProperty(window, "localStorage", {
+			configurable: true,
+			value: {
+				getItem: (key: string) => values.get(key) ?? null,
+				setItem: (key: string, value: string) => values.set(key, String(value)),
+			},
+		});
+		reloadFleetSortPreference();
+	});
+
+	it("defaults without writing or changing unrelated preferences", () => {
+		expect(fleetSort()).toEqual(DEFAULT_FLEET_SORT);
+		expect(window.localStorage.getItem(FLEET_SORT_KEY)).toBeNull();
+		window.localStorage.setItem(IMAGE_DISPLAY_MODE_KEY, "originals");
+		setFleetSort({ key: "created", direction: "asc" });
+		expect(window.localStorage.getItem(IMAGE_DISPLAY_MODE_KEY)).toBe("originals");
+	});
+
+	it.each(FLEET_SORT_OPTIONS.map(({ key }) => key))(
+		"round-trips both directions for %s and restores the whole pair",
+		(key) => {
+			for (const direction of ["asc", "desc"] as const) {
+				const value = { key, direction };
+				setFleetSort(value);
+				expect(fleetSort()).toEqual(value);
+				expect(JSON.parse(window.localStorage.getItem(FLEET_SORT_KEY)!)).toEqual(value);
+				window.localStorage.setItem(FLEET_SORT_KEY, JSON.stringify({ key: "activity", direction: "desc" }));
+				reloadFleetSortPreference();
+				expect(fleetSort()).toEqual({ key: "activity", direction: "desc" });
+				window.localStorage.setItem(FLEET_SORT_KEY, JSON.stringify(value));
+				reloadFleetSortPreference();
+				expect(fleetSort()).toEqual(value);
+			}
+		},
+	);
+
+	it.each([
+		"",
+		"bad JSON",
+		"null",
+		"[]",
+		"{}",
+		"true",
+		'"name"',
+		'{"key":"name"}',
+		'{"key":"unknown","direction":"asc"}',
+		'{"key":"created","direction":"up"}',
+		'{"key":"path","direction":null}',
+	])("rejects malformed/unknown stored preference %j", (raw) => {
+		setFleetSort({ key: "started", direction: "desc" });
+		window.localStorage.setItem(FLEET_SORT_KEY, raw);
+		reloadFleetSortPreference();
+		expect(fleetSort()).toEqual(DEFAULT_FLEET_SORT);
+	});
+
+	it("uses safe defaults on thrown reads and keeps both controls honest on thrown writes", () => {
+		const read = vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
+			throw new Error("unavailable");
+		});
+		reloadFleetSortPreference();
+		expect(fleetSort()).toEqual(DEFAULT_FLEET_SORT);
+		read.mockRestore();
+		const write = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+			throw new Error("unavailable");
+		});
+		setFleetSort({ key: "name", direction: "desc" });
+		expect(fleetSort()).toEqual({ key: "name", direction: "desc" });
+		write.mockRestore();
 	});
 });
 

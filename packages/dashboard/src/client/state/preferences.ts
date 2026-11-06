@@ -1,5 +1,8 @@
 import { createSignal } from "solid-js";
 import type { DashboardImageDisplayMode } from "../../shared/protocol.js";
+import { DEFAULT_FLEET_SORT, type FleetSortPreference, normalizeFleetSort } from "./fleet-sorting.js";
+
+export const FLEET_SORT_KEY = "dreb.dashboard.fleetSort";
 
 export const EXPAND_THINKING_KEY = "dreb.dashboard.expandThinking";
 export const IMAGE_DISPLAY_MODE_KEY = "dreb.dashboard.imageDisplayMode";
@@ -105,6 +108,34 @@ function writeToolAutoExpandPreference(value: ToolAutoExpandPreferences): void {
 		// Browser storage can be unavailable in private modes; the in-memory signal
 		// still updates so the control remains honest for this page load.
 	}
+}
+
+function readFleetSortPreference(): FleetSortPreference {
+	if (typeof window === "undefined") return DEFAULT_FLEET_SORT;
+	try {
+		const raw = window.localStorage.getItem(FLEET_SORT_KEY);
+		return raw === null ? DEFAULT_FLEET_SORT : normalizeFleetSort(JSON.parse(raw));
+	} catch {
+		return DEFAULT_FLEET_SORT;
+	}
+}
+
+const [fleetSortSignal, setFleetSortSignal] = createSignal(readFleetSortPreference());
+export const fleetSort = fleetSortSignal;
+
+export function setFleetSort(value: FleetSortPreference): void {
+	const next = normalizeFleetSort(value);
+	setFleetSortSignal(next);
+	if (typeof window === "undefined") return;
+	try {
+		window.localStorage.setItem(FLEET_SORT_KEY, JSON.stringify(next));
+	} catch {
+		// Keep the controls usable in memory when persistent storage is unavailable.
+	}
+}
+
+export function reloadFleetSortPreference(): void {
+	setFleetSortSignal(readFleetSortPreference());
 }
 
 const [expandThinkingSignal, setExpandThinkingSignal] = createSignal(

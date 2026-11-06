@@ -37,15 +37,20 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
 ## Screens
 
 - **Fleet** (home) — live-first: every live session in one grid at the top
-  (stable order by project path, then session start time; each card shows its
-  project path, status chip, current activity, live subagents, task progress,
-  ctx%, model, cost, last-assistant preview, and terminal provider-error reason). Below, past sessions grouped by project — three
-  compact rows each with an "all N on disk" expander — with resume/delete.
+  (Default orders by effective project path, then runtime start time;
+  [Fleet sorting](#fleet-sorting) integrates browser-local sorting buttons into
+  the section header; each card shows its project path, status chip, current
+  activity, live subagents, task progress, ctx%, model, cost, last-assistant
+  preview, and terminal provider-error reason). Below, one native past-session
+  table with global column headings is grouped by project — three compact rows
+  each with an "all N on disk" expander — with resume/delete.
   Sessions remain listed when their historical project path is missing; resume
   then asks for an existing runtime directory and shows both paths without
-  changing the persisted session header. At <=700px, cards stack; long session names, status chips, project paths,
+  changing the persisted session header. At <=700px, cards and past-session
+  table rows stack; long session names, status chips, project paths,
   activity/subagent text, and past-session labels wrap within cards or rows
-  rather than spilling off-screen. `+ new session` anywhere.
+  rather than spilling off-screen. Accessible table headings, keyboard sorting
+  buttons, and 44px touch targets are preserved. `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
   inline provider/API failures with partial output preserved, compaction summaries,
@@ -57,7 +62,8 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   latest-100 median tok/s with sample count and long-term delta), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
-  and live auto-naming. A fleet sidebar lists other live sessions in stable order
+  and live auto-naming. A fleet sidebar lists other live sessions in stable
+  effective-project-path/runtime-start order, independent of Fleet sorting,
   with the fleet cards' display information and attention/error highlighting.
   Desktop collapse and pointer/keyboard-resizable width persist; a hidden
   sidebar's toggle border shows the highest-priority other-session status.
@@ -110,6 +116,74 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
 
+### Fleet sorting
+
+Fleet home integrates native sorting buttons into its headers instead of a
+separate sort-key/direction toolbar. The live section header offers **Session**,
+**Created**, **Started**, **Last activity**, **Project**, and **Reset** above the
+card grid. Session selects Session name, Created selects Session created,
+Started selects Runtime started (live only), and Project selects Project path.
+
+Past sessions use **one native grouped table**, not separate project tables,
+with global **Session**, **Created**, **Last activity**, **Messages**, and
+**Actions** column headings. The first three contain sorting buttons; Messages
+is informational, not sortable. **Project** and **Reset** sit in the past
+section header. Project-header rows and three-row previews/expansion remain.
+
+Click a sort header to select its key (dates initially descending/newest-first,
+text ascending); clicking the selected key reverses direction. Arrows and
+accessible button state show the selection, and sortable table headings expose
+`aria-sort`. **Reset** restores **Default**. Small screens stack rows while
+preserving accessible headings, keyboard buttons, and 44px touch targets.
+
+**Default** keeps live cards in effective-project-path ascending, then
+runtime-start ascending order, with stable ties; historical rows use newest
+`modified` first and groups newest first. Default has a fixed order. The five
+non-default keys support both directions (oldest/newest dates or
+ascending/descending text):
+
+| Key | Live grid | Past sessions |
+|---|---|---|
+| **Last activity** | Existing `lastActivity` | Existing `modified` conversation-activity value, not a new filesystem mtime |
+| **Session created** | Original inventory `created`, matched only by inventory `path` to `runtime.state.sessionFile` | Original inventory `created` |
+| **Runtime started (live only)** | Current live runtime `createdAt` | Default newest-first rows and groups, in either direction |
+| **Session name** | Displayed live-card name or fallback | Displayed historical-row name or first-message fallback |
+| **Project path** | Effective runtime `cwd` | Recorded historical `cwd` |
+
+There is no status sort. Original creation stays **unknown** until matching
+inventory arrives; live cards render without waiting, and runtime `createdAt`
+is never substituted for Session created. A new session's file is written with
+its first assistant reply, so the client re-reads inventory once after that turn
+ends and the session moves into its creation position. While Session created is
+selected, a visible note counts live sessions with no known creation date yet. Missing or invalid dates sort last
+in both directions. Equal primary values use stable identity tiebreaks that do
+not reverse with direction; name/path comparisons are case-insensitive with
+deterministic fallback.
+
+Historical project groups, including existing `/tmp` folding, are preserved.
+All rows in a group are sorted before the collapsed preview takes its first
+three. For a non-default key applicable to history, groups rank by the selected
+primary value of their leading sorted member, with a project-key tiebreak.
+**Runtime started is live-only**: past rows and groups remain default newest-first
+regardless of its direction. Expansion state, resume-directory handling, and
+resume/delete targets are preserved.
+
+Choosing **Last activity** explicitly opts Fleet into reordering on existing
+live updates. Default never reorders for activity or attention changes; other
+selected sorts update only for their selected key (for example, a rename or
+newly matched creation date). Session and subagent fleet sidebars remain in
+stable effective-path/runtime-start order under every Fleet preference.
+
+One shared browser-only key/direction pair applies across the live and past
+sections and all project groups, not independent project preferences. It is
+stored in `localStorage` at `dreb.dashboard.fleetSort`; it never writes host
+settings or session files.
+Missing, malformed, or invalid preferences use Default; storage failures leave
+the choice usable in memory. Sorting uses existing snapshots/inventory and adds
+no polling, network requests, transcript hydration, data fields, or dependencies;
+changing a sort never fetches anything.
+See the [full Fleet sorting contract](../coding-agent/docs/dashboard.md#fleet-sorting).
+
 ### Fleet sidebar
 
 Sidebar cards share the fleet page's project, name/status, attention/error reason,
@@ -117,7 +191,9 @@ activity/latest-assistant preview, running/done subagent counts (up to three liv
 summaries), task progress, model, ctx%, cost, message count, and last activity.
 Current working text or a suggested-next command takes precedence over the
 bounded assistant preview; unvisited sessions use the server-provided preview.
-Cards navigate on click, without adding the fleet page's stop-runtime action.
+Cards stay in stable effective-project-path/runtime-start order regardless of
+Fleet's selected sort. They navigate on click, without adding the fleet page's
+stop-runtime action.
 
 On desktop, drag the right-edge separator or focus it and use Left/Right (10px),
 Home, or End. The default is 260px; preferred widths range from 240–560px, further
@@ -238,7 +314,11 @@ when it does), and bounds its first-message preview to 256 Unicode characters.
 Missing historical paths remain display metadata but are not used as memory/project
 roots or recent runtime choices. Internal parent paths and complete searchable
 transcript text never cross this boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
-create, resume, stop, or delete, rather than reloading the whole fleet. While the
+create, resume, stop, or delete, rather than reloading the whole fleet. Because a
+session file is written only with its first assistant reply, it also re-reads
+inventory once a `fleet_snapshot` shows an idle live runtime with messages newer
+than the last read and its file still unindexed (at most once per newer message
+count, counting a pending read; never while streaming or before the initial load). While the
 Fleet screen or a session/subagent fleet sidebar is visible, it refreshes
 per-runtime stats on a shared 30-second cadence; the refresh is
 single-flight, preserves each card's last good values, and exposes refresh
@@ -252,8 +332,11 @@ the fallback until transcript entries are available. Likewise, `ctx%` is always
 copied from authoritative session state or stats, never calculated in the
 browser. Immediately after compaction, the session supplies a conservative
 estimate over the rebuilt context until a later provider response supplies fresh
-usage. Card position remains deterministic: project path, then session start
-time.
+usage. Default Fleet order and all session/subagent fleet sidebars remain stable:
+effective project path, then runtime start time. Fleet home alone honors its
+[explicitly selected sort](#fleet-sorting) on existing updates; Last activity is
+an explicit opt-in to activity-driven reordering. Sorting adds no polling or
+network work and does not change this refresh cadence.
 
 Opening a session uses one `GET /api/runtimes/:key/hydrate` request. It is backed
 by one `getDashboardSnapshot` RPC call and its matching ordering barrier, instead

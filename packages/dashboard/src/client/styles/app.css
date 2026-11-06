@@ -80,18 +80,260 @@ body {
 	flex-wrap: wrap;
 }
 
+.fleet-visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+.fleet-section-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: var(--space-2) var(--space-4);
+	border-bottom: var(--hairline);
+	padding-bottom: var(--space-2);
+	margin-bottom: var(--space-3);
+}
+
+.fleet-section-head h2 {
+	font-size: var(--fs-h3);
+	color: var(--muted);
+	border: 0;
+	padding: 0;
+	margin: 0;
+}
+
+.fleet-live-headers,
+.fleet-project-order {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.fleet-sort-header {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	border: 0;
+	border-radius: var(--radius);
+	background: transparent;
+	padding: 6px 2px;
+	font-size: var(--fs-small);
+	font-weight: 400;
+	color: var(--muted);
+	cursor: pointer;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.fleet-sort-header:hover,
+.fleet-sort-header.active {
+	color: var(--text);
+}
+
+.fleet-sort-header.active {
+	font-weight: 600;
+}
+
+.fleet-sort-header:focus-visible {
+	outline: 2px solid var(--text);
+	outline-offset: 2px;
+}
+
+.fleet-sort-arrow {
+	width: 1em;
+	flex-shrink: 0;
+}
+
+.fleet-history-note,
+.fleet-live-note {
+	margin-bottom: var(--space-3);
+}
+
+/* One shared header, multiple project rowgroups; no per-project sort settings. */
+.fleet-session-table {
+	width: 100%;
+	table-layout: fixed;
+	border-collapse: collapse;
+	font-size: var(--fs-secondary);
+}
+
+.fleet-session-table th,
+.fleet-session-table td {
+	text-align: left;
+	vertical-align: middle;
+	padding: var(--space-1) var(--space-2);
+}
+
+.fleet-session-table th:first-child,
+.fleet-session-table td:first-child {
+	padding-left: 0;
+}
+
+.fleet-session-table th:last-child,
+.fleet-session-table td:last-child {
+	padding-right: 0;
+}
+
+.fleet-session-table thead th {
+	border-bottom: var(--hairline);
+	font-weight: 400;
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+.fleet-session-table .fleet-date-column {
+	width: 128px;
+}
+
+.fleet-session-table .fleet-messages-column {
+	width: 80px;
+}
+
+.fleet-session-table .fleet-actions-column {
+	width: 156px;
+}
+
+.fleet-session-table .fleet-project-row th {
+	padding: var(--space-5) 0 var(--space-1);
+	font-weight: 400;
+}
+
+.fleet-session-table .group-head h3 {
+	min-width: 0;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+
+.fleet-session-table .disk-row {
+	display: table-row;
+}
+
+.fleet-session-table .disk-row .name {
+	display: block;
+}
+
+.fleet-session-table .disk-row .disk-path-status {
+	display: block;
+	margin: 2px 0 0;
+	width: auto;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+.fleet-session-table .disk-created,
+.fleet-session-table .disk-activity,
+.fleet-session-table .disk-messages {
+	color: var(--muted);
+	font-size: var(--fs-small);
+	overflow-wrap: anywhere;
+}
+
+.fleet-session-table .actions {
+	justify-content: flex-end;
+}
+
+.fleet-session-table .fleet-more-row td {
+	padding: 0 0 var(--space-2);
+}
+
+@media (max-width: 700px) {
+	.fleet-sort-header,
+	.fleet-sort-reset,
+	.fleet-session-table .btn {
+		min-height: 44px;
+	}
+
+	.fleet-session-table,
+	.fleet-session-table thead,
+	.fleet-session-table tbody {
+		display: block;
+		width: 100%;
+	}
+
+	.fleet-session-table thead tr {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2);
+		border-bottom: var(--hairline);
+	}
+
+	.fleet-session-table thead th {
+		display: block;
+		width: auto;
+		padding: 0;
+		border: 0;
+	}
+
+	.fleet-session-table thead .fleet-date-column {
+		width: auto;
+	}
+
+	.fleet-session-table .fleet-static-heading {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+
+	.fleet-session-table .fleet-project-row,
+	.fleet-session-table .fleet-project-row th,
+	.fleet-session-table .fleet-more-row,
+	.fleet-session-table .fleet-more-row td {
+		display: block;
+	}
+
+	.fleet-session-table .disk-row {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: var(--space-2) var(--space-3);
+		padding: var(--space-2) 0;
+	}
+
+	.fleet-session-table .disk-row td {
+		display: block;
+		padding: 0;
+		min-width: 0;
+		max-width: 100%;
+	}
+
+	.fleet-session-table .fleet-name-cell {
+		grid-column: 1 / -1;
+	}
+
+	.fleet-session-table .disk-row [data-label]::before {
+		content: attr(data-label);
+		display: block;
+		font-size: var(--fs-small);
+		margin-bottom: 2px;
+	}
+
+	.fleet-session-table .disk-row .actions {
+		flex-wrap: wrap;
+	}
+
+	.fleet-session-table .group-head h3 {
+		flex: 1 1 100%;
+	}
+}
+
 /* Live sessions come first — the fleet's primary content. */
 .live-sessions {
 	margin-bottom: var(--space-6);
-}
-
-/* Past sessions: secondary stratum, tighter than live cards. */
-.past-sessions-head {
-	font-size: var(--fs-h3);
-	color: var(--muted);
-	border-bottom: var(--hairline);
-	padding-bottom: var(--space-2);
-	margin-bottom: var(--space-4);
 }
 
 .project-group {

@@ -211,6 +211,15 @@ export function createAppStore() {
 	let latestFleetRequestGeneration = 0;
 	/** Latest inventory request wins, so a slow earlier response cannot regress disk rows. */
 	let latestDiskSessionsRequestGeneration = 0;
+	/**
+	 * A session file is written only once its first assistant message exists, so the
+	 * inventory read when a runtime starts (or runs `/new`) usually predates its file.
+	 * Track the live message count each inventory read covered, per session file, so an
+	 * idle runtime with newer messages and a still-missing file triggers one re-read;
+	 * otherwise its original creation date would stay unknown until an unrelated refresh.
+	 */
+	let diskInventoryLoaded = false;
+	let inventoryCoveredMessageCounts = new Map<string, number>();
 	let fleetStatsPromise: Promise<void> | undefined;
 	let pairingExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 	let pairingExpiryTarget: number | undefined;
@@ -527,7 +536,29 @@ export function createAppStore() {
 					}),
 			};
 		}, sequence);
-		if (membershipChanged) void refreshDiskSessions().catch(() => {});
+		if (membershipChanged || liveSessionFileAwaitsInventory()) void refreshDiskSessions().catch(() => {});
+	}
+
+	function liveSessionFileMessageCounts(): Map<string, number> {
+		const counts = new Map<string, number>();
+		for (const { state } of fleet().runtimes) {
+			if (state.sessionFile) counts.set(state.sessionFile, state.messageCount);
+		}
+		return counts;
+	}
+
+	/** True when an idle live session has messages newer than the inventory read that missed its file. */
+	function liveSessionFileAwaitsInventory(): boolean {
+		if (!diskInventoryLoaded) return false;
+		const current = fleet();
+		const indexed = new Set(current.diskSessions.map((session) => session.path));
+		return current.runtimes.some(
+			({ state }) =>
+				state.sessionFile !== undefined &&
+				!state.isStreaming &&
+				!indexed.has(state.sessionFile) &&
+				state.messageCount > (inventoryCoveredMessageCounts.get(state.sessionFile) ?? 0),
+		);
 	}
 
 	function retainClosedSession(key: string, runtime?: RuntimeInfoDto): void {
@@ -657,6 +688,7 @@ export function createAppStore() {
 	function refreshFleet(): Promise<boolean> {
 		const requestGeneration = ++latestFleetRequestGeneration;
 		const mutationAtRequest = fleetMutationGeneration;
+		const coveredAtRequest = liveSessionFileMessageCounts();
 		return api.fleet().then(
 			(next) => {
 				if (requestGeneration !== latestFleetRequestGeneration || mutationAtRequest !== fleetMutationGeneration) {
@@ -664,6 +696,10 @@ export function createAppStore() {
 				}
 				replaceFleet(next);
 				setFleetError(undefined);
+				if (next.diskSessionsComplete !== false) {
+					diskInventoryLoaded = true;
+					inventoryCoveredMessageCounts = coveredAtRequest;
+				}
 				return next.diskSessionsComplete !== false;
 			},
 			(err) => {
@@ -677,10 +713,14 @@ export function createAppStore() {
 
 	function refreshDiskSessions(): Promise<void> {
 		const requestGeneration = ++latestDiskSessionsRequestGeneration;
+		// Claimed at request time: an in-flight read already covers these messages, so
+		// later snapshots must not stack duplicate scans while it is pending.
+		inventoryCoveredMessageCounts = liveSessionFileMessageCounts();
 		return api.sessions().then(
 			(inventory) => {
 				if (requestGeneration !== latestDiskSessionsRequestGeneration) return;
 				mutateFleet((current) => ({ ...current, diskSessions: inventory.sessions }));
+				diskInventoryLoaded = true;
 				setFleetError(undefined);
 			},
 			(err) => {
