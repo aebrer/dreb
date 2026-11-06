@@ -6,9 +6,12 @@ import { type AssistantMessage, type AssistantMessageEvent, EventStream, findMod
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
+import { log } from "../src/core/logger.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
+import * as outputGuard from "../src/core/output-guard.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import { runPrintMode } from "../src/modes/print-mode.js";
 import { createTestResourceLoader } from "./utilities.js";
 
 // Test hook for serialization tests: hold compact() in flight (hold/release)
@@ -154,6 +157,59 @@ describe("AgentSession auto-compaction queue resume", () => {
 		sessionManager.appendMessage(assistant);
 		session.agent.replaceMessages([user, assistant]);
 	}
+
+	/** Reject every request for its size, as a gateway body-size limit does. Returns the request count. */
+	function rejectEveryRequestForSize(): () => number {
+		let callCount = 0;
+		session.agent.streamFn = () => {
+			callCount += 1;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistant("error", "413 Payload Too Large");
+				stream.push({ type: "start", partial: message });
+				stream.push({ type: "error", reason: "error", error: message });
+			});
+			return stream;
+		};
+		return () => callCount;
+	}
+
+	/**
+	 * Answer each request with the next scripted response: an error message, or `{ answer }` for a
+	 * successful reply with that text. Returns the request count.
+	 */
+	function respondInSequence(...responses: Array<string | { answer: string }>): () => number {
+		let callCount = 0;
+		session.agent.streamFn = () => {
+			const response = responses[callCount] ?? { answer: "unexpected extra request" };
+			callCount += 1;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (typeof response === "string") {
+					const message = createAssistant("error", response);
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+				} else {
+					const message = createAssistant("stop");
+					message.content = [{ type: "text", text: response.answer }];
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				}
+			});
+			return stream;
+		};
+		return () => callCount;
+	}
+
+	/** A retryable error, then a size rejection of the retried request. */
+	const RETRIED_THEN_REJECTED_FOR_SIZE = [
+		[
+			"Bedrock's token throttle",
+			"Throttling error: Too many tokens, please wait before trying again.",
+			"Input is too long.",
+		],
+		["a server error", "503 Service Unavailable", "413 Payload Too Large"],
+	] as const;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `dreb-auto-compaction-queue-${Date.now()}`);
@@ -553,8 +609,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 			return stream;
 		};
 
-		await session.prompt("write a response that fills the output budget");
+		// prompt() waits for the compacted retry, which starts on a timer.
+		const prompted = session.prompt("write a response that fills the output budget");
 		await vi.advanceTimersByTimeAsync(100);
+		await prompted;
 
 		expect(callCount).toBe(6);
 		expect(requestedMaxTokens).toEqual(Array(6).fill(model.maxTokens));
@@ -565,6 +623,296 @@ describe("AgentSession auto-compaction queue resume", () => {
 			stopReason: "error",
 			errorMessage: "Response truncated at the configured output token limit after 3 attempts",
 		});
+	});
+
+	it.each([
+		[
+			"a LiteLLM proxy rejecting a Bedrock request",
+			String.raw`400 {"err_msg":"litellm.ContextWindowExceededError: litellm.BadRequestError: BedrockException: Context Window Error - {\"message\":\"Input is too long.\"}\nmodel=claude-opus-5-5. context_window_fallbacks=None. fallbacks=None.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing model","err_code":"BAD_REQUEST","status_code":400}`,
+		],
+		[
+			"Anthropic's request byte cap",
+			'413 {"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}',
+		],
+		["a gateway body-size limit", "413 Payload Too Large"],
+	])("should compact and retry after %s, far below the token window", async (_label, errorMessage) => {
+		let callCount = 0;
+		session.agent.streamFn = () => {
+			callCount += 1;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				// Byte caps reject requests whose token count is far below the context window.
+				const message = callCount === 1 ? createAssistant("error", errorMessage) : createAssistant("stop");
+				stream.push({ type: "start", partial: message });
+				if (message.stopReason === "error") {
+					stream.push({ type: "error", reason: "error", error: message });
+				} else {
+					stream.push({ type: "done", reason: "stop", message });
+				}
+			});
+			return stream;
+		};
+		const events: Array<{ type: string; reason?: string; willRetry?: boolean; errorMessage?: string }> = [];
+		session.subscribe((event) => {
+			if (event.type === "auto_compaction_start") events.push({ type: event.type, reason: event.reason });
+			if (event.type === "auto_compaction_end") {
+				events.push({ type: event.type, willRetry: event.willRetry, errorMessage: event.errorMessage });
+			}
+			if (event.type === "auto_retry_start" || event.type === "auto_retry_end") events.push({ type: event.type });
+		});
+
+		compactGate.hold();
+		let settled = false;
+		const prompted = session.prompt("describe these slides").then(() => {
+			settled = true;
+		});
+
+		// The rejected run has ended and compaction is in flight: prompt() must still be waiting.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events).toEqual([{ type: "auto_compaction_start", reason: "overflow" }]);
+		expect(settled).toBe(false);
+
+		// Compaction is done, but the compacted retry starts on a timer: still waiting.
+		compactGate.release();
+		await vi.advanceTimersByTimeAsync(50);
+		expect(events).toHaveLength(2);
+		expect(settled).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(50);
+		await prompted;
+
+		// prompt() resolved only once the compacted retry ended, so its answer is already the last message.
+		expect(session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+		expect(events).toEqual([
+			{ type: "auto_compaction_start", reason: "overflow" },
+			{ type: "auto_compaction_end", willRetry: true, errorMessage: undefined },
+		]);
+		expect(compactGate.calls).toBe(1);
+		expect(callCount).toBe(2);
+	});
+
+	it("resolves prompt() when overflow recovery gives up", async () => {
+		const calls = rejectEveryRequestForSize();
+		compactGate.failFirstN = 1;
+		const compactionErrors: Array<string | undefined> = [];
+		session.subscribe((event) => {
+			if (event.type === "auto_compaction_end") compactionErrors.push(event.errorMessage);
+		});
+
+		await session.prompt("describe these slides");
+
+		expect(compactionErrors).toEqual(["Context overflow recovery failed: summary failed"]);
+		expect(calls()).toBe(1);
+		// The rejected response was removed to compact and retry, so nothing answers the prompt.
+		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
+	});
+
+	it("resolves prompt() when the compacted retry cannot start", async () => {
+		rejectEveryRequestForSize();
+		const continueSpy = vi
+			.spyOn(session.agent, "continue")
+			.mockRejectedValue(new Error("No messages to continue from"));
+		const warningSpy = vi.spyOn(session, "warnInSession").mockImplementation(() => {});
+
+		const prompted = session.prompt("describe these slides");
+		await vi.advanceTimersByTimeAsync(100);
+		await prompted;
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(warningSpy).toHaveBeenCalledWith(
+			"Agent failed to continue after compaction: No messages to continue from",
+		);
+	});
+
+	it("releases prompt() when the session is aborted during overflow recovery", async () => {
+		rejectEveryRequestForSize();
+		compactGate.hold();
+		let settled = false;
+		const prompted = session.prompt("describe these slides").then(() => {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(settled).toBe(false);
+
+		await session.abort();
+		await prompted;
+
+		expect(settled).toBe(true);
+		session.abortCompaction();
+		compactGate.release();
+	});
+
+	it.each(RETRIED_THEN_REJECTED_FOR_SIZE)(
+		"should send the compacted request when a retried request is rejected for its size after %s",
+		async (_label, retryableError, sizeRejection) => {
+			settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } });
+			const calls = respondInSequence(retryableError, sizeRejection, { answer: "The slides show the roadmap." });
+			const events: Array<{ type: string; reason?: string; willRetry?: boolean; success?: boolean }> = [];
+			session.subscribe((event) => {
+				if (event.type === "auto_retry_start") events.push({ type: event.type });
+				if (event.type === "auto_retry_end") events.push({ type: event.type, success: event.success });
+				if (event.type === "auto_compaction_start") events.push({ type: event.type, reason: event.reason });
+				if (event.type === "auto_compaction_end") events.push({ type: event.type, willRetry: event.willRetry });
+			});
+
+			const prompted = session.prompt("describe these slides");
+			await vi.advanceTimersByTimeAsync(200);
+			await prompted;
+
+			// Backoff retry, then one compact-and-retry that actually sends the compacted request.
+			expect(events).toEqual([
+				{ type: "auto_retry_start" },
+				{ type: "auto_retry_end", success: false },
+				{ type: "auto_compaction_start", reason: "overflow" },
+				{ type: "auto_compaction_end", willRetry: true },
+			]);
+			expect(compactGate.calls).toBe(1);
+			expect(calls()).toBe(3);
+			expect(session.agent.state.messages.at(-1)).toMatchObject({
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "The slides show the roadmap." }],
+			});
+			// Both failed attempts stay in the session as history, but not in the context.
+			const isError = (message: { role: string; stopReason?: string }) =>
+				message.role === "assistant" && message.stopReason === "error";
+			expect(session.agent.state.messages.filter((message) => isError(message as never))).toEqual([]);
+			const persistedErrors = sessionManager
+				.getEntries()
+				.flatMap((entry) => (entry.type === "message" && isError(entry.message as never) ? [entry.message] : []));
+			expect(persistedErrors.map((message) => (message as AssistantMessage).errorMessage)).toEqual([
+				retryableError,
+				sizeRejection,
+			]);
+		},
+	);
+
+	it("should remove every trailing error a threshold compaction rebuilds and resume the interrupted turn", async () => {
+		// Exhausted retries leave every failed attempt in the session; only the last is in the context.
+		const user = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "hello" }],
+			timestamp: Date.now() - 1,
+		};
+		const lastAttempt = createAssistant("error", "529 overloaded_error");
+		sessionManager.appendMessage(user);
+		sessionManager.appendMessage(createAssistant("error", "529 overloaded_error"));
+		sessionManager.appendMessage(lastAttempt);
+		session.agent.replaceMessages([user, lastAttempt]);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(session.agent.state.messages.map((message) => message.role)).toEqual(["compactionSummary", "user"]);
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
+	describe("print mode", () => {
+		/** First request rejected for its size, then the compacted retry answers. */
+		function rejectFirstRequestForSize(answer: string): () => number {
+			let callCount = 0;
+			session.agent.streamFn = () => {
+				callCount += 1;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const message =
+						callCount === 1 ? createAssistant("error", "413 Payload Too Large") : createAssistant("stop");
+					if (message.stopReason === "stop") message.content = [{ type: "text", text: answer }];
+					stream.push({ type: "start", partial: message });
+					if (message.stopReason === "error") {
+						stream.push({ type: "error", reason: "error", error: message });
+					} else {
+						stream.push({ type: "done", reason: "stop", message });
+					}
+				});
+				return stream;
+			};
+			return () => callCount;
+		}
+
+		function captureOutput(): { stdout: string[]; errors: unknown[] } {
+			const stdout: string[] = [];
+			vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((text) => {
+				stdout.push(text);
+			});
+			vi.spyOn(outputGuard, "flushRawStdout").mockResolvedValue();
+			const errors: unknown[] = [];
+			vi.spyOn(log, "error").mockImplementation((message) => {
+				errors.push(message);
+			});
+			return { stdout, errors };
+		}
+
+		it("prints the answer of the compacted retry after a request is rejected for its size", async () => {
+			const calls = rejectFirstRequestForSize("The slides show the roadmap.");
+			const output = captureOutput();
+
+			const run = runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+			await vi.advanceTimersByTimeAsync(100);
+			const exitCode = await run;
+
+			expect(calls()).toBe(2);
+			expect(compactGate.calls).toBe(1);
+			expect(output.stdout).toEqual(["The slides show the roadmap.\n"]);
+			expect(output.errors).toEqual([]);
+			expect(exitCode).toBe(0);
+		});
+
+		it("fails loudly when recovery from a size rejection gives up", async () => {
+			const calls = rejectFirstRequestForSize("unreachable");
+			compactGate.failFirstN = 1;
+			const output = captureOutput();
+
+			const exitCode = await runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+
+			expect(calls()).toBe(1);
+			expect(output.stdout).toEqual([]);
+			expect(output.errors).toEqual(["Context overflow recovery failed: summary failed"]);
+			expect(exitCode).toBe(1);
+		});
+
+		it("reports the rejection when recovery ends without an error of its own", async () => {
+			const calls = rejectFirstRequestForSize("unreachable");
+			const output = captureOutput();
+			compactGate.hold();
+
+			const run = runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+			// A cancelled compaction ends without a result or an error message, and no retry follows.
+			await vi.advanceTimersByTimeAsync(0);
+			session.abortCompaction();
+			compactGate.release();
+			const exitCode = await run;
+
+			expect(calls()).toBe(1);
+			expect(output.stdout).toEqual([]);
+			expect(output.errors).toEqual(["413 Payload Too Large"]);
+			expect(exitCode).toBe(1);
+		});
+
+		it.each(RETRIED_THEN_REJECTED_FOR_SIZE)(
+			"prints the answer of the compacted retry when a retried request is rejected for its size after %s",
+			async (_label, retryableError, sizeRejection) => {
+				settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } });
+				const calls = respondInSequence(retryableError, sizeRejection, { answer: "The slides show the roadmap." });
+				const output = captureOutput();
+
+				const run = runPrintMode(session, { mode: "text", initialMessage: "describe these slides" });
+				await vi.advanceTimersByTimeAsync(200);
+				const exitCode = await run;
+
+				expect(calls()).toBe(3);
+				expect(compactGate.calls).toBe(1);
+				expect(output.stdout).toEqual(["The slides show the roadmap.\n"]);
+				expect(output.errors).toEqual([]);
+				expect(exitCode).toBe(0);
+			},
+		);
 	});
 
 	it("should not compact genuine output-limit exhaustion that could fit in context", async () => {

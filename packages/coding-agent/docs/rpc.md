@@ -635,7 +635,7 @@ Response:
 
 #### set_auto_compaction
 
-Enable or disable automatic compaction when context is nearly full.
+Enable or disable automatic compaction: when context is nearly full, and compact-and-retry when a provider rejects a request as too large.
 
 ```json
 {"type": "set_auto_compaction", "enabled": true}
@@ -1984,13 +1984,13 @@ Use `toolCallId` to correlate events. The `partialResult` in `tool_execution_upd
 
 ### auto_compaction_start / auto_compaction_end
 
-Emitted when automatic compaction runs (when context is nearly full).
+Emitted when automatic compaction runs: when context is nearly full, or when a provider rejects a request as too large.
 
 ```json
 {"type": "auto_compaction_start", "reason": "threshold"}
 ```
 
-The `reason` field is `"threshold"` (context getting large) or `"overflow"` (context exceeded limit).
+The `reason` field is `"threshold"` (context getting large) or `"overflow"` (the provider rejected the request as too large). An overflow can be a context-window error or a byte cap on the request body, such as a gateway's `413 Payload Too Large`, so it can happen with token counts far below the window. See [compaction.md](compaction.md#when-it-triggers).
 
 ```json
 {
@@ -2008,9 +2008,9 @@ The `reason` field is `"threshold"` (context getting large) or `"overflow"` (con
 
 `willRetry` is `true` whenever another model request is imminent after this event. That includes overflow recovery, resuming an interrupted assistant error, threshold compaction inside an active tool loop, and an active loop proceeding with intact context after mid-turn compaction is cancelled or fails. In-loop requests continue without calling `continue()`. Persistent `continueAfterAutoCompaction: true` can keep other pending work moving, but it does not restart a completed assistant answer with no queued input. Manual `compact` is outside this event path and does not continue because of that setting.
 
-If compaction was aborted, `result` is `null` and `aborted` is `true`. `willRetry` can still be `true` when the active agent loop will proceed without the compaction.
+If compaction was aborted, there is no `result` and `aborted` is `true`. `willRetry` can still be `true` when the active agent loop will proceed without the compaction.
 
-If compaction failed (e.g., API quota exceeded), `result` is `null`, `aborted` is `false`, and `errorMessage` contains the error description. As with cancellation, `willRetry` reflects whether the active loop will make another request.
+If compaction failed (e.g., API quota exceeded), or overflow recovery gave up because the compacted retry was rejected again, there is no `result`, `aborted` is `false`, and `errorMessage` contains the error description. As with cancellation, `willRetry` reflects whether the active loop will make another request.
 
 ### auto_retry_start / auto_retry_end
 

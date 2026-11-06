@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/telegram",
-	"version": "2.76.0",
+	"version": "2.77.0",
 	"description": "Telegram bot frontend for dreb coding agent",
 	"license": "MIT",
 	"type": "module",
@@ -30,6 +30,7 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
+		"@dreb/ai": "*",
 		"@dreb/coding-agent": "*",
 		"grammy": "^1.35.0"
 	},
