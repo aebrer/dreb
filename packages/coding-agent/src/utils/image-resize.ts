@@ -1,6 +1,6 @@
 import type { ImageContent } from "@dreb/ai";
 import { applyExifOrientation } from "./exif-orientation.js";
-import { loadPhoton } from "./photon.js";
+import { loadPhoton, type PhotonImageType } from "./photon.js";
 
 export interface ImageResizeOptions {
 	maxWidth?: number; // Default: 2000
@@ -29,6 +29,10 @@ const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
 	jpegQuality: 80,
 };
 
+// Lower JPEG qualities tried, highest first, only when neither PNG nor JPEG at the
+// configured quality fits. Steps at or above the configured quality are skipped.
+const FALLBACK_JPEG_QUALITIES = [85, 70, 55, 40];
+
 interface EncodedCandidate {
 	data: string;
 	encodedSize: number;
@@ -45,6 +49,19 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
 }
 
 /**
+ * Whether any pixel is not fully opaque (Photon stores pixels as RGBA).
+ * `get_raw_pixels` copies the whole raster out of WASM, so call this on a resized image only:
+ * on the source it would allocate memory proportional to the input, however large.
+ */
+function hasTransparency(image: PhotonImageType): boolean {
+	const pixels = image.get_raw_pixels();
+	for (let alpha = 3; alpha < pixels.length; alpha += 4) {
+		if (pixels[alpha] !== 255) return true;
+	}
+	return false;
+}
+
+/**
  * Resize an image to fit within the specified max dimensions and encoded file size.
  * Returns null if the image cannot be resized below maxBytes.
  *
@@ -53,8 +70,11 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
  *
  * Strategy for staying under maxBytes:
  * 1. First resize to maxWidth/maxHeight
- * 2. Try both PNG and JPEG formats, pick the smaller one
- * 3. If still too large, try JPEG with decreasing quality
+ * 2. Encode as PNG and as JPEG at jpegQuality, and pick the smaller one. An image
+ *    with transparency (checked on the resized pixels) keeps PNG whenever it fits:
+ *    JPEG has no alpha channel, so transparent pixels would become their stored
+ *    color (often black).
+ * 3. If neither fits, try JPEG with decreasing quality below jpegQuality
  * 4. If still too large, progressively reduce dimensions until 1x1
  */
 export async function resizeImage(img: ImageContent, options?: ImageResizeOptions): Promise<ResizedImage | null> {
@@ -104,38 +124,53 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			targetHeight = opts.maxHeight;
 		}
 
-		function tryEncodings(width: number, height: number, jpegQualities: number[]): EncodedCandidate[] {
+		const fallbackQualities = FALLBACK_JPEG_QUALITIES.filter((quality) => quality < opts.jpegQuality);
+
+		function encodeWithinLimit(width: number, height: number): EncodedCandidate | undefined {
 			const resized = photon!.resize(image!, width, height, photon!.SamplingFilter.Lanczos3);
 
 			try {
-				const candidates: EncodedCandidate[] = [encodeCandidate(resized.get_bytes(), "image/png")];
-				for (const quality of jpegQualities) {
-					candidates.push(encodeCandidate(resized.get_bytes_jpeg(quality), "image/jpeg"));
+				const png = encodeCandidate(resized.get_bytes(), "image/png");
+				// Transparency only matters when the PNG fits, and a fitting PNG always ends the
+				// search, so at most one raster is scanned per call, never larger than the output.
+				if (png.encodedSize < opts.maxBytes && hasTransparency(resized)) {
+					return png;
 				}
-				return candidates;
+
+				// Lossless PNG wins a tie.
+				const jpeg = encodeCandidate(resized.get_bytes_jpeg(opts.jpegQuality), "image/jpeg");
+				const smaller = jpeg.encodedSize < png.encodedSize ? jpeg : png;
+				if (smaller.encodedSize < opts.maxBytes) {
+					return smaller;
+				}
+
+				for (const quality of fallbackQualities) {
+					const candidate = encodeCandidate(resized.get_bytes_jpeg(quality), "image/jpeg");
+					if (candidate.encodedSize < opts.maxBytes) {
+						return candidate;
+					}
+				}
+				return undefined;
 			} finally {
 				resized.free();
 			}
 		}
 
-		const qualitySteps = Array.from(new Set([opts.jpegQuality, 85, 70, 55, 40]));
 		let currentWidth = targetWidth;
 		let currentHeight = targetHeight;
 
 		while (true) {
-			const candidates = tryEncodings(currentWidth, currentHeight, qualitySteps);
-			for (const candidate of candidates) {
-				if (candidate.encodedSize < opts.maxBytes) {
-					return {
-						data: candidate.data,
-						mimeType: candidate.mimeType,
-						originalWidth,
-						originalHeight,
-						width: currentWidth,
-						height: currentHeight,
-						wasResized: true,
-					};
-				}
+			const encoded = encodeWithinLimit(currentWidth, currentHeight);
+			if (encoded) {
+				return {
+					data: encoded.data,
+					mimeType: encoded.mimeType,
+					originalWidth,
+					originalHeight,
+					width: currentWidth,
+					height: currentHeight,
+					wasResized: true,
+				};
 			}
 
 			if (currentWidth === 1 && currentHeight === 1) {

@@ -77,11 +77,23 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 			},
 		});
 
+		// The last assistant message of the run, and why automatic context recovery gave up, if it did.
+		// Recovery removes a rejected response from the agent state before it compacts and retries.
+		let lastAssistant: AssistantMessage | undefined;
+		let recoveryError: string | undefined;
+
 		// Always subscribe to enable session persistence via _handleAgentEvent
 		session.subscribe((event) => {
 			// In JSON mode, output all events
 			if (mode === "json") {
 				writeRawStdout(`${JSON.stringify(event)}\n`);
+			}
+			if (event.type === "agent_start") {
+				recoveryError = undefined;
+			} else if (event.type === "message_end" && event.message.role === "assistant") {
+				lastAssistant = event.message as AssistantMessage;
+			} else if (event.type === "auto_compaction_end" && event.errorMessage) {
+				recoveryError = event.errorMessage;
 			}
 		});
 
@@ -115,6 +127,12 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 						}
 					}
 				}
+			} else if (lastAssistant?.stopReason === "error") {
+				// The run's last response was an error that is no longer in the agent state: automatic
+				// context recovery removed it (for example a request rejected as too large) to compact and
+				// retry, then gave up. Report why instead of exiting successfully with no output.
+				log.error(recoveryError ?? (lastAssistant.errorMessage || "Request error"));
+				exitCode = 1;
 			}
 		}
 

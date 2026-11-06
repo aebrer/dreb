@@ -308,7 +308,7 @@ describe("Context overflow error handling", () => {
 
 	// =============================================================================
 	// Amazon Bedrock
-	// Expected pattern: "Input is too long for requested model"
+	// Expected pattern: "Input is too long for requested model", or bare "Input is too long."
 	// =============================================================================
 
 	describe.skipIf(!isExpensiveLiveApiEnabled() || !hasBedrockCredentials())("Amazon Bedrock", () => {

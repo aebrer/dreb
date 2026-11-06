@@ -2,9 +2,111 @@
  * Tests for image processing utilities using Photon.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { convertToPng } from "../src/utils/image-convert.js";
 import { formatDimensionNote, resizeImage } from "../src/utils/image-resize.js";
+import { loadPhoton, type PhotonImageType } from "../src/utils/photon.js";
+
+type Photon = NonNullable<Awaited<ReturnType<typeof loadPhoton>>>;
+
+async function getPhoton(): Promise<Photon> {
+	const photon = await loadPhoton();
+	if (!photon) throw new Error("Photon is required for image resize tests");
+	return photon;
+}
+
+interface SyntheticImage {
+	width: number;
+	height: number;
+	/**
+	 * "photographic": smooth gradients with light noise, like a photo or rendered slide.
+	 * "flat": a few solid color bands, like a diagram or screenshot.
+	 */
+	content: "photographic" | "flat";
+	/** Make the left quarter fully transparent, stored as transparent black like most encoders do. */
+	transparentRegion?: boolean;
+	/** Make the left quarter half transparent (alpha 128), keeping its color, like a shadow or overlay. */
+	translucentRegion?: boolean;
+}
+
+/** RGBA pixels from a seeded generator, so every run encodes identical fixtures. */
+function synthesizePixels({
+	width,
+	height,
+	content,
+	transparentRegion,
+	translucentRegion,
+}: SyntheticImage): Uint8Array {
+	const pixels = new Uint8Array(width * height * 4);
+	let seed = 12345;
+	const noise = () => {
+		seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+		return (seed / 4294967296 - 0.5) * 2;
+	};
+	const clamp = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const i = (y * width + x) * 4;
+			if (transparentRegion && x < width / 4) continue; // stays (0, 0, 0, 0)
+			if (content === "photographic") {
+				const n = noise();
+				pixels[i] = clamp(128 + 100 * Math.sin(x / 97) + n);
+				pixels[i + 1] = clamp(128 + 100 * Math.cos(y / 71) + n);
+				pixels[i + 2] = clamp(128 + 60 * Math.sin((x + y) / 53) + n);
+			} else {
+				const band = ((x >> 6) + (y >> 5)) % 3;
+				pixels[i] = band === 0 ? 255 : 30;
+				pixels[i + 1] = band === 1 ? 255 : 30;
+				pixels[i + 2] = band === 2 ? 200 : 30;
+			}
+			pixels[i + 3] = translucentRegion && x < width / 4 ? 128 : 255;
+		}
+	}
+	return pixels;
+}
+
+/** Base64 of a synthetic image encoded as PNG or as JPEG at quality 80. */
+async function encodeSynthetic(spec: SyntheticImage, format: "png" | "jpeg"): Promise<string> {
+	const photon = await getPhoton();
+	const image = new photon.PhotonImage(synthesizePixels(spec), spec.width, spec.height);
+	try {
+		return Buffer.from(format === "png" ? image.get_bytes() : image.get_bytes_jpeg(80)).toString("base64");
+	} finally {
+		image.free();
+	}
+}
+
+/** Base64 sizes of the encodings resizeImage compares, produced the same way it resizes. */
+async function encodedSizesAt(
+	data: string,
+	width: number,
+	height: number,
+): Promise<{ png: number; jpeg: (quality: number) => number; dispose: () => void }> {
+	const photon = await getPhoton();
+	const source = photon.PhotonImage.new_from_byteslice(new Uint8Array(Buffer.from(data, "base64")));
+	const resized = photon.resize(source, width, height, photon.SamplingFilter.Lanczos3);
+	source.free();
+	const base64Size = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64").length;
+	return {
+		png: base64Size(resized.get_bytes()),
+		jpeg: (quality) => base64Size(resized.get_bytes_jpeg(quality)),
+		dispose: () => resized.free(),
+	};
+}
+
+/** RGBA of one pixel of a base64-encoded image. */
+async function pixelAt(data: string, x: number, y: number): Promise<number[]> {
+	const photon = await getPhoton();
+	const image = photon.PhotonImage.new_from_byteslice(new Uint8Array(Buffer.from(data, "base64")));
+	try {
+		const i = (y * image.get_width() + x) * 4;
+		return Array.from(image.get_raw_pixels().slice(i, i + 4));
+	} finally {
+		image.free();
+	}
+}
+
+const DEFAULT_MAX_BYTES = 4.5 * 1024 * 1024;
 
 // Small 2x2 red PNG image (base64) - generated with ImageMagick
 const TINY_PNG =
@@ -111,6 +213,151 @@ describe("resizeImage", () => {
 		expect(result!.wasResized).toBe(false);
 		expect(result!.originalWidth).toBe(2);
 		expect(result!.originalHeight).toBe(2);
+	});
+
+	describe("output format", () => {
+		it("returns a photographic JPEG just over the default size limit as a JPEG of about its original size", async () => {
+			// A 2001x1125 render: one pixel over the 2000 px default, so it must be resized.
+			const input = await encodeSynthetic({ width: 2001, height: 1125, content: "photographic" }, "jpeg");
+			const sizes = await encodedSizesAt(input, 2000, 1124);
+			const pngSize = sizes.png;
+			sizes.dispose();
+			// The PNG fits under the limit, so returning the first fitting encoding picks it.
+			expect(pngSize).toBeLessThan(DEFAULT_MAX_BYTES);
+
+			const result = await resizeImage({ type: "image", data: input, mimeType: "image/jpeg" });
+
+			expect(result).not.toBeNull();
+			expect(result!.mimeType).toBe("image/jpeg");
+			expect(result!.wasResized).toBe(true);
+			expect([result!.width, result!.height]).toEqual([2000, 1124]);
+			expect(result!.data.length).toBeLessThan(input.length * 1.25);
+			expect(result!.data.length * 4).toBeLessThan(pngSize);
+		});
+
+		it("keeps PNG for a flat graphic where PNG is smaller", async () => {
+			const input = await encodeSynthetic({ width: 801, height: 450, content: "flat" }, "png");
+			const sizes = await encodedSizesAt(input, 800, 449);
+			const [pngSize, jpegSize] = [sizes.png, sizes.jpeg(80)];
+			sizes.dispose();
+			expect(pngSize).toBeLessThan(jpegSize);
+
+			const result = await resizeImage(
+				{ type: "image", data: input, mimeType: "image/png" },
+				{ maxWidth: 800, maxHeight: 800 },
+			);
+
+			expect(result).not.toBeNull();
+			expect(result!.mimeType).toBe("image/png");
+			expect([result!.width, result!.height]).toEqual([800, 449]);
+			expect(result!.data.length).toBe(pngSize);
+		});
+
+		it("keeps PNG for a transparent image whose JPEG would be smaller, preserving the transparency", async () => {
+			const input = await encodeSynthetic(
+				{ width: 801, height: 450, content: "photographic", transparentRegion: true },
+				"png",
+			);
+			const sizes = await encodedSizesAt(input, 800, 449);
+			const [pngSize, jpegSize] = [sizes.png, sizes.jpeg(80)];
+			sizes.dispose();
+			expect(jpegSize).toBeLessThan(pngSize);
+
+			const result = await resizeImage(
+				{ type: "image", data: input, mimeType: "image/png" },
+				{ maxWidth: 800, maxHeight: 800 },
+			);
+
+			expect(result).not.toBeNull();
+			expect(result!.mimeType).toBe("image/png");
+			expect((await pixelAt(result!.data, 10, 200))[3]).toBe(0);
+		});
+
+		it("keeps PNG for a partly transparent image whose JPEG would be smaller", async () => {
+			const input = await encodeSynthetic(
+				{ width: 801, height: 450, content: "photographic", translucentRegion: true },
+				"png",
+			);
+			const sizes = await encodedSizesAt(input, 800, 449);
+			const [pngSize, jpegSize] = [sizes.png, sizes.jpeg(80)];
+			sizes.dispose();
+			expect(jpegSize).toBeLessThan(pngSize);
+
+			const result = await resizeImage(
+				{ type: "image", data: input, mimeType: "image/png" },
+				{ maxWidth: 800, maxHeight: 800 },
+			);
+
+			expect(result).not.toBeNull();
+			expect(result!.mimeType).toBe("image/png");
+			const alpha = (await pixelAt(result!.data, 10, 200))[3];
+			expect(alpha).toBeGreaterThan(0);
+			expect(alpha).toBeLessThan(255);
+		});
+
+		it("checks transparency on the resized pixels, never copying the full-size source", async () => {
+			// Copying the source raster out of WASM costs memory proportional to the input, which
+			// is unbounded; the resized raster is bounded by maxWidth x maxHeight.
+			const input = await encodeSynthetic({ width: 1601, height: 900, content: "flat" }, "png");
+			const photon = await getPhoton();
+			const getRawPixels = photon.PhotonImage.prototype.get_raw_pixels;
+			const scanned: string[] = [];
+			const spy = vi.spyOn(photon.PhotonImage.prototype, "get_raw_pixels").mockImplementation(function (
+				this: PhotonImageType,
+			) {
+				scanned.push(`${this.get_width()}x${this.get_height()}`);
+				return getRawPixels.call(this);
+			});
+			try {
+				const result = await resizeImage(
+					{ type: "image", data: input, mimeType: "image/png" },
+					{ maxWidth: 800, maxHeight: 800 },
+				);
+
+				expect(result).not.toBeNull();
+				expect([result!.width, result!.height]).toEqual([800, 450]);
+			} finally {
+				spy.mockRestore();
+			}
+			expect(scanned).toEqual(["800x450"]);
+		});
+
+		it("still falls back to JPEG for a transparent image whose PNG does not fit", async () => {
+			const input = await encodeSynthetic(
+				{ width: 801, height: 450, content: "photographic", transparentRegion: true },
+				"png",
+			);
+			const sizes = await encodedSizesAt(input, 800, 449);
+			const [pngSize, jpegSize] = [sizes.png, sizes.jpeg(80)];
+			sizes.dispose();
+			const maxBytes = Math.floor((pngSize + jpegSize) / 2);
+
+			const result = await resizeImage(
+				{ type: "image", data: input, mimeType: "image/png" },
+				{ maxWidth: 800, maxHeight: 800, maxBytes },
+			);
+
+			expect(result).not.toBeNull();
+			expect(result!.mimeType).toBe("image/jpeg");
+			expect([result!.width, result!.height]).toEqual([800, 449]);
+			expect(result!.data.length).toBe(jpegSize);
+		});
+
+		it("lowers JPEG quality before dimensions when neither PNG nor JPEG at the configured quality fits", async () => {
+			const input = await encodeSynthetic({ width: 400, height: 300, content: "photographic" }, "png");
+			const sizes = await encodedSizesAt(input, 400, 300);
+			const [pngSize, configuredJpegSize, lowestJpegSize] = [sizes.png, sizes.jpeg(80), sizes.jpeg(40)];
+			sizes.dispose();
+			const maxBytes = Math.floor((configuredJpegSize + lowestJpegSize) / 2);
+			expect(maxBytes).toBeLessThan(Math.min(pngSize, configuredJpegSize));
+
+			const result = await resizeImage({ type: "image", data: input, mimeType: "image/png" }, { maxBytes });
+
+			expect(result).not.toBeNull();
+			expect(result!.mimeType).toBe("image/jpeg");
+			expect([result!.width, result!.height]).toEqual([400, 300]);
+			expect(result!.data.length).toBeLessThan(maxBytes);
+		});
 	});
 });
 
