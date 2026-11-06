@@ -19,6 +19,7 @@ import {
 	normalizeFleetQuery,
 } from "../state/fleet-filtering.js";
 import {
+	countUnknownOriginalCreation,
 	diskSessionDisplayName,
 	type FleetSortKey,
 	runtimeDisplayName,
@@ -211,6 +212,12 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 		return sortFleetDiskGroups(filterFleetDiskSessions(fleet.diskSessions, query()), fleet.runtimes, fleetSort());
 	});
 	const diskByProject = createMemo(() => new Map(diskGroups()));
+	// Visible counterpart to the screen-reader help: says why some cards sit last.
+	// Counts only the live cards currently shown, so it agrees with active filters.
+	const unknownLiveCreation = createMemo(() => {
+		if (fleetSort().key !== "created") return 0;
+		return countUnknownOriginalCreation(liveRuntimes(), props.store.fleet().diskSessions);
+	});
 	const matchingPastCount = createMemo(() => diskGroups().reduce((total, [, sessions]) => total + sessions.length, 0));
 	const hasPastSessions = createMemo(() => {
 		const fleet = props.store.fleet();
@@ -391,6 +398,13 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 							<Show when={liveRuntimes().length === 0}>
 								<p class="muted">No live sessions match these filters.</p>
 							</Show>
+							<Show when={unknownLiveCreation() > 0}>
+								<p class="fleet-live-note muted small">
+									{unknownLiveCreation() === 1
+										? "1 live session has no known creation date yet, so it is listed last."
+										: `${unknownLiveCreation()} live sessions have no known creation date yet, so they are listed last.`}
+								</p>
+							</Show>
 							<div class="session-grid">
 								<For each={liveRuntimes().map((runtime) => runtime.key)}>
 									{(key) => (
@@ -406,9 +420,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					<Show when={hasPastSessions()}>
 						<section class="past-sessions" aria-labelledby="past-sessions-heading">
 							<div class="fleet-section-head">
-								<h2 id="past-sessions-heading" class="past-sessions-head">
-									past sessions
-								</h2>
+								<h2 id="past-sessions-heading">past sessions</h2>
 								<fieldset class="fleet-project-order" aria-label="Sort past projects">
 									<FleetSortHeader sortKey="path" label="Project" />
 									<FleetSortReset />

@@ -76,23 +76,36 @@ function stableRuntimeOrder(a: RuntimeInfoDto, b: RuntimeInfoDto): number {
 	);
 }
 
+// Metadata may still be loading, and a new session's file exists only after its first
+// assistant reply. Match exact file identity, never CWD/name/session ID, and never
+// silently replace original creation with the current runtime's start.
+function originalCreation(inventory: readonly SessionInfoDto[]): (runtime: RuntimeInfoDto) => number | undefined {
+	const createdByFile = new Map(inventory.map((session) => [session.path, timestamp(session.created)] as const));
+	return (runtime) => (runtime.state.sessionFile ? createdByFile.get(runtime.state.sessionFile) : undefined);
+}
+
+/** Live runtimes that "Session created" must list last because no saved creation date matches them. */
+export function countUnknownOriginalCreation(
+	runtimes: readonly RuntimeInfoDto[],
+	inventory: readonly SessionInfoDto[],
+): number {
+	const created = originalCreation(inventory);
+	return runtimes.filter((runtime) => created(runtime) === undefined).length;
+}
+
 export function sortFleetRuntimes(
 	runtimes: readonly RuntimeInfoDto[],
 	inventory: readonly SessionInfoDto[],
 	sort: FleetSortPreference,
 	name: (runtime: RuntimeInfoDto) => string = runtimeDisplayName,
 ): RuntimeInfoDto[] {
-	// Metadata may still be loading. Match exact file identity, never CWD/name/session ID,
-	// and never silently replace original creation with the current runtime's start.
-	const createdByFile = new Map(
-		sort.key === "created" ? inventory.map((session) => [session.path, timestamp(session.created)] as const) : [],
-	);
+	const created = sort.key === "created" ? originalCreation(inventory) : () => undefined;
 	const value = (runtime: RuntimeInfoDto): SortValue => {
 		switch (sort.key) {
 			case "activity":
 				return timestamp(runtime.lastActivity);
 			case "created":
-				return runtime.state.sessionFile ? createdByFile.get(runtime.state.sessionFile) : undefined;
+				return created(runtime);
 			case "started":
 				return timestamp(runtime.createdAt);
 			case "name":

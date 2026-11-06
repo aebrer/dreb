@@ -93,6 +93,66 @@ describe("Fleet runtime ordering", () => {
 		]);
 	});
 
+	// Key order deliberately disagrees with path and start order (runtime keys are
+	// random hex), so dropping either stable dimension changes the result.
+	const beforeDayOne = "2025-12-31T00:00:00.000Z";
+	const pathFirstEarly = () => runtime("ffffffffffff", { cwd: "/a", createdAt: day(1), lastActivity: day(5) });
+	const pathFirstLate = () => runtime("000000000000", { cwd: "/a", createdAt: day(3), lastActivity: day(5) });
+	const pathSecondEarliest = () =>
+		runtime("888888888888", { cwd: "/b", createdAt: beforeDayOne, lastActivity: day(5) });
+	const permutations = <T>(items: T[]): T[][] => [
+		items,
+		[...items].reverse(),
+		[items[1], items[0], items[2]],
+		[items[2], items[0], items[1]],
+	];
+
+	it("orders Default by effective path, then runtime start, then key — not by key or start alone", () => {
+		const live = [pathFirstEarly(), pathFirstLate(), pathSecondEarliest()];
+		for (const direction of ["asc", "desc"] as const) {
+			for (const input of permutations(live)) {
+				expect(keys(sortFleetRuntimes(input, [], { key: "default", direction }))).toEqual([
+					"ffffffffffff",
+					"000000000000",
+					"888888888888",
+				]);
+			}
+		}
+	});
+
+	it.each(["activity", "name", "created"] as const)(
+		"breaks %s ties by path, then runtime start, in either direction",
+		(key) => {
+			const live = [pathFirstEarly(), pathFirstLate(), pathSecondEarliest()];
+			for (const r of live) r.state.sessionName = "Equal";
+			const inventory = live.map((r) => disk(r.key, { path: r.state.sessionFile!, created: day(2) }));
+			for (const direction of ["asc", "desc"] as const) {
+				for (const input of permutations(live)) {
+					expect(keys(sortFleetRuntimes(input, inventory, { key, direction }))).toEqual([
+						"ffffffffffff",
+						"000000000000",
+						"888888888888",
+					]);
+				}
+			}
+		},
+	);
+
+	it("breaks Runtime started ties by path and Project path ties by runtime start, in either direction", () => {
+		const sameStartA = runtime("ffffffffffff", { cwd: "/a", createdAt: day(2) });
+		const sameStartB = runtime("000000000000", { cwd: "/b", createdAt: day(2) });
+		for (const direction of ["asc", "desc"] as const) {
+			expect(keys(sortFleetRuntimes([sameStartB, sameStartA], [], { key: "started", direction }))).toEqual([
+				"ffffffffffff",
+				"000000000000",
+			]);
+			expect(keys(sortFleetRuntimes([pathFirstLate(), pathFirstEarly()], [], { key: "path", direction }))).toEqual([
+				"ffffffffffff",
+				"000000000000",
+			]);
+		}
+	});
+
 	it.each(FLEET_SORT_OPTIONS.map(({ key }) => key))(
 		"uses fixed identity ties for %s, not input order or direction",
 		(key) => {

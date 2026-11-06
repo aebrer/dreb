@@ -6,6 +6,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { type AssistantMessage, isContextOverflow } from "@dreb/ai";
 import type { Api } from "grammy";
 import { InputFile } from "grammy";
 import type { TrackedAgent } from "../types.js";
@@ -212,16 +213,22 @@ export interface EventDisplayState {
 
 /**
  * Check if an error message looks retryable (overloaded, rate limit, server errors).
- * Mirrors the core's _isRetryableError check as a defensive Layer 2.
+ * Mirrors the core's _isRetryableError check as a defensive Layer 2, including its exclusions.
  */
 const RETRYABLE_ERROR_PATTERN =
-	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|ended without|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
+	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|throttl|wait before trying again|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|ended without|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
 
-function isRetryableError(message: { errorMessage?: string; refusal?: unknown }): boolean {
+function isRetryableError(message: { stopReason?: string; errorMessage?: string; refusal?: unknown }): boolean {
 	// Like the core, never expect a retry after a safety refusal: its provider-supplied
 	// explanation is free text that could match the pattern, and waiting would hang the chat.
 	if (message.refusal) return false;
-	return !!message.errorMessage && RETRYABLE_ERROR_PATTERN.test(message.errorMessage);
+	if (!message.errorMessage) return false;
+	// Like the core, never expect a retry after a context overflow (including a request rejected
+	// for its size): the core compacts instead and emits auto_compaction_* rather than auto_retry_*,
+	// so nothing would clear pendingRetry. Overflow text can contain a retry token by chance, such
+	// as "502" in a dated model ID ("claude-3-7-sonnet-20250219").
+	if (isContextOverflow(message as AssistantMessage)) return false;
+	return RETRYABLE_ERROR_PATTERN.test(message.errorMessage);
 }
 
 /**
@@ -423,11 +430,15 @@ export async function handleAgentEvent(
 		}
 
 		case "auto_compaction_end": {
-			const result = (event as any).result;
+			const { result, errorMessage } = event as any;
 			if (result) {
 				const before = result.tokensBefore || 0;
 				const msg = `🗜 Context compacted (was ${Math.round(before / 1000)}k tokens)`;
 				send(msg);
+			} else if (errorMessage) {
+				// Compaction failed, or overflow recovery gave up after its one compact-and-retry
+				// attempt. Like the TUI, show why, so the failure is not silent.
+				send(`❌ ${errorMessage}`, true);
 			}
 			break;
 		}

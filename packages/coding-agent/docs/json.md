@@ -119,7 +119,7 @@ Errors surface as events, not as broken JSON or exit codes:
 - **Tool execution errors** produce a `tool_execution_end` event with `isError: true` and the error message in `result`.
 - **Context overflow or a proactive threshold** triggers `auto_compaction_start` / `auto_compaction_end`. If compaction fails, `errorMessage` is set. `willRetry: true` means another model request is imminent, including continuation inside the same tool loop.
 
-The JSON stream always ends with an `agent_end` event, even on failure. If the process exits without `agent_end`, the connection was interrupted (e.g., SIGTERM).
+Every run ends with an `agent_end` event, even on failure. Automatic retry and compaction events can follow it, and a retried request (after backoff, or after overflow compaction) starts a new run with its own `agent_start` … `agent_end`. dreb exits once no automatic retry or recovery is pending, so the stream ends with the final run's `agent_end` or the retry and compaction events that follow it, such as an `auto_compaction_end` whose `errorMessage` says why recovery stopped. If the process exits without `agent_end`, the connection was interrupted (e.g., SIGTERM).
 
 ## Event ordering
 
