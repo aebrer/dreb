@@ -266,7 +266,9 @@ async function openSession(
 		window.location.hash = `#/session/${key}`;
 	}, key);
 	try {
-		await page.locator(SIDEBAR).first().waitFor({ state: "attached", timeout: 5_000 });
+		// Same budget as expectVisible: under full-workspace test load the Vite dev
+		// server and Chromium can take well over 5s to route and mount the session.
+		await page.locator(SIDEBAR).first().waitFor({ state: "attached", timeout: 30_000 });
 	} catch (error) {
 		throw new Error(
 			`Sidebar did not mount; page errors: ${pageErrors.join("; ")}; API calls: ${apiCalls.join(", ")}`,
