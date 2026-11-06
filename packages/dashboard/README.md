@@ -116,6 +116,39 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
 
+### Fleet search and filters
+
+**Search sessions** matches a case-insensitive substring of the displayed session
+name or project path across live cards and saved sessions. Leading/trailing
+spaces are ignored. Live names include current local renames and their displayed
+fallback; historical unnamed rows use their displayed first-message fallback.
+Full project paths and displayed `~/…` aliases are searchable. Live cards search
+their effective runtime CWD; historical rows search their recorded CWD, never a
+canonical resume-directory replacement or opaque session-file path. `/tmp`
+grouping and exact-file action identities stay unchanged. This is metadata
+search, not full-text conversation search.
+
+Click the **needs attention** count to show only flagged live sessions; click it
+again or the **live** count to show all live sessions. These native pressed-state
+buttons filter live cards only: historical search results remain unaffected.
+The heading counts remain global inventory totals; the result line reports all
+matching live and past sessions, not just the visible three-row previews.
+
+Search is applied to complete historical inventory before grouping, sorting and
+previews; project groups rank by their leading matching member. All live files
+remain excluded from history even when their live card is hidden. Search and
+attention combine with the existing shared sort and expansion state.
+**Clear filters** resets search/attention only; sorting's **Reset** leaves filters
+intact. No-match messages keep the controls available rather than claiming an
+existing inventory is empty. Controls are labelled, keyboard-operable and have
+44px touch targets at <=700px.
+
+Filters are local to the mounted Fleet screen and clear on reload or navigation;
+only the existing sorting preference persists. Filtering uses existing
+snapshots, with no new polling, network requests, transcript hydration, host
+settings, session writes or dependencies. Session/subagent sidebars stay
+unfiltered and stably ordered.
+
 ### Fleet sorting
 
 Fleet home integrates native sorting buttons into its headers instead of a

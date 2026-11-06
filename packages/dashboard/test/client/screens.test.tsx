@@ -6955,8 +6955,192 @@ describe("dashboard client regressions", () => {
 				upsertRuntime: vi.fn(),
 				refreshDiskSessions: vi.fn(async () => {}),
 			};
-			return { el: mount(() => <FleetScreen store={store} />), store, setFleet };
+			const { container: el, dispose } = mountDisposable(() => <FleetScreen store={store} />);
+			disposers.push(dispose);
+			return { el, store, setFleet, dispose };
 		}
+
+		describe("Fleet metadata filters", () => {
+			function search(el: HTMLElement, query: string): HTMLInputElement {
+				const input = el.querySelector<HTMLInputElement>("#fleet-search")!;
+				input.value = query;
+				input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+				return input;
+			}
+			const attention = (el: HTMLElement) => el.querySelectorAll<HTMLButtonElement>(".fleet-count-filter")[1];
+			const clear = (el: HTMLElement) => el.querySelector<HTMLButtonElement>(".fleet-clear-filters")!;
+
+			it("keeps total counts, live attention scope and displayed result counts distinct without requesting data", () => {
+				const a = { ...runtimeInfo("Alpha", "/live/a"), needsAttention: true };
+				const b = runtimeInfo("Beta", "/live/b");
+				b.state.sessionFile = "/sessions/Beta.jsonl";
+				const { el } = fixture([b, a], [disk("Beta", "/old/b", 2), disk("Past", "/past", 1)]);
+				const requests = [api.sessions, api.fleet, api.hydrate, api.stats, api.runtime];
+				for (const request of requests) vi.mocked(request).mockClear();
+				expect(el.querySelector("label[for='fleet-search']")?.textContent).toBe("Search sessions");
+				expect(el.querySelector<HTMLInputElement>("#fleet-search")?.type).toBe("search");
+				expect(clear(el).disabled).toBe(true);
+				attention(el).click();
+				expect(names(el)).toEqual(["Alpha"]);
+				expect(diskNames(el)).toEqual(["Past"]);
+				expect(attention(el).getAttribute("aria-pressed")).toBe("true");
+				search(el, " beta ");
+				expect(names(el)).toEqual([]);
+				expect(diskNames(el)).toEqual([]); // matching live file never becomes history
+				expect(el.querySelector(".fleet-counts")?.textContent).toContain("2 live");
+				expect(el.querySelector(".fleet-counts")?.textContent).toContain("1 needs attention");
+				expect(el.querySelector(".fleet-counts")?.textContent).toContain("2 on disk");
+				expect(el.querySelector(".fleet-filter-results")?.textContent).toContain("live sessions only");
+				expect(el.querySelector(".fleet-filter-results")?.textContent).toContain("0 matching live sessions");
+				expect(el.querySelector(".fleet-filter-results")?.getAttribute("aria-live")).toBe("polite");
+				expect(el.textContent).not.toContain("No sessions yet.");
+				clear(el).click();
+				expect(names(el)).toEqual(["Alpha", "Beta"]);
+				expect(diskNames(el)).toEqual(["Past"]);
+				for (const request of requests) expect(request).not.toHaveBeenCalled();
+			});
+
+			it("filters complete groups before preview and reranks groups using their matching leading member", () => {
+				const entries = [
+					disk("unrelated newest", "/a", 20),
+					disk("unrelated second", "/a", 19),
+					disk("unrelated third", "/a", 18),
+					disk("Needle one", "/a", 1),
+					disk("Needle two", "/b", 10),
+				];
+				const { el } = fixture([], entries);
+				expect(diskNames(el)).not.toContain("Needle one");
+				search(el, " NEEDLE ");
+				expect(diskNames(el)).toEqual(["Needle two", "Needle one"]);
+				expect([...el.querySelectorAll(".group-head h3")].map((e) => e.textContent)).toEqual(["/b", "/a"]);
+				expect(el.querySelector(".fleet-filter-results")?.textContent).toContain("2 matching past sessions");
+				search(el, "/a");
+				expect(diskNames(el)).toEqual(["unrelated newest", "unrelated second", "unrelated third"]);
+				expect(el.querySelector(".disk-more")?.textContent).toContain("all 4 matches");
+				el.querySelector<HTMLButtonElement>(".disk-more")!.click();
+				expect(diskNames(el)).toHaveLength(4);
+				search(el, "Needle two");
+				clear(el).click();
+				expect(el.querySelector(".disk-more")?.textContent).toContain("show fewer");
+				expect(diskNames(el)).toHaveLength(5);
+			});
+
+			it("keeps filter clearing separate from sorting and resets only screen-local state on remount", () => {
+				const a = { ...runtimeInfo("Alpha", "/a"), needsAttention: true };
+				const b = runtimeInfo("Beta", "/b");
+				const { el, dispose } = fixture([a, b], [disk("Past", "/past", 1)]);
+				header(el, "name").click();
+				header(el, "name").click();
+				search(el, "Alpha");
+				attention(el).click();
+				el.querySelector<HTMLButtonElement>(".fleet-sort-reset")!.click();
+				expect(el.querySelector<HTMLInputElement>("#fleet-search")!.value).toBe("Alpha");
+				expect(attention(el).getAttribute("aria-pressed")).toBe("true");
+				header(el, "name").click();
+				header(el, "name").click();
+				clear(el).click();
+				expect(names(el)).toEqual(["Beta", "Alpha"]);
+				expect(header(el, "name").dataset.sortDirection).toBe("desc");
+				search(el, "Alpha");
+				attention(el).click();
+				dispose();
+				el.remove();
+				const remounted = fixture([a, b]).el;
+				expect(names(remounted)).toEqual(["Beta", "Alpha"]);
+				expect(remounted.querySelector<HTMLInputElement>("#fleet-search")!.value).toBe("");
+				expect(attention(remounted).getAttribute("aria-pressed")).toBe("false");
+				expect(header(remounted, "name").dataset.sortDirection).toBe("desc");
+			});
+
+			it("applies a pending search to late inventory and live-attention updates without moving input focus", async () => {
+				const a = runtimeInfo("Needle live", "/live");
+				a.state.sessionName = "Needle live";
+				const { el, setFleet } = fixture([a]);
+				const input = search(el, "needle");
+				input.focus();
+				attention(el).click(); // programmatic click does not deliberately move keyboard focus
+				expect(names(el)).toEqual([]);
+				setFleet({
+					runtimes: [{ ...a, needsAttention: true }],
+					diskSessions: [disk("Other", "/other", 2), disk("Needle saved", "/past", 1)],
+				});
+				await Promise.resolve();
+				expect(document.activeElement).toBe(input);
+				expect(names(el)).toEqual(["Needle live"]);
+				expect(diskNames(el)).toEqual(["Needle saved"]);
+				expect(input.value).toBe("needle");
+				setFleet({ runtimes: [{ ...a, needsAttention: false }], diskSessions: [] });
+				expect(names(el)).toEqual([]);
+				expect(attention(el).getAttribute("aria-pressed")).toBe("true");
+				expect(attention(el).textContent).toBe("0 needs attention");
+				expect(attention(el).disabled).toBe(false);
+			});
+
+			it("retains exact action and delete-confirmation targets through filtering and fresh inventory replacement", async () => {
+				const target = disk("Needle target", "/historical/target", 1);
+				const a = { ...runtimeInfo("Needle live", "/a"), needsAttention: true };
+				const b = runtimeInfo("Other live", "/b");
+				const { el, store, setFleet } = fixture([b, a], [disk("Other past", "/other", 2), target]);
+				search(el, "needle");
+				attention(el).click();
+				el.querySelector<HTMLButtonElement>(".session-card .btn-primary")!.click();
+				expect(store.navigate).toHaveBeenCalledWith({ screen: "session", key: "Needle live" });
+				el.querySelector<HTMLButtonElement>(".session-card .btn-danger")!.click();
+				await vi.waitFor(() => expect(api.stopRuntime).toHaveBeenCalledWith("Needle live"));
+				el.querySelector<HTMLButtonElement>(".disk-row .btn-danger")!.click();
+				setFleet({ runtimes: [b, a], diskSessions: [{ ...target, name: "Renamed away" }] });
+				expect(diskNames(el)).toEqual([]);
+				el.querySelector<HTMLButtonElement>(".modal .btn-danger")!.click();
+				await vi.waitFor(() => expect(api.deleteSession).toHaveBeenCalledWith(target.path));
+			});
+
+			it("searches the recorded historical path and keeps its missing-directory chooser bound to that exact file", async () => {
+				const target = { ...disk("Target", "/home/test/Old-project", 1), cwdAvailable: false };
+				const { el } = fixture([], [disk("Other", "/other", 2), target]);
+				vi.mocked(api.createRuntime).mockClear();
+				search(el, " ~/OLD-project ");
+				expect(diskNames(el)).toEqual(["Target"]);
+				el.querySelector<HTMLButtonElement>(".disk-row .btn")!.click();
+				expect(el.querySelector(".resume-historical-cwd")?.textContent).toBe(target.cwd);
+				expect(api.createRuntime).not.toHaveBeenCalled();
+				const input = el.querySelector<HTMLInputElement>("#resume-runtime-cwd")!;
+				input.value = "/replacement";
+				input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+				el.querySelector<HTMLButtonElement>(".resume-session-modal .btn-primary")!.click();
+				await vi.waitFor(() =>
+					expect(api.createRuntime).toHaveBeenCalledWith("/replacement", { sessionPath: target.path }),
+				);
+				expect(target.cwd).toBe("/home/test/Old-project");
+			});
+
+			it("shows genuine empty inventory separately and preserves error banners with no matching results", () => {
+				const { el: empty, dispose: disposeEmpty } = fixture([]);
+				search(empty, "missing");
+				expect(empty.textContent).toContain("No sessions yet.");
+				expect(empty.querySelector("#fleet-search")).not.toBeNull();
+				expect(clear(empty).disabled).toBe(false);
+				disposeEmpty();
+				empty.remove();
+				const base = makeStore();
+				const el = mount(() => (
+					<FleetScreen
+						store={{
+							...base,
+							fleet: () => ({ runtimes: [runtimeInfo("Other")], diskSessions: [disk("Past", "/past", 1)] }),
+							fleetError: () => "inventory unavailable",
+							fleetStatsError: () => "stats unavailable",
+						}}
+					/>
+				));
+				search(el, "missing");
+				expect(el.textContent).toContain("No live sessions match these filters.");
+				expect(el.textContent).toContain("No past sessions match this search.");
+				expect(el.textContent).not.toContain("No sessions yet.");
+				expect(el.textContent).toContain("inventory unavailable");
+				expect(el.textContent).toContain("stats unavailable");
+				expect(header(el, "name")).not.toBeNull();
+			});
+		});
 
 		it("exposes five native sort keys and Reset, defaults first clicks, reverses, persists and adds no requests", () => {
 			const runtimes = [runtimeInfo("b", "/b"), runtimeInfo("a", "/a")];

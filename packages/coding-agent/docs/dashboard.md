@@ -146,6 +146,40 @@ networking window above.
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, opt-in continuation of pending work after successful automatic compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The continuation option is off by default, can keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. The tab-title card exposes the default-enabled generator toggle and an exact authenticated `provider/model` picker; an unset model clearly retains Explore-agent routing, a pinned model can be cleared back to that route, and edits apply to new unnamed sessions. The scoped-models editor controls model cycling for new sessions only: grouped search, model/provider/all toggles, responsive controls, accessible up/down partial-scope ordering, and save/reset. An absent `enabledModels` is future-inclusive all models in registry order and cannot be reordered; a partial scope is a non-empty ordered list of canonical `provider/model` references. Editing legacy glob, fuzzy, or thinking-suffix values saves normalized exact references. The selected context reads effective global + project settings but writes global; a project-level `enabledModels` shadow is warned. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions, including **Max concurrent subagents** (default 4). Setting it to 0 starts new parents without the subagent tool and tells the parent model to perform normally delegated work itself; positive values cap running children per parent session. Context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards plus system/light/dark mode and a font picker with 36 explicit choices plus Theme default (the existing IBM Plex Mono/JetBrains Mono/Fira Code/Iosevka/OpenDyslexic/Atkinson Hyperlegible plus 15 sans-serif and 15 serif families), regular-face previews in the open listbox, saved per browser. Shows the current rotating pairing code on the host/local dashboard, the 1–3650 day lifetime used only for future pairings (180-day default), and paired-device expiry dates with unpair. |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
+### Fleet search and filters
+
+Use **Search sessions** to find a displayed session name or project path across
+live cards and historical sessions. Matching is a case-insensitive substring,
+ignoring leading/trailing spaces. Current live renames and displayed fallback
+names are included; unnamed historical rows use the first-message fallback
+already shown in the list. Full project paths and displayed `~/…` aliases match.
+Live cards use their effective runtime directory, while history uses its recorded
+CWD, not a canonical replacement directory or opaque session-file path. Existing
+`/tmp` grouping and exact-path resume/delete identities remain unchanged. This
+search covers metadata, **not full conversation text**.
+
+The existing **needs attention** count is a toggle that filters live sessions;
+click it again or click the **live** count to show all live cards. Search and
+attention combine, but attention never filters historical rows. Pressed state
+and the live-only result note explain the active scope. Heading counts remain
+global inventory totals, while result counts describe all matching sessions
+before historical previews, not only the currently visible rows.
+
+Historical search considers the full inventory before grouping, sorting and
+three-row previews. Groups rank by the first matching sorted member. A hidden
+live card's exact session file never reappears as a historical result. Expanded
+projects stay expanded when filters or sorting change. **Clear filters** clears
+search and attention without changing sorting; sorting's **Reset** leaves filters
+intact. No-match messages keep section controls usable and are distinct from an
+actually empty inventory. The labelled native controls support keyboard use and
+44px touch targets at <=700px.
+
+Search and attention state belong only to the mounted Fleet screen: navigation
+away or reload clears them. The existing browser-local sort preference still
+persists. No host/session settings, storage keys, dependencies, polling, backend
+requests or transcript hydration are added. Session and subagent sidebars are
+not filtered and retain their stable ordering.
+
 ### Fleet sorting
 
 Fleet home integrates native sorting buttons into its headers instead of a

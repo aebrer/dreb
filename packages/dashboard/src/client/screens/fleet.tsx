@@ -1,7 +1,8 @@
 /**
  * Fleet overview — home screen. Live-first: one grid of all live session
  * cards (stable path/start order by default, user-selected sorting otherwise), then compact past
- * sessions grouped by project (3 rows + expand). "+ new session" modal.
+ * sessions grouped by project (3 rows + expand). Screen-local name/path search
+ * and live-only attention filtering. "+ new session" modal.
  */
 
 import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
@@ -11,6 +12,12 @@ import { Modal, relativeTime, Topbar } from "../components/common.js";
 import { FleetSortHeader, FleetSortReset, fleetColumnSort } from "../components/fleet-sort-headers.js";
 import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { SessionCardSummary, sessionCardStatus } from "../components/session-card-summary.js";
+import {
+	filterFleetDiskSessions,
+	filterFleetRuntimes,
+	fleetDisplayPath,
+	normalizeFleetQuery,
+} from "../state/fleet-filtering.js";
 import {
 	diskSessionDisplayName,
 	type FleetSortKey,
@@ -34,10 +41,6 @@ const SORT_HELP: Record<FleetSortKey, string> = {
 	name: "Sorts the displayed session names. Past project groups follow their first sorted session; sidebars stay stable.",
 	path: "Live cards use their runtime path; past sessions keep their historical project groups. Sidebars stay stable.",
 };
-
-function shortenPath(path: string): string {
-	return path.replace(/^\/home\/[^/]+/, "~");
-}
 
 function SessionTime(props: { value: string; label: string }): JSX.Element {
 	const timestamp = () => Date.parse(props.value);
@@ -138,7 +141,7 @@ function NewSessionModal(props: {
 						<For each={props.recentProjects}>
 							{(project) => (
 								<button type="button" onClick={() => setCwd(project)}>
-									{shortenPath(project)}
+									{fleetDisplayPath(project)}
 								</button>
 							)}
 						</For>
@@ -167,6 +170,10 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const [confirmDelete, setConfirmDelete] = createSignal<SessionInfoDto>();
 	const [resumeSession, setResumeSession] = createSignal<SessionInfoDto>();
 	const [expandedGroups, setExpandedGroups] = createSignal<Record<string, boolean>>({});
+	const [query, setQuery] = createSignal("");
+	const [attentionOnly, setAttentionOnly] = createSignal(false);
+	const searchActive = createMemo(() => !!normalizeFleetQuery(query()));
+	const filtersActive = createMemo(() => searchActive() || attentionOnly());
 	const [resumeError, setResumeError] = createSignal<string>();
 	const resumeRequests = new Map<string, Promise<void>>();
 	let fleetMain: HTMLElement | undefined;
@@ -187,17 +194,29 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const liveRuntimes = createMemo(() => {
 		retainFocusAcrossReorder();
 		const fleet = props.store.fleet();
-		return sortFleetRuntimes(fleet.runtimes, fleet.diskSessions, fleetSort(), (runtime) =>
-			runtimeDisplayName(runtime, props.store.sessions[runtime.key]?.sessionName),
+		const localName = (runtime: RuntimeInfoDto) => props.store.sessions[runtime.key]?.sessionName;
+		return sortFleetRuntimes(
+			filterFleetRuntimes(fleet.runtimes, query(), attentionOnly(), localName),
+			fleet.diskSessions,
+			fleetSort(),
+			(runtime) => runtimeDisplayName(runtime, localName(runtime)),
 		);
 	});
 	const liveByKey = createMemo(() => new Map(liveRuntimes().map((runtime) => [runtime.key, runtime])));
 	const diskGroups = createMemo(() => {
 		retainFocusAcrossReorder();
 		const fleet = props.store.fleet();
-		return sortFleetDiskGroups(fleet.diskSessions, fleet.runtimes, fleetSort());
+		// Filter before grouping so each group follows its first matching member.
+		// Always exclude ALL live files, including runtimes hidden by either filter.
+		return sortFleetDiskGroups(filterFleetDiskSessions(fleet.diskSessions, query()), fleet.runtimes, fleetSort());
 	});
 	const diskByProject = createMemo(() => new Map(diskGroups()));
+	const matchingPastCount = createMemo(() => diskGroups().reduce((total, [, sessions]) => total + sessions.length, 0));
+	const hasPastSessions = createMemo(() => {
+		const fleet = props.store.fleet();
+		const liveFiles = new Set(fleet.runtimes.map((runtime) => runtime.state.sessionFile).filter(Boolean));
+		return fleet.diskSessions.some((session) => !liveFiles.has(session.path));
+	});
 
 	const counts = createMemo(() => {
 		const fleet = props.store.fleet();
@@ -257,9 +276,29 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 				<div class="fleet-head">
 					<div>
 						<h1>fleet</h1>
-						<p class="muted small">
-							{counts().live} live · {counts().attention} needs attention · {counts().disk} on disk
-						</p>
+						<div class="fleet-counts muted small">
+							<fieldset class="fleet-live-filters" aria-label="Filter live sessions">
+								<button
+									type="button"
+									class="fleet-count-filter"
+									aria-pressed={!attentionOnly()}
+									onClick={() => setAttentionOnly(false)}
+								>
+									{counts().live} live
+								</button>
+								<span aria-hidden="true">·</span>
+								<button
+									type="button"
+									class="fleet-count-filter"
+									aria-pressed={attentionOnly()}
+									onClick={() => setAttentionOnly((current) => !current)}
+								>
+									{counts().attention} needs attention
+								</button>
+							</fieldset>
+							<span aria-hidden="true">·</span>
+							<span>{counts().disk} on disk</span>
+						</div>
 					</div>
 					<button
 						type="button"
@@ -271,6 +310,37 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					>
 						+ new session
 					</button>
+				</div>
+
+				<div class="fleet-filters">
+					<div class="fleet-search-field">
+						<label for="fleet-search">Search sessions</label>
+						<input
+							id="fleet-search"
+							class="input"
+							type="search"
+							placeholder="Session name or project path…"
+							value={query()}
+							onInput={(event) => setQuery(event.currentTarget.value)}
+						/>
+					</div>
+					<button
+						type="button"
+						class="btn fleet-clear-filters"
+						disabled={!query() && !attentionOnly()}
+						onClick={() => {
+							setQuery("");
+							setAttentionOnly(false);
+						}}
+					>
+						Clear filters
+					</button>
+					<output class="fleet-filter-results muted small" aria-live="polite" aria-atomic="true">
+						<Show when={attentionOnly()}>Needs attention · live sessions only. </Show>
+						{filtersActive()
+							? `${liveRuntimes().length} matching live sessions · ${matchingPastCount()} matching past sessions. Past groups preview up to 3 matches unless expanded.`
+							: ""}
+					</output>
 				</div>
 
 				<output id="fleet-sort-help" class="fleet-visually-hidden">
@@ -289,7 +359,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 				</Show>
 
 				<Show
-					when={liveRuntimes().length > 0 || diskGroups().length > 0 || props.store.fleetError()}
+					when={counts().live > 0 || counts().disk > 0 || props.store.fleetError()}
 					fallback={
 						<div class="empty-state">
 							<p>No sessions yet.</p>
@@ -301,7 +371,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 						</div>
 					}
 				>
-					<Show when={liveRuntimes().length > 0}>
+					<Show when={counts().live > 0 || attentionOnly()}>
 						<section class="live-sessions" aria-labelledby="live-sessions-heading">
 							<div class="fleet-section-head">
 								<h2 id="live-sessions-heading">live sessions</h2>
@@ -318,6 +388,9 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 									<FleetSortReset />
 								</fieldset>
 							</div>
+							<Show when={liveRuntimes().length === 0}>
+								<p class="muted">No live sessions match these filters.</p>
+							</Show>
 							<div class="session-grid">
 								<For each={liveRuntimes().map((runtime) => runtime.key)}>
 									{(key) => (
@@ -330,7 +403,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 						</section>
 					</Show>
 
-					<Show when={diskGroups().length > 0}>
+					<Show when={hasPastSessions()}>
 						<section class="past-sessions" aria-labelledby="past-sessions-heading">
 							<div class="fleet-section-head">
 								<h2 id="past-sessions-heading" class="past-sessions-head">
@@ -348,6 +421,9 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 							</Show>
 							<Show when={resumeError()}>
 								<p class="pair-error">{resumeError()}</p>
+							</Show>
+							<Show when={diskGroups().length === 0}>
+								<p class="muted">No past sessions match this search.</p>
 							</Show>
 							<table class="fleet-session-table" aria-describedby="fleet-sort-help">
 								<caption class="fleet-visually-hidden">
@@ -412,9 +488,9 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 												<tr class="fleet-project-row">
 													<th scope="rowgroup" colSpan={5}>
 														<div class="group-head">
-															<h3>{project ? shortenPath(project) : "(not recorded)"}</h3>
+															<h3>{project ? fleetDisplayPath(project) : "(not recorded)"}</h3>
 															<span class="muted small">
-																{sessions().length} on disk
+																{sessions().length} {searchActive() ? "matching sessions" : "on disk"}
 																{unavailable() ? " · original path unavailable" : ""}
 															</span>
 															<Show when={newSessionCwd()}>
@@ -506,7 +582,9 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 																	}))
 																}
 															>
-																{expanded() ? "show fewer ←" : `all ${sessions().length} on disk →`}
+																{expanded()
+																	? "show fewer ←"
+																	: `all ${sessions().length} ${searchActive() ? "matches" : "on disk"} →`}
 															</button>
 														</td>
 													</tr>
