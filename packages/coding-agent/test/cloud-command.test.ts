@@ -171,6 +171,7 @@ describe("cloud management dispatch", () => {
 		const path = await folder("project");
 		expect((await invoke(["cloud", "link", "project", "--id", ID])).out).toContain(`Linked project ${ID}`);
 		vi.stubEnv("HOME", root);
+		vi.stubEnv("USERPROFILE", root);
 		expect((await invoke(["cloud", "link", "~/project", "--id", ID])).code).toBeUndefined();
 		expect((await invoke(["cloud", "resolve", ID.toUpperCase()])).out).toBe(path);
 		expect(process.cwd()).toBe(root);
