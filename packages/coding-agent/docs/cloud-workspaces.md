@@ -6,7 +6,7 @@ Use folders you already manage, including folders delivered by a desktop sync cl
 
 ## Getting started
 
-All selected workspace and project folders must already exist and be readable/searchable. Initialization creates identity metadata, not the project folders. CLI relative paths resolve from the caller's current directory; `~` is supported.
+All selected workspace and project folders must already exist and be readable/searchable. Initialization creates identity metadata, not the project folders. CLI relative paths resolve from the caller's current directory; `~` is supported. Directory arguments and agent-directory paths preserve literal whitespace in names; empty directory arguments are rejected.
 
 ```bash
 # Run once in an existing folder tree; record each returned full UUID.

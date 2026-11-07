@@ -213,7 +213,7 @@ export function getSettingsPath(): string {
 
 /** Machine-local portable-project mappings; never put this registry in a shared workspace. */
 export function getCloudWorkspaceRegistryPath(agentDir: string = getAgentDir()): string {
-	const directory = resolveConfiguredDirectory(agentDir, process.cwd());
+	const directory = resolveDirectoryPath(agentDir, process.cwd());
 	if (!directory) throw new Error("Agent directory must not be empty.");
 	return join(directory, "cloud-workspaces.json");
 }
@@ -244,7 +244,11 @@ export function getSessionsDir(): string {
  * relative paths are resolved against `baseCwd`. Empty values are treated as unset.
  */
 export function resolveConfiguredDirectory(configuredDir: string | undefined, baseCwd: string): string | undefined {
-	const value = configuredDir?.trim();
+	return resolveDirectoryPath(configuredDir?.trim(), baseCwd);
+}
+
+/** Resolve a literal directory path without trimming pathname characters. Empty input is unset. */
+export function resolveDirectoryPath(value: string | undefined, baseCwd: string): string | undefined {
 	if (!value) return undefined;
 	if (isAbsolute(value)) return value;
 	if (value === "~") return homedir();
