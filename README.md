@@ -110,6 +110,16 @@ Memory is just files. Global and project memory indexes are loaded into the syst
 
 At startup, dreb always loads project context files (`AGENTS.md`/`CLAUDE.md`) by walking **upward** from its launch cwd. This initial upward scan is separate from, and not controlled by, nested-context trust settings. Lazy nested/out-of-cwd loading is **off by default**: when a tool later enters a subdirectory or another repo, its context is loaded only if that canonical directory is covered by a global trusted root in `~/.dreb/agent/settings.json` (`context.trustedFolders`). Trust a root only when you control its instructions; it covers that root and descendants after realpath resolution, so a symlink escaping the root is not trusted. In the dashboard, the Files view is the primary flow to grant or remove folder trust, while Settings lists every configured root for audit/revoke and offers add-by-path. `context.autoLoadNested: true` is a global-only expert trust-all override and can inject prompt-injection content from any resolvable directory. Project `.dreb/settings.json` cannot enable, disable, or extend nested-context trust, so a cloned repository cannot grant itself trust. Main agents and subagents use the same global decision. Auto-loaded content is secret-scrubbed and appended after extension `tool_result` transforms, which intentionally do not see it; paths are deduplicated so each file is injected at most once per session. See [Context Files](packages/coding-agent/README.md#context-files).
 
+#### Cloud workspace identities (metadata only)
+
+[Cloud workspaces](packages/coding-agent/docs/cloud-workspaces.md) explicitly map portable workspace/project UUIDs to existing folders on each device, even when their local roots differ. This CLI/SDK foundation does not sync or automatically remap sessions, launch agents, or grant trust. Never sync its device-local registry.
+
+```bash
+# The folder must already exist; initialize the shared identity only once.
+dreb cloud connect ~/SharedWork --init
+dreb cloud --help
+```
+
 ### Interfaces and embedding
 
 The same agent runtime powers multiple surfaces:

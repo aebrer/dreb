@@ -9,6 +9,7 @@ import { clampThinkingLevel, type ImageContent, modelsAreEqual, supportsMax, sup
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { type Args, parseArgs, printHelp, validateRpcFullMessageUpdates } from "./cli/args.js";
+import { handleCloudCommand } from "./cli/cloud-command.js";
 import { selectConfig } from "./cli/config-selector.js";
 import { processFileArguments } from "./cli/file-processor.js";
 import { buildInitialMessage } from "./cli/initial-message.js";
@@ -694,6 +695,9 @@ async function handleConfigCommand(args: string[]): Promise<boolean> {
 
 export async function main(args: string[]) {
 	resetTimings();
+
+	// Metadata management must not load provider secrets, project resources, or an agent.
+	if (await handleCloudCommand(args)) return;
 
 	// Load API keys and provider config from ~/.dreb/secrets/providers.env
 	// Must happen before model resolution or provider initialization

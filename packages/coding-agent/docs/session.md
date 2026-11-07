@@ -16,6 +16,12 @@ Subagent transcripts are separate from main sessions. New child processes write 
 
 Configured roots share path semantics: absolute paths stay absolute, `~` expands from the home directory, and relative paths use the main CLI cwd, Dashboard startup cwd, or AgentSession runtime cwd as applicable. Changing a transcript root does not move existing files or affect credentials/general configuration. See [Settings](settings.md#sessions).
 
+## Cloud Workspace Compatibility
+
+[Cloud workspaces](cloud-workspaces.md) currently provide portable identity markers and a device-local CLI/SDK folder registry only. They do not change `sessionDir`, `subagentSessionDir`, session headers or historical CWDs, exact-path actions, Dashboard/RPC/resume behavior, trust grants, or agent configuration. Registry resolution does not automatically remap or resume sessions.
+
+Main/subagent project association and automatic project-aware resume are future slices; full-history immutable checkpoints and continuations belong to a future phase. This foundation adds neither concurrent live-JSONL writer safety nor process migration. Linking or removing a local binding never migrates or deletes sessions.
+
 ## Deleting Sessions
 
 Sessions can be removed by deleting their `.jsonl` files from the active main-session store.
