@@ -719,6 +719,59 @@ Project overrides global. Nested objects merge keys. Setters modify global setti
 
 > See [examples/sdk/10-settings.ts](../examples/sdk/10-settings.ts)
 
+## Cloud Workspace Registry
+
+`CloudWorkspaceRegistry` manages portable identities and device-local folder bindings independently of agent sessions. This is a provider-neutral metadata foundation, not session synchronization. There are no provider OAuth/API/network calls, automatic launches, or trust grants.
+
+The following example only reads metadata and resolves a previously linked project. Replace the example project UUID with your own full ID:
+
+```typescript
+import {
+  CloudWorkspaceRegistry,
+  CloudWorkspaceError,
+  getCloudWorkspaceRegistryPath,
+  type CloudWorkspaceState,
+} from "@dreb/coding-agent";
+
+const registry = new CloudWorkspaceRegistry();
+// Optional: new CloudWorkspaceRegistry({ agentDir: "/native/absolute/local-agent-dir" })
+console.log(registry.path); // Same default path as getCloudWorkspaceRegistryPath()
+console.log(getCloudWorkspaceRegistryPath());
+
+try {
+  const state: CloudWorkspaceState = await registry.list();
+  console.log(state);
+  const cwd = await registry.resolve("22222222-2222-4222-8222-222222222222");
+  console.log(cwd); // Canonical existing local directory; no session is started.
+} catch (error) {
+  if (error instanceof CloudWorkspaceError) {
+    console.error(error.code, error.message);
+  } else {
+    throw error;
+  }
+}
+```
+
+All registry methods are asynchronous:
+
+| Method | Result |
+|---|---|
+| `list()` | `CloudWorkspaceState` (configuration only) |
+| `connect(nativeAbsDir, {initialize?, rebind?}?)` | `CloudWorkspaceBinding` |
+| `link(nativeAbsDir, {initialize?, rebind?, projectId?, workspaceId?}?)` | `CloudProjectBinding` |
+| `resolve(projectId)` | Canonical existing local directory string |
+| `status()` | `CloudWorkspaceStatus` with per-record local availability/errors, not sync status |
+| `unlink(projectId)` | Boolean: whether a local project binding was removed |
+| `disconnect(workspaceId)` | Boolean: whether a local workspace binding was removed |
+
+`connect` and `link` require native absolute existing directories; CLI relative-path and `~` expansion do not apply to these SDK arguments. `initialize` explicitly creates or reuses the corresponding marker; without it an existing marker is required, except that `link` can supply a known `projectId` without creating a marker. `initialize` and `projectId` cannot be combined. Without `workspaceId`, projects store direct local paths; supplying it explicitly selects root-relative mapping. Changes of location require `rebind`.
+
+The registry lives at `<agent-dir>/cloud-workspaces.json` (default `~/.dreb/agent`, honoring `DREB_CODING_AGENT_DIR` unless `agentDir` is supplied). Never sync it or the entire agent directory. Both registry and markers use version 1. `CloudWorkspaceError` exposes `.code` and `.message`; associated binding, state, status, marker, error-code, and option types are exported from the same package.
+
+Callers may explicitly pass the resolved CWD to the existing session SDK after deciding to execute there and handling trust separately. Registry resolution itself does not create/resume a session, associate main/subagent transcripts with a project, or change existing session storage/resume behavior.
+
+See [Cloud workspaces](cloud-workspaces.md) for schemas, two-device setup, repair, and limits, and [examples/sdk/13-cloud-workspaces.ts](../examples/sdk/13-cloud-workspaces.ts) for a metadata-only example.
+
 ## ResourceLoader
 
 Use `DefaultResourceLoader` to discover extensions, skills, prompts, themes, and context files.
@@ -949,6 +1002,22 @@ getAgentDir
 // Session management
 SessionManager
 SettingsManager
+
+// Cloud workspace metadata (independent of sessions)
+CloudWorkspaceRegistry
+CloudWorkspaceError
+getCloudWorkspaceRegistryPath
+CLOUD_WORKSPACE_VERSION
+type CloudIdentityMarker
+type CloudLocationStatus
+type CloudProjectBinding
+type CloudProjectLocation
+type CloudWorkspaceBinding
+type CloudWorkspaceErrorCode
+type CloudWorkspaceState
+type CloudWorkspaceStatus
+type ConnectCloudWorkspaceOptions
+type LinkCloudProjectOptions
 
 // Built-in tools (use process.cwd())
 codingTools
