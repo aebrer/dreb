@@ -211,6 +211,13 @@ export function getSettingsPath(): string {
 	return join(getAgentDir(), "settings.json");
 }
 
+/** Machine-local portable-project mappings; never put this registry in a shared workspace. */
+export function getCloudWorkspaceRegistryPath(agentDir: string = getAgentDir()): string {
+	const directory = resolveConfiguredDirectory(agentDir, process.cwd());
+	if (!directory) throw new Error("Agent directory must not be empty.");
+	return join(directory, "cloud-workspaces.json");
+}
+
 /** Get path to tools directory */
 export function getToolsDir(): string {
 	return join(getAgentDir(), "tools");

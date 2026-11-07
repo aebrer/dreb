@@ -3,6 +3,7 @@
 // Config paths
 export {
 	getAgentDir,
+	getCloudWorkspaceRegistryPath,
 	getSecretsDir,
 	getSubagentSessionsDir,
 	loadProvidersEnv,
@@ -30,6 +31,22 @@ export {
 	InMemoryAuthStorageBackend,
 	type OAuthCredential,
 } from "./core/auth-storage.js";
+// Portable identities and machine-local folder mappings (no synchronization or agent launch)
+export { CloudWorkspaceRegistry } from "./core/cloud-workspaces/registry.js";
+export {
+	CLOUD_WORKSPACE_VERSION,
+	type CloudIdentityMarker,
+	type CloudLocationStatus,
+	type CloudProjectBinding,
+	type CloudProjectLocation,
+	type CloudWorkspaceBinding,
+	CloudWorkspaceError,
+	type CloudWorkspaceErrorCode,
+	type CloudWorkspaceState,
+	type CloudWorkspaceStatus,
+	type ConnectCloudWorkspaceOptions,
+	type LinkCloudProjectOptions,
+} from "./core/cloud-workspaces/types.js";
 // Compaction
 export {
 	type BranchPreparation,

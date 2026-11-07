@@ -9,6 +9,14 @@ dreb uses JSON settings files with project settings overriding global settings, 
 
 Edit directly or use `/settings` for common options.
 
+## Cloud Workspace Registry
+
+[Cloud workspaces](cloud-workspaces.md) use a dedicated **device-local** `<agent-dir>/cloud-workspaces.json` file, normally `~/.dreb/agent/cloud-workspaces.json`. It honors `DREB_CODING_AGENT_DIR`; SDK callers may explicitly select `agentDir`. This version 1 registry is not a merged global/project setting and adds no `settings.json` options.
+
+Only identity markers at `<selected-workspace>/.dreb/workspace.json` and `<selected-project>/.dreb/project.json` are portable metadata (`.dreb` follows `CONFIG_DIR_NAME`). They contain only `{version: 1, kind: "workspace" | "project", id: "full UUID"}`, not paths, trust, or credentials. Local-only project metadata is not automatically distributed to another device; transfer its marker deliberately or explicitly link the same full project ID there.
+
+Never sync the registry or the entire agent directory. Keep machine-specific settings, context-trust grants, and authentication local; a shared identity does not grant trust or relocate agent configuration. Existing `sessionDir`/`subagentSessionDir` behavior is unchanged. See [schemas and local/shared boundaries](cloud-workspaces.md#shared-markers-and-local-schema).
+
 ## All Settings
 
 ### Model & Thinking

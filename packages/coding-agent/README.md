@@ -24,6 +24,7 @@ What you get in exchange: a skill system, an extension API, custom agent definit
   - [Branching](#branching)
   - [Compaction](#compaction)
   - [Tab Title](#tab-title)
+- [Cloud Workspaces](#cloud-workspaces)
 - [Settings](#settings)
 - [Context Files](#context-files)
 - [Memory](#memory)
@@ -289,6 +290,23 @@ Set `tabTitle.model` to pin the primary call to one exact `provider/model`. When
   }
 }
 ```
+
+---
+
+## Cloud Workspaces
+
+The initial cloud-workspace foundation maps portable workspace/project UUIDs to existing local folders through an explicit CLI and SDK registry. Different devices can bind the same ID to different roots. It is metadata only: no session synchronization, automatic resume remapping, agent launch, or trust grant.
+
+```bash
+# These folders must already exist; initialize shared identities only once.
+dreb cloud connect ~/SharedWork --init
+dreb cloud link ~/SharedWork/widget --init --workspace WORKSPACE_UUID
+dreb cloud resolve PROJECT_UUID
+```
+
+Replace `WORKSPACE_UUID` and `PROJECT_UUID` with the distinct full IDs returned by `connect` and `link`. Wait for shared markers to arrive before connecting another device. Without `--workspace`, `link` stores a direct local path, even inside a synced folder. Never sync `<agent-dir>/cloud-workspaces.json` or the entire agent directory.
+
+See [Cloud workspaces](docs/cloud-workspaces.md) for two-device setup, local-only projects, rebinding, safety limits, and the [SDK API](docs/sdk.md#cloud-workspace-registry). There is no `/cloud` slash command or Dashboard Cloud page.
 
 ---
 
@@ -638,6 +656,20 @@ dreb update [source]           # Update packages (skips pinned)
 dreb list                      # List installed packages
 dreb config                    # Enable/disable package resources
 ```
+
+### Cloud Workspace Commands
+
+```text
+dreb cloud connect <directory> [--init] [--rebind] [--json]
+dreb cloud link <directory> [--init | --id <project-uuid>] [--workspace <workspace-uuid>] [--rebind] [--json]
+dreb cloud list [--json]
+dreb cloud status [--json]
+dreb cloud resolve <project-uuid> [--json]
+dreb cloud unlink <project-uuid> [--json]
+dreb cloud disconnect <workspace-uuid> [--json]
+```
+
+`dreb cloud` and `dreb cloud [command] --help` print help. `resolve` prints only the canonical existing local directory by default. `list` reads configuration only; `status` checks local folders/markers, not cloud delivery. Removal is idempotent and affects local bindings only, never markers, folders, or sessions. Errors exit nonzero on stderr, never as model prompts. See [Cloud workspace CLI reference](docs/cloud-workspaces.md#cli-reference).
 
 ### Modes
 

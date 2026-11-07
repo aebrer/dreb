@@ -1,5 +1,16 @@
-import { describe, expect, test } from "vitest";
-import { parseArgs, validateRpcFullMessageUpdates } from "../src/cli/args.js";
+import { describe, expect, test, vi } from "vitest";
+import { parseArgs, printHelp, validateRpcFullMessageUpdates } from "../src/cli/args.js";
+
+test("top-level help discovers cloud management without changing prompt parsing", () => {
+	const output = vi.spyOn(console, "log").mockImplementation(() => {});
+	try {
+		printHelp();
+		expect(output.mock.calls.map(([text]) => String(text)).join("\n")).toContain("cloud <command>");
+		expect(parseArgs(["cloud-related question"]).messages).toEqual(["cloud-related question"]);
+	} finally {
+		output.mockRestore();
+	}
+});
 
 describe("parseArgs", () => {
 	describe("--version flag", () => {

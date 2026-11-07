@@ -39,6 +39,10 @@ Dashboard snapshots main-session storage at startup. Its host-wide inventory rea
 
 Absolute paths remain absolute, `~` expands from the home directory, and relative paths resolve against Dashboard's startup cwd; an absolute global path is recommended. Restart Dashboard after changing the setting. The separate global-only `subagentSessionDir` controls new child logs in coding-agent runtimes, while restart recovery can also discover matching logs in the legacy root. Neither setting migrates files or relocates credentials or general configuration. See [Session settings](settings.md#sessions).
 
+## Cloud Workspace Compatibility
+
+[Cloud workspaces](cloud-workspaces.md) are currently a metadata-only CLI/SDK foundation. There is no Dashboard Cloud page or `/cloud` slash command. Registry mappings do not automatically remap inventory, historical CWDs, exact-path actions, or resume destinations; the existing explicit runtime-directory chooser remains unchanged. Session storage, Dashboard/RPC behavior, main/subagent association, trust grants, and agent configuration are not changed by connecting a workspace. Automatic project-aware resume is a future slice, not part of this foundation.
+
 ## Local vs remote — exactly two modes
 
 **Local-only (default).** The server binds `127.0.0.1` exclusively. Machines
