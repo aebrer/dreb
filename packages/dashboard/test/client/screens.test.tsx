@@ -9928,20 +9928,32 @@ describe("Cloud Workspaces screen integration", () => {
 		},
 	);
 
-	it("Settings exposes working Cloud navigation even when ordinary settings fail", async () => {
-		vi.mocked(api.settings).mockRejectedValueOnce(new Error("synthetic settings failure"));
+	it.each([false, true])("Devices exposes Cloud navigation when ordinary settings fail=%s", async (fail) => {
+		if (fail) vi.mocked(api.settings).mockRejectedValueOnce(new Error("synthetic settings failure"));
 		window.location.hash = "#/settings";
 		const el = mount(() => <App />);
-		await vi.waitFor(() =>
-			expect(el.querySelector(".settings-error")?.textContent).toContain("synthetic settings failure"),
-		);
-		const link = el.querySelector<HTMLAnchorElement>('main a[href="#/settings/cloud-workspaces"]')!;
-		expect(link.textContent).toBe("Cloud Workspaces");
+		if (fail) {
+			await vi.waitFor(() =>
+				expect(el.querySelector(".settings-error")?.textContent).toContain("synthetic settings failure"),
+			);
+		} else {
+			await vi.waitFor(() => expect(api.settingsModels).toHaveBeenCalled());
+		}
+		const links = el.querySelectorAll<HTMLAnchorElement>('main a[href="#/settings/cloud-workspaces"]');
+		expect(links).toHaveLength(1);
+		const link = links[0];
+		expect(link.closest(".settings-section")?.querySelector("h2")?.textContent).toBe("devices");
+		expect(link.closest(".settings-cloud-workspaces")?.querySelector("h3")?.textContent).toBe("Cloud Workspaces");
+		expect(link.textContent).toBe("manage Cloud Workspaces");
+		expect(el.querySelector("#pairing-ttl-days")).not.toBeNull();
+		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
 		const settingsCalls = vi.mocked(api.settings).mock.calls.length;
 		link.click();
 		await vi.waitFor(() => expect(el.querySelector(".cloud-workspaces")?.textContent).toContain(projectId));
 		expect(el.querySelector(".settings-wrap")).toBeNull();
 		expect(api.settings).toHaveBeenCalledTimes(settingsCalls);
+		expect(api.savePairingSettings).not.toHaveBeenCalled();
+		expect(api.unpair).not.toHaveBeenCalled();
 	});
 
 	it("Fleet New Session starts local, keeps recent choices and the group initial cwd without reading metadata", () => {

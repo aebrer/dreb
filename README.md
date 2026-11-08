@@ -112,7 +112,7 @@ At startup, dreb always loads project context files (`AGENTS.md`/`CLAUDE.md`) by
 
 #### Cloud workspaces (optional)
 
-[Cloud workspaces](packages/coding-agent/docs/cloud-workspaces.md) map portable workspace/project UUIDs to existing folders on each backend host, even when their paths differ. Manage them from **Settings → Cloud Workspaces** (`#/settings/cloud-workspaces`) by entering host paths, without terminal commands or model credentials; CLI and SDK management remain available. Projects can stay outside synced roots. Initialize shared markers once, then wait for delivery and connect/link the existing identity on other hosts—never initialize a replacement for a missing marker.
+[Cloud workspaces](packages/coding-agent/docs/cloud-workspaces.md) map portable workspace/project UUIDs to existing folders on each backend host, even when their paths differ. Manage them from **Settings → Devices → Cloud Workspaces** (`#/settings/cloud-workspaces`) by entering host paths, without terminal commands or model credentials; CLI and SDK management remain available. Projects can stay outside synced roots. Initialize shared markers once, then wait for delivery and connect/link the existing identity on other hosts—never initialize a replacement for a missing marker.
 
 Metadata-only integrations can import the registry, errors/types and path helper from `@dreb/coding-agent/cloud-workspaces`; existing root SDK imports and CLI commands remain compatible.
 

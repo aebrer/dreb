@@ -2305,6 +2305,16 @@ details.thinking .thinking-body {
 	margin-bottom: var(--space-3);
 }
 
+.settings-cloud-workspaces {
+	margin-top: var(--space-5);
+	border-top: var(--hairline);
+	padding-top: var(--space-3);
+}
+
+.settings-cloud-workspaces .btn {
+	min-height: 44px;
+}
+
 .setting-row {
 	display: flex;
 	align-items: center;

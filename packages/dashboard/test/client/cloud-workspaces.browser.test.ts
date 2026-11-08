@@ -110,6 +110,8 @@ let mutationGate: ReturnType<typeof gate> | undefined;
 let createGate: ReturnType<typeof gate> | undefined;
 let permitCreate: boolean;
 let permitSession: boolean;
+let permitSettings: boolean;
+let settingsFail: boolean;
 
 beforeAll(async () => {
 	cache = await mkdtemp(join(tmpdir(), "dreb-cloud-workspaces-vite-"));
@@ -147,6 +149,8 @@ beforeEach(async () => {
 	createGate = undefined;
 	permitCreate = false;
 	permitSession = false;
+	permitSettings = false;
+	settingsFail = false;
 	page = await browser.newPage({ viewport: { width: 1024, height: 900 } });
 	page.setDefaultTimeout(10_000);
 	page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -168,6 +172,31 @@ beforeEach(async () => {
 		if (method === "POST" && path === "/api/events/diagnostic") return json({ ok: true });
 		if (method === "GET" && path === "/api/cloud-workspaces")
 			return overviewFailure ? json(overviewFailure, 500) : json(overview);
+		// Only explicit Settings discovery tests permit its existing resource loaders.
+		// Keep the cold Cloud route's strict metadata-only allowlist unchanged.
+		if (permitSettings && method === "GET") {
+			if (path === "/api/settings")
+				return settingsFail ? json({ error: "Synthetic settings failure" }, 500) : json({});
+			if (path === "/api/settings/models") return json({ models: [] });
+			if (path === "/api/settings/agent-types") return json({ agentTypes: [] });
+			if (path === "/api/devices")
+				return json({
+					devices: [
+						{
+							id: "synthetic-device",
+							device: "Synthetic phone",
+							identity: "synthetic@host",
+							createdAt: "2026-01-01T00:00:00Z",
+							expiresAt: "2099-01-01T00:00:00Z",
+						},
+					],
+				});
+			if (path === "/api/pairing-code") return json({ enabled: false });
+			if (path === "/api/pairing-settings")
+				return settingsFail ? json({ error: "Synthetic pairing failure" }, 500) : json({ pairingTtlDays: 180 });
+			if (path === "/api/server/info")
+				return json({ version: "test", startedAt: "2026-01-01T00:00:00Z", supervised: false, restartable: false });
+		}
 		// Fleet owns these lightweight statistics; a cold Cloud route must not request them.
 		if (method === "GET" && !page.url().endsWith(CLOUD_ROUTE)) {
 			if (path === "/api/daily-cost") return json({ cost: 0 });
@@ -364,6 +393,70 @@ async function emit(event: Record<string, unknown>, key = PARENT): Promise<void>
 		{ event, key },
 	);
 }
+
+describe("Cloud Workspaces discovery within Settings Devices", () => {
+	for (const width of [360, 390, 701, 1024]) {
+		it.each([false, true])(
+			`keeps the categorized link usable at ${width}px with settings failure=%s`,
+			async (fail) => {
+				permitSettings = true;
+				settingsFail = fail;
+				await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
+				await page.goto(`${fixtureUrl}#/settings`, { waitUntil: "domcontentloaded" });
+				const devices = page.getByRole("region", { name: "devices", exact: true });
+				const cloud = devices.getByRole("region", { name: "Cloud Workspaces", exact: true });
+				const link = cloud.getByRole("link", { name: "manage Cloud Workspaces", exact: true });
+				await link.waitFor();
+				await devices.getByText("Synthetic phone", { exact: true }).waitFor();
+				if (fail) {
+					await waitText(".settings-error", "Synthetic settings failure");
+					await waitText(".settings-error", "Synthetic pairing failure");
+				} else {
+					await page.getByRole("heading", { name: "model", exact: true, level: 2 }).waitFor();
+				}
+				expect(await page.locator('main a[href="#/settings/cloud-workspaces"]').count()).toBe(1);
+				expect(await cloud.getByRole("heading", { name: "Cloud Workspaces", level: 3 }).isVisible()).toBe(true);
+				expect(await cloud.textContent()).toContain("Separate from device pairing and access.");
+				expect(await devices.getByLabel(/^new pairing lifetime/).isVisible()).toBe(true);
+				expect(await devices.getByRole("button", { name: "unpair", exact: true }).isVisible()).toBe(true);
+				expect(cloudReads()).toHaveLength(0);
+				await link.scrollIntoViewIfNeeded();
+				const rect = await link.boundingBox();
+				expect(rect).not.toBeNull();
+				expect(rect!.height).toBeGreaterThanOrEqual(44);
+				expect(rect!.x).toBeGreaterThanOrEqual(0);
+				expect(rect!.x + rect!.width).toBeLessThanOrEqual(width + 1);
+				expect(rect!.y).toBeGreaterThanOrEqual(0);
+				expect(rect!.y + rect!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+				const layout = await page.evaluate(() => ({
+					width: document.documentElement.scrollWidth,
+					overflow: [...document.querySelectorAll("main *")]
+						.filter((element) => element.getBoundingClientRect().right > innerWidth + 1)
+						.map((element) => ({
+							tag: element.tagName,
+							class: element.className,
+							text: element.textContent?.slice(0, 100),
+						})),
+				}));
+				expect(layout.width, JSON.stringify(layout)).toBeLessThanOrEqual(width + 1);
+				const settingsCalls = calls.filter((call) => call.path.startsWith("/api/settings")).length;
+				if (width === 1024) {
+					await link.focus();
+					await page.keyboard.press("Enter");
+				} else {
+					await link.click();
+				}
+				await page.locator(".cloud-workspaces .cloud-row").first().waitFor();
+				expect(new URL(page.url()).hash).toBe(CLOUD_ROUTE);
+				expect(await page.locator(".settings-wrap").count()).toBe(0);
+				expect(calls.filter((call) => call.path.startsWith("/api/settings"))).toHaveLength(settingsCalls);
+				expect(cloudReads()).toHaveLength(1);
+				expect(calls.filter((call) => call.method !== "GET" && call.path !== "/api/events/diagnostic")).toEqual([]);
+				expect(creates()).toHaveLength(0);
+			},
+		);
+	}
+});
 
 for (const width of [1024, 390]) {
 	describe(`real App Cloud Workspaces at ${width}px`, () => {

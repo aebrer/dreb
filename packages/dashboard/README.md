@@ -117,14 +117,15 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   (180 days by default), and
   paired-device expiry/unpair management.
 - **Cloud Workspaces** — independent `#/settings/cloud-workspaces`, linked from
-  Settings. Connect/link identities, refresh local availability, rebind the same
+  the Devices section of Settings, separately from pairing/access controls.
+  Connect/link identities, refresh local availability, rebind the same
   ID and confirm local-only unlink/disconnect without terminal or model setup.
   See [Cloud Workspaces](#cloud-workspaces).
 - **Pairing** — remote first-login rotating-code flow.
 
 ### Cloud Workspaces
 
-Open **Settings → Cloud Workspaces** (`#/settings/cloud-workspaces`) and enter
+Open **Settings → Devices → Cloud Workspaces** (`#/settings/cloud-workspaces`) and enter
 native absolute paths on the **backend host**, not your phone/browser. This
 independent page does not load ordinary Settings/model/version resources and
 needs no model credentials or terminal commands. Ordinary local workflows need
