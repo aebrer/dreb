@@ -9943,8 +9943,8 @@ describe("Cloud Workspaces screen integration", () => {
 		expect(links).toHaveLength(1);
 		const link = links[0];
 		expect(link.closest(".settings-section")?.querySelector("h2")?.textContent).toBe("devices");
-		expect(link.closest(".settings-cloud-workspaces")?.querySelector("h3")?.textContent).toBe("Cloud Workspaces");
-		expect(link.textContent).toBe("manage Cloud Workspaces");
+		expect(link.closest(".settings-cloud-workspaces")?.querySelector("h3")?.textContent).toBe("cloud workspaces");
+		expect(link.textContent).toBe("manage cloud workspaces");
 		expect(el.querySelector("#pairing-ttl-days")).not.toBeNull();
 		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
 		const settingsCalls = vi.mocked(api.settings).mock.calls.length;

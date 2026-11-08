@@ -295,7 +295,7 @@ Set `tabTitle.model` to pin the primary call to one exact `provider/model`. When
 
 ## Cloud Workspaces
 
-Cloud workspaces map portable workspace/project UUIDs to existing folders on each backend host through a shared registry, CLI, SDK and optional Dashboard controls. Different hosts can bind the same ID to different paths; projects can remain outside synced roots. **Settings → Devices → Cloud Workspaces** (`#/settings/cloud-workspaces`) is an independent page usable by entering host paths without terminal commands or model credentials. The host is the backend computer, not your phone/browser.
+Cloud workspaces map portable workspace/project UUIDs to existing folders on each backend host through a shared registry, CLI, SDK and optional Dashboard controls. Different hosts can bind the same ID to different paths; projects can remain outside synced roots. **Settings → Devices → cloud workspaces** (`#/settings/cloud-workspaces`) is an independent page usable by entering host paths without terminal commands or model credentials. The host is the backend computer, not your phone/browser.
 
 Connect an existing workspace marker or deliberately initialize its first marker once. Project linking offers **Existing marker**, **Initialize first marker**, or **Known full ID (markerless)**, with explicit direct-local or workspace-relative binding. On other hosts, wait for marker delivery and connect/link the existing identity; a missing marker is never a reason to initialize a replacement. Status reports local availability, not synchronization or matching code. Rebind targets the same ID; confirmed unlink/disconnect removes only local mappings, preserving markers, folders and transcripts. Dependent projects remain visible but unavailable after disconnect.
 

@@ -125,7 +125,7 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
 
 ### Cloud Workspaces
 
-Open **Settings → Devices → Cloud Workspaces** (`#/settings/cloud-workspaces`) and enter
+Open **Settings → Devices → cloud workspaces** (`#/settings/cloud-workspaces`) and enter
 native absolute paths on the **backend host**, not your phone/browser. This
 independent page does not load ordinary Settings/model/version resources and
 needs no model credentials or terminal commands. Ordinary local workflows need

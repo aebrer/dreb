@@ -1420,7 +1420,7 @@ export function SettingsScreen(props: {
 						</p>
 					</Show>
 					<section class="settings-cloud-workspaces" aria-labelledby="settings-cloud-workspaces-heading">
-						<h3 id="settings-cloud-workspaces-heading">Cloud Workspaces</h3>
+						<h3 id="settings-cloud-workspaces-heading">cloud workspaces</h3>
 						<div class="setting-row">
 							<span class="setting-label">
 								<span class="hint">
@@ -1430,7 +1430,7 @@ export function SettingsScreen(props: {
 							</span>
 							<span class="setting-control">
 								<a class="btn btn-small" href="#/settings/cloud-workspaces">
-									manage Cloud Workspaces
+									manage cloud workspaces
 								</a>
 							</span>
 						</div>

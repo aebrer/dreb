@@ -248,7 +248,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 			<Topbar store={props.store} active="settings" />
 			<main class="container cloud-workspaces">
 				<a href="#/settings">Back to Settings</a>
-				<h1>Cloud Workspaces</h1>
+				<h1>cloud workspaces</h1>
 				<p>
 					Local workflows need no registration. This host is the computer running the backend, not your phone or
 					browser.

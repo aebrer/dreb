@@ -189,7 +189,7 @@ export function ProjectDirectorySelector(props: {
 					</Show>
 					<Show when={loaded() && !loading() && !error() && projects().length === 0}>
 						<p class="muted small">
-							No linked projects are registered on this host. Manage Cloud Workspaces to link one, or use a local
+							No linked projects are registered on this host. Manage cloud workspaces to link one, or use a local
 							directory.
 						</p>
 					</Show>
@@ -226,7 +226,7 @@ export function ProjectDirectorySelector(props: {
 							if (disposed || props.disabled) event.preventDefault();
 						}}
 					>
-						manage Cloud Workspaces
+						manage cloud workspaces
 					</a>
 				</div>
 				<p class="muted small">

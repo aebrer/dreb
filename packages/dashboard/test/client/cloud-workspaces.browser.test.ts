@@ -404,8 +404,8 @@ describe("Cloud Workspaces discovery within Settings Devices", () => {
 				await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
 				await page.goto(`${fixtureUrl}#/settings`, { waitUntil: "domcontentloaded" });
 				const devices = page.getByRole("region", { name: "devices", exact: true });
-				const cloud = devices.getByRole("region", { name: "Cloud Workspaces", exact: true });
-				const link = cloud.getByRole("link", { name: "manage Cloud Workspaces", exact: true });
+				const cloud = devices.getByRole("region", { name: "cloud workspaces", exact: true });
+				const link = cloud.getByRole("link", { name: "manage cloud workspaces", exact: true });
 				await link.waitFor();
 				await devices.getByText("Synthetic phone", { exact: true }).waitFor();
 				if (fail) {
@@ -415,7 +415,9 @@ describe("Cloud Workspaces discovery within Settings Devices", () => {
 					await page.getByRole("heading", { name: "model", exact: true, level: 2 }).waitFor();
 				}
 				expect(await page.locator('main a[href="#/settings/cloud-workspaces"]').count()).toBe(1);
-				expect(await cloud.getByRole("heading", { name: "Cloud Workspaces", level: 3 }).isVisible()).toBe(true);
+				expect(
+					await cloud.getByRole("heading", { name: "cloud workspaces", level: 3, exact: true }).isVisible(),
+				).toBe(true);
 				expect(await cloud.textContent()).toContain("Separate from device pairing and access.");
 				expect(await devices.getByLabel(/^new pairing lifetime/).isVisible()).toBe(true);
 				expect(await devices.getByRole("button", { name: "unpair", exact: true }).isVisible()).toBe(true);
@@ -655,7 +657,7 @@ for (const width of [1024, 390]) {
 			expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
 			for (const control of await dialog.locator("input, select, textarea, button").all())
 				expect(await control.isDisabled()).toBe(true);
-			const management = dialog.getByText("manage Cloud Workspaces", { exact: true });
+			const management = dialog.getByText("manage cloud workspaces", { exact: true });
 			expect(await management.getAttribute("href")).toBeNull();
 			expect(await management.getAttribute("aria-disabled")).toBe("true");
 			await management.dispatchEvent("click");
@@ -688,7 +690,7 @@ for (const width of [1024, 390]) {
 			expect(await dialog.getByRole("button", { name: "start session", exact: true }).isEnabled()).toBe(true);
 			expect(creates().map((c) => c.body)).toEqual([{ projectId: PROJECT }]);
 			await expectLayout(".modal-backdrop", width <= 700);
-			await dialog.getByRole("link", { name: "manage Cloud Workspaces", exact: true }).click();
+			await dialog.getByRole("link", { name: "manage cloud workspaces", exact: true }).click();
 			await page.locator(".cloud-workspaces").waitFor();
 			expect(new URL(page.url()).hash).toBe(CLOUD_ROUTE);
 			expect(creates()).toHaveLength(1);

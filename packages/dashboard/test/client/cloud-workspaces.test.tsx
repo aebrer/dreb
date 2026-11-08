@@ -160,6 +160,7 @@ describe("CloudWorkspacesScreen metadata management", () => {
 		await settle();
 		expect(text()).not.toContain("Loading metadata…");
 		expect(text()).toContain("No registered workspaces or projects");
+		expect(document.querySelector("h1")?.textContent).toBe("cloud workspaces");
 		expect(text()).toContain("Local workflows need no registration");
 		expect(text()).toContain("computer running the backend, not your phone or browser");
 		expect(text()).toContain("do not synchronize code or sessions, grant trust, or make sessions portable");

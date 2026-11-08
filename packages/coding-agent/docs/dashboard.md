@@ -47,7 +47,7 @@ Mappings do not persist main/subagent project association or automatically remap
 
 ### Cloud Workspaces management
 
-Open **Settings → Devices → Cloud Workspaces** or directly visit `#/settings/cloud-workspaces`. The independent screen does not mount ordinary Settings/model/version loaders and can be used without terminal commands or model credentials. Enter native absolute paths on **the backend host**, not your phone/browser; all folders must already exist. The page adds no folder browser/native picker, persisted browser selection or cloud polling.
+Open **Settings → Devices → cloud workspaces** or directly visit `#/settings/cloud-workspaces`. The independent screen does not mount ordinary Settings/model/version loaders and can be used without terminal commands or model credentials. Enter native absolute paths on **the backend host**, not your phone/browser; all folders must already exist. The page adds no folder browser/native picker, persisted browser selection or cloud polling.
 
 - **Connect workspace:** use an existing delivered marker (default), or deliberately initialize its first marker once.
 - **Link project:** use an existing marker, initialize its first marker, or supply its known full UUID for a markerless binding. Any present marker must agree. Explicitly choose direct-local or workspace-relative storage; projects may stay outside synced roots. Enter an absolute host path in either mode. Nothing is relocated, synchronized, trusted or automatically discovered.
