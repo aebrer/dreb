@@ -574,19 +574,16 @@ export function createAppStore() {
 			? fleet().diskSessions.find((candidate) => candidate.path === runtimeSessionFile)?.cwd
 			: undefined;
 		mutateSession(key, (session) => {
-			const previous = session.closed;
-			session.closed = {
-				...(runtime?.cwd || previous?.cwd ? { cwd: previous?.cwd ?? runtime?.cwd } : {}),
-				...(historicalCwd || previous?.historicalCwd
-					? { historicalCwd: previous?.historicalCwd ?? historicalCwd }
-					: {}),
-				...(runtime?.state.sessionFile || previous?.sessionFile
-					? { sessionFile: previous?.sessionFile ?? runtime?.state.sessionFile }
-					: {}),
-				...(previous?.bannerDismissed ? { bannerDismissed: true } : {}),
-				...(previous?.resuming ? { resuming: true } : {}),
-				...(previous?.resumeError ? { resumeError: previous.resumeError } : {}),
-			};
+			// Removal echoes and no-active resync reconcile the same closed lifecycle.
+			// Preserve its identity so a pending resume still owns its completion;
+			// hydration or releasing the view starts a genuinely new lifecycle.
+			session.closed ??= {};
+			const closed = session.closed;
+			if (closed.cwd === undefined && runtime?.cwd) closed.cwd = runtime.cwd;
+			if (closed.historicalCwd === undefined && historicalCwd) closed.historicalCwd = historicalCwd;
+			if (closed.sessionFile === undefined && runtime?.state.sessionFile) {
+				closed.sessionFile = runtime.state.sessionFile;
+			}
 			session.streaming = false;
 			session.compacting = false;
 			session.workingSince = undefined;

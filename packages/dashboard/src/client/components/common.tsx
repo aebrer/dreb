@@ -4,7 +4,7 @@
  * never color alone).
  */
 
-import { For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import type { RuntimeInfoDto } from "../../shared/protocol.js";
 import type { Toast } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
@@ -173,8 +173,23 @@ export function Modal(props: {
 				})
 				.sort((a, b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
 		const focusInside = () => (controls()[0] ?? panel).focus();
+		createEffect(() => {
+			// Disabling a natively focused submit button can move focus to body
+			// without a focusin event. Keep pending interaction on this panel.
+			if (props.dismissDisabled && ownsFocus()) panel.focus();
+		});
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (!ownsFocus() || (event.key !== "Tab" && event.key !== "Escape")) return;
+			if (!ownsFocus()) return;
+			if (event.key !== "Tab" && event.key !== "Escape") {
+				// Keys inside the backdrop retain delegated child handlers/defaults.
+				// Escaped keys must not reach background window-level shortcuts.
+				if (!(event.target instanceof Node) || !panel.parentElement?.contains(event.target)) {
+					event.preventDefault();
+					event.stopImmediatePropagation();
+					focusInside();
+				}
+				return;
+			}
 			event.preventDefault();
 			event.stopImmediatePropagation();
 			if (event.key === "Escape") {
@@ -206,6 +221,11 @@ export function Modal(props: {
 		<div
 			class="modal-backdrop"
 			role="presentation"
+			onMouseDown={(e) => {
+				// A backdrop press must not blur the focused managed panel before
+				// dismissal (or while dismissal is disabled during a launch).
+				if (props.manageFocus && e.target === e.currentTarget) e.preventDefault();
+			}}
 			onClick={(e) => {
 				if (e.target === e.currentTarget) dismiss();
 			}}

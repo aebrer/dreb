@@ -232,6 +232,74 @@ describe("opted-in Modal focus ownership", () => {
 		expect(input.value).toBe("a1");
 	});
 
+	it("moves pending focus to the panel and restores the connected invoker on completion", () => {
+		const invoker = outsideButton();
+		const [pending, setPending] = createSignal(false);
+		const { panel, dispose } = mount(() => (
+			<Modal manageFocus dismissDisabled={pending()} title="Pending launch" onDismiss={() => {}}>
+				<input disabled={pending()} />
+				<button type="button" disabled={pending()} onClick={() => setPending(true)}>
+					launch
+				</button>
+			</Modal>
+		));
+		const launch = panel.querySelector<HTMLButtonElement>("button")!;
+		launch.focus();
+		launch.click();
+		expect(launch.disabled).toBe(true);
+		expect(document.activeElement).toBe(panel);
+		const backdropPress = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+		panel.parentElement!.dispatchEvent(backdropPress);
+		expect(backdropPress.defaultPrevented).toBe(true);
+		const controlPress = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+		launch.dispatchEvent(controlPress);
+		expect(controlPress.defaultPrevented).toBe(false);
+		dispose();
+		expect(document.activeElement).toBe(invoker);
+	});
+
+	it("owns ordinary keys targeting body after silent focus loss without blocking input defaults", () => {
+		const background = watchWindow();
+		const localKey = vi.fn();
+		const { panel } = mount(() => (
+			<Modal manageFocus title="Escaped focus" onDismiss={() => {}}>
+				<input onKeyDown={localKey} />
+			</Modal>
+		));
+		for (const value of ["1", "a", "ArrowDown", "Enter", " "]) {
+			(document.activeElement as HTMLElement).blur();
+			expect(document.activeElement).toBe(document.body);
+			expect(key(document.body, value).defaultPrevented).toBe(true);
+			expect(panel.contains(document.activeElement)).toBe(true);
+		}
+		expect(background).not.toHaveBeenCalled();
+		expect(localKey).not.toHaveBeenCalled();
+		const input = panel.querySelector<HTMLInputElement>("input")!;
+		expect(key(input, "a").defaultPrevented).toBe(false);
+		expect(localKey).toHaveBeenCalledOnce();
+		expect(background).not.toHaveBeenCalled();
+	});
+
+	it("does not steal pending focus from a newer managed modal", () => {
+		const [pending, setPending] = createSignal(false);
+		mount(() => (
+			<Modal manageFocus dismissDisabled={pending()} title="Older" onDismiss={() => {}}>
+				<input disabled={pending()} />
+			</Modal>
+		));
+		const newer = mount(
+			() => (
+				<Modal manageFocus title="Newer" onDismiss={() => {}}>
+					<input />
+				</Modal>
+			),
+			true,
+		);
+		const input = newer.panel.querySelector<HTMLInputElement>("input")!;
+		setPending(true);
+		expect(document.activeElement).toBe(input);
+	});
+
 	it("returns outside focus to an enabled control or to the panel when all are disabled", () => {
 		const outside = outsideButton();
 		const [pending, setPending] = createSignal(false);
@@ -360,6 +428,9 @@ describe("unmanaged Modal compatibility", () => {
 		expect(panel.getAttribute("aria-modal")).toBeNull();
 		expect(panel.getAttribute("tabindex")).toBeNull();
 		expect(panel.hasAttribute("data-managed-modal")).toBe(false);
+		const backdropPress = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+		backdrop.dispatchEvent(backdropPress);
+		expect(backdropPress.defaultPrevented).toBe(false);
 		const input = panel.querySelector<HTMLInputElement>("input")!;
 		input.focus();
 		expect(key(input, "Tab").defaultPrevented).toBe(false);

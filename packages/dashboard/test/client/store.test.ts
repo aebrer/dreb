@@ -311,6 +311,122 @@ describe("project-selected closed-session resume", () => {
 		},
 	);
 
+	const reconciliationCases = [false, true].flatMap((subagent) =>
+		(["local", "project"] as const).flatMap((kind) =>
+			(["removal", "resync"] as const).flatMap((reconciliation) =>
+				(["success", "failure"] as const).map((outcome) => ({ subagent, kind, reconciliation, outcome })),
+			),
+		),
+	);
+	it.each(reconciliationCases)(
+		"preserves $kind resume $outcome through $reconciliation with subagent=$subagent",
+		async ({ subagent, kind, reconciliation, outcome }) => {
+			const store = await closedStore({ subagent });
+			const originalHash = window.location.hash;
+			const selection =
+				kind === "local"
+					? ({ kind: "local", cwd: " /literal/replacement path/ " } as const)
+					: ({ kind: "project", projectId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } as const);
+			const create = kind === "local" ? vi.mocked(api.createRuntime) : vi.mocked(api.createProjectRuntime);
+			const otherCreate = kind === "local" ? api.createProjectRuntime : api.createRuntime;
+			const directory = selection.kind === "local" ? selection.cwd : selection.projectId;
+			const request = deferred<RuntimeInfoDto>();
+			create.mockReturnValueOnce(request.promise);
+			const pending = store.resumeClosedSession(parentKey, selection);
+			expect(create).toHaveBeenCalledExactlyOnceWith(directory, { sessionPath: parentFile });
+
+			if (reconciliation === "resync") {
+				vi.mocked(api.resync).mockResolvedValueOnce({
+					fleet: { runtimes: [], diskSessions: [] },
+					barrierSeq: seq + 1,
+				});
+				emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+				await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+			} else {
+				emit(parentKey, { type: "runtime_removed" });
+				await flushAsyncWork();
+			}
+			expect(store.sessions[parentKey]?.closed).toMatchObject({
+				sessionFile: parentFile,
+				historicalCwd,
+				resuming: true,
+			});
+			await store.resumeClosedSession(parentKey, selection);
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(otherCreate).not.toHaveBeenCalled();
+
+			const resumed = runtimeSnapshot("reconciled-resume", false);
+			if (outcome === "success") request.resolve(resumed);
+			else request.reject(new Error("Project became unavailable during recovery"));
+			await pending;
+			if (outcome === "failure") {
+				expect(window.location.hash).toBe(originalHash);
+				expect(store.sessions[parentKey]?.closed).toMatchObject({
+					sessionFile: parentFile,
+					historicalCwd,
+					resuming: false,
+					bannerDismissed: false,
+					resumeError: "Project became unavailable during recovery",
+				});
+				expect(store.fleet().runtimes).toEqual([]);
+				create.mockResolvedValueOnce(resumed);
+				await store.resumeClosedSession(parentKey, selection);
+				expect(create).toHaveBeenNthCalledWith(2, directory, { sessionPath: parentFile });
+			}
+			window.dispatchEvent(new HashChangeEvent("hashchange"));
+			expect(window.location.hash).toBe("#/session/reconciled-resume");
+			expect(store.route()).toEqual({ screen: "session", key: "reconciled-resume" });
+			expect(store.fleet().runtimes).toEqual([resumed]);
+			expect(store.sessions[parentKey]).toBeUndefined();
+			expect(create).toHaveBeenCalledTimes(outcome === "success" ? 1 : 2);
+			expect(otherCreate).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["success", "failure"] as const)(
+		"does not attach old resume %s to a genuinely reopened and reclosed parent",
+		async (outcome) => {
+			const store = await closedStore();
+			const request = deferred<RuntimeInfoDto>();
+			vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+			const pending = store.resumeClosedSession(parentKey, {
+				kind: "project",
+				projectId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			});
+			const reopened = runtimeSnapshot(parentKey, false);
+			reopened.cwd = "/new/current/project";
+			reopened.state.sessionFile = "/sessions/NEW.jsonl";
+			vi.mocked(api.resync).mockResolvedValueOnce({
+				fleet: { runtimes: [reopened], diskSessions: [] },
+				active: { key: parentKey, state: reopened.state, messages: [], backgroundAgents: [] },
+				barrierSeq: seq + 1,
+			});
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+			expect(store.sessions[parentKey]?.closed).toBeUndefined();
+			emit(parentKey, { type: "runtime_removed" });
+			await flushAsyncWork();
+			store.dismissClosedBanner(parentKey);
+			const expected = {
+				cwd: "/new/current/project",
+				sessionFile: "/sessions/NEW.jsonl",
+				bannerDismissed: true,
+			};
+			expect(store.sessions[parentKey]?.closed).toEqual(expected);
+			if (outcome === "success") request.resolve(runtimeSnapshot("late-created", false));
+			else request.reject(new Error("Obsolete failure"));
+			await pending;
+			expect(window.location.hash).toBe(`#/session/${parentKey}`);
+			expect(store.sessions[parentKey]?.closed).toEqual(expected);
+			expect(store.fleet().runtimes.map((runtime) => runtime.key)).toEqual(
+				outcome === "success" ? ["late-created"] : [],
+			);
+			expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", {
+				sessionPath: parentFile,
+			});
+		},
+	);
+
 	it("can resume by ID and captured session file with no captured runtime cwd", async () => {
 		const runtime = runtimeSnapshot("no-cwd", false);
 		runtime.cwd = "";

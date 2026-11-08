@@ -549,12 +549,17 @@ for (const width of [1024, 390]) {
 			permitCreate = true;
 			createGate = gate();
 			inventoryFails = true;
-			await dialog.getByRole("button", { name: "start session", exact: true }).evaluate((button) => {
-				(button as HTMLButtonElement).click();
+			const invoker = page.getByRole("button", { name: "+ new session", exact: true });
+			const start = dialog.getByRole("button", { name: "start session", exact: true });
+			// Native clicking focuses the button before pending disables it. A
+			// synthetic click alone misses Chromium's resulting body-focus loss.
+			await start.click();
+			await dialog.getByRole("button", { name: "starting…", exact: true }).evaluate((button) => {
 				(button as HTMLButtonElement).click();
 				button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 			});
 			await expect.poll(() => creates().length).toBe(1);
+			expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
 			for (const control of await dialog.locator("input, select, textarea, button").all())
 				expect(await control.isDisabled()).toBe(true);
 			const management = dialog.getByText("manage Cloud Workspaces", { exact: true });
@@ -564,10 +569,12 @@ for (const width of [1024, 390]) {
 			await page.keyboard.press("Escape");
 			await page.locator(".modal-backdrop").click({ position: { x: 1, y: 1 } });
 			expect(await dialog.isVisible()).toBe(true);
+			expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
 			expect(new URL(page.url()).hash).toBe("#/");
 			createGate.release();
 			await dialog.waitFor({ state: "detached" });
 			await waitText("[role=alert]", "Synthetic inventory refresh failed");
+			expect(await invoker.evaluate((el) => el.isConnected && el === document.activeElement)).toBe(true);
 			expect(creates().map((c) => c.body)).toEqual([{ projectId: PROJECT }]);
 			expect(new URL(page.url()).hash).toBe("#/");
 			const next = await openNew();
@@ -698,6 +705,60 @@ it("isolates a managed directory dialog's number keys from a real SSE question i
 	await page.keyboard.press("1");
 	await page.waitForFunction(() => document.querySelectorAll(".ask-wizard input:checked").length === 1);
 	expect(await page.locator(".ask-wizard .ask-option.selected").textContent()).toContain("First");
+});
+
+it.each([1024, 390])("owns pending Resume focus and escaped question keys at %ipx", async (width) => {
+	compactProjects();
+	await open(width);
+	permitSession = true;
+	await page.locator(".session-card").getByRole("button", { name: "open", exact: true }).click();
+	await page.locator(".session-screen").waitFor();
+	await expect.poll(() => calls.filter((c) => c.path.endsWith("/hydrate")).length).toBe(1);
+	runtimes = [];
+	await emit({ type: "runtime_removed" });
+	await page.getByRole("button", { name: "Choose directory…", exact: true }).click();
+	const dialog = page.getByRole("dialog", { name: "choose runtime directory", exact: true });
+	await dialog.waitFor();
+	await chooseProject(dialog);
+	await emit({
+		type: "extension_ui_request",
+		id: "88888888-8888-4888-8888-888888888888",
+		method: "ask",
+		title: "Synthetic background question",
+		questions: [{ question: "Which synthetic choice?", options: ["First", "Second"], allowFreeText: false }],
+	});
+	await page.locator(".ask-wizard").waitFor();
+	const selected = page.locator(".ask-wizard input:checked");
+	expect(await selected.count()).toBe(0);
+	permitCreate = true;
+	createGate = gate();
+	await dialog.getByRole("button", { name: "resume session", exact: true }).click();
+	await expect.poll(() => creates().length).toBe(1);
+	expect(await dialog.isVisible()).toBe(true);
+	for (const button of await dialog.locator(".modal-actions button").all())
+		expect(await button.isDisabled()).toBe(true);
+	expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+	await page.keyboard.press("1");
+	expect(await selected.count()).toBe(0);
+	// A silent native blur does not emit focusin. The document guard must
+	// still own keys even if some other DOM change sends focus back to body.
+	await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+	expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+	await page.keyboard.press("1");
+	expect(await selected.count()).toBe(0);
+	expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+	await page.keyboard.press("Escape");
+	await page.locator(".modal-backdrop").click({ position: { x: 1, y: 1 } });
+	expect(await dialog.isVisible()).toBe(true);
+	expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+	expect(creates().map((c) => c.body)).toEqual([
+		{ projectId: PROJECT, sessionPath: `/synthetic-sessions/${SESSION}.jsonl` },
+	]);
+	expect(calls.filter((c) => c.path.includes("extension-ui-response"))).toHaveLength(0);
+	createGate.release();
+	await page.waitForFunction((hash) => location.hash === hash, `#/session/${CREATED}`);
+	await dialog.waitFor({ state: "detached" });
+	expect(creates()).toHaveLength(1);
 });
 
 it("contains long cloud rows, errors and the selected project identity at 320px", async () => {
