@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_DIR_NAME, ENV_AGENT_DIR, getCloudWorkspaceRegistryPath } from "../src/config.js";
 import * as entrypoint from "../src/core/cloud-workspaces/index.js";
 import { CloudWorkspaceRegistry } from "../src/core/cloud-workspaces/registry.js";
+import { CloudSessionStorage } from "../src/core/cloud-workspaces/session-storage.js";
 import { CloudWorkspaceError } from "../src/core/cloud-workspaces/types.js";
 
 const run = promisify(execFile);
@@ -15,6 +16,7 @@ const packageDir = fileURLToPath(new URL("..", import.meta.url));
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const publicNames = [
 	"CLOUD_WORKSPACE_VERSION",
+	"CloudSessionStorage",
 	"CloudWorkspaceError",
 	"CloudWorkspaceRegistry",
 	"getCloudWorkspaceRegistryPath",
@@ -50,6 +52,7 @@ globalThis.__cloudMetadataForbidden = forbidden;
 const graph = new Set([
   "dist/core/cloud-workspaces/index.js",
   "dist/core/cloud-workspaces/registry.js",
+  "dist/core/cloud-workspaces/session-storage.js",
   "dist/core/cloud-workspaces/storage.js",
   "dist/core/cloud-workspaces/types.js",
   "dist/config.js",
@@ -146,7 +149,7 @@ violations.length = 0;
 
 const entry = await import("@dreb/coding-agent/cloud-workspaces");
 assert.equal(fileURLToPath(import.meta.resolve("@dreb/coding-agent/cloud-workspaces")), join(packageDir, "dist/core/cloud-workspaces/index.js"));
-assert.deepEqual(Object.keys(entry).sort(), ["CLOUD_WORKSPACE_VERSION", "CloudWorkspaceError", "CloudWorkspaceRegistry", "getCloudWorkspaceRegistryPath"]);
+assert.deepEqual(Object.keys(entry).sort(), ["CLOUD_WORKSPACE_VERSION", "CloudSessionStorage", "CloudWorkspaceError", "CloudWorkspaceRegistry", "getCloudWorkspaceRegistryPath"]);
 assert.equal(entry.CLOUD_WORKSPACE_VERSION, 1);
 assert.equal(new entry.CloudWorkspaceError("CONFLICT", "test").code, "CONFLICT");
 assert.equal(entry.getCloudWorkspaceRegistryPath(), join(profile, "cloud-workspaces.json"));
@@ -156,6 +159,8 @@ const configured = process.env[agentEnv];
 delete process.env[agentEnv];
 assert.equal(entry.getCloudWorkspaceRegistryPath(), join(home, configDir, "agent/cloud-workspaces.json"));
 process.env[agentEnv] = configured;
+assert.equal(new entry.CloudSessionStorage().path, join(profile, "settings.json"));
+assert.equal(new entry.CloudSessionStorage({ agentDir: explicit }).path, join(explicit, "settings.json"));
 const registry = new entry.CloudWorkspaceRegistry();
 const isolated = new entry.CloudWorkspaceRegistry({ agentDir: explicit });
 const empty = { version: 1, workspaces: [], projects: [] };
@@ -206,11 +211,12 @@ describe("metadata-only cloud-workspaces package boundary", () => {
 		);
 	});
 
-	it("shares source version/error/registry/path helpers without exposing storage or runtime APIs", () => {
+	it("shares source version/error/registry/session-storage/path helpers without exposing general settings or runtime APIs", () => {
 		expect(Object.keys(entrypoint).sort()).toEqual(publicNames);
 		expect(entrypoint.CLOUD_WORKSPACE_VERSION).toBe(1);
 		expect(entrypoint.CloudWorkspaceError).toBe(CloudWorkspaceError);
 		expect(entrypoint.CloudWorkspaceRegistry).toBe(CloudWorkspaceRegistry);
+		expect(entrypoint.CloudSessionStorage).toBe(CloudSessionStorage);
 		expect(entrypoint.getCloudWorkspaceRegistryPath).toBe(getCloudWorkspaceRegistryPath);
 		vi.stubEnv("HOME", root);
 		vi.stubEnv("USERPROFILE", root);

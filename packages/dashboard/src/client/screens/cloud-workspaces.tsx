@@ -1,11 +1,29 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import type { CloudAvailabilityDto, CloudWorkspacesDto } from "../../shared/protocol.js";
+import type {
+	CloudAvailabilityDto,
+	CloudProjectDto,
+	CloudSessionStorageDto,
+	CloudWorkspacesDto,
+} from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Topbar } from "../components/common.js";
 import type { AppStore } from "../state/store.js";
 import "../styles/cloud-workspaces.css";
 
 type Target = { kind: "workspace" | "project"; id: string };
+type StorageConfirmation = {
+	root: string | null;
+	expected: { sessionDir: string | null; subagentSessionDir: string | null };
+	subdirectories: CloudSessionStorageDto["subdirectories"];
+};
+
+/** Display/join only straightforward native paths; the backend validates every binding. */
+function joinedPath(root: string, relative: string, windows: boolean): string {
+	const separator = windows ? "\\" : "/";
+	const suffix = windows ? relative.replaceAll("/", "\\") : relative;
+	if (suffix === "." || suffix === "") return root;
+	return `${root.endsWith(separator) ? root : root + separator}${suffix}`;
+}
 
 function errorMessage(error: unknown): string {
 	const body = error && typeof error === "object" && "body" in error ? error.body : undefined;
@@ -36,6 +54,12 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 	const [writeError, setWriteError] = createSignal("");
 	const [notice, setNotice] = createSignal("");
 	const [pending, setPending] = createSignal(false);
+	const [folderPath, setFolderPath] = createSignal("");
+	const [setupPath, setSetupPath] = createSignal<string>();
+	const [storage, setStorage] = createSignal<CloudSessionStorageDto>();
+	const [storageLoading, setStorageLoading] = createSignal(true);
+	const [storageError, setStorageError] = createSignal("");
+	const [storageConfirmation, setStorageConfirmation] = createSignal<StorageConfirmation>();
 	const [workspacePath, setWorkspacePath] = createSignal("");
 	const [workspaceMode, setWorkspaceMode] = createSignal("existing");
 	const [projectPath, setProjectPath] = createSignal("");
@@ -49,6 +73,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 	let disposed = false;
 	let loadGeneration = 0;
 	let mutationGeneration = 0;
+	let storageLoadGeneration = 0;
 	const workspaces = createMemo(() => [...(snapshot()?.workspaces ?? [])].sort((a, b) => a.id.localeCompare(b.id)));
 	const projects = createMemo(() => [...(snapshot()?.projects ?? [])].sort((a, b) => a.id.localeCompare(b.id)));
 	const placeholder = () => (snapshot()?.pathStyle === "windows" ? "C:\\Users\\you\\Projects" : "/home/you/projects");
@@ -57,6 +82,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 		disposed = true;
 		loadGeneration += 1;
 		mutationGeneration += 1;
+		storageLoadGeneration += 1;
 	});
 
 	async function load() {
@@ -74,9 +100,33 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 			if (!disposed && generation === loadGeneration) setLoading(false);
 		}
 	}
-	onMount(() => void load());
+	async function loadStorage() {
+		setStorageConfirmation(undefined);
+		const generation = ++storageLoadGeneration;
+		setStorageLoading(true);
+		setStorageError("");
+		try {
+			const data = await api.cloudSessionStorage();
+			if (disposed || generation !== storageLoadGeneration) return;
+			setStorage(data);
+		} catch (error) {
+			if (disposed || generation !== storageLoadGeneration) return;
+			setStorageError(errorMessage(error));
+		} finally {
+			if (!disposed && generation === storageLoadGeneration) setStorageLoading(false);
+		}
+	}
+	onMount(() => {
+		void load();
+		void loadStorage();
+	});
 
-	async function mutate(action: () => Promise<unknown>, success: string, onSuccess?: () => void) {
+	async function mutate(
+		action: () => Promise<unknown>,
+		success: string,
+		onSuccess?: () => void,
+		onError?: (error: unknown) => boolean,
+	) {
 		// This guard is set synchronously, before invoking the API or awaiting anything.
 		if (disposed || pending()) return;
 		setPending(true);
@@ -89,7 +139,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 			await action();
 		} catch (error) {
 			if (!disposed && generation === mutationGeneration) {
-				setWriteError(errorMessage(error));
+				if (!onError?.(error)) setWriteError(errorMessage(error));
 				setPending(false);
 			}
 			return;
@@ -100,6 +150,75 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 		// A reload failure is separate from a successful durable mutation. Never retry the write.
 		await load();
 		if (!disposed && generation === mutationGeneration) setPending(false);
+	}
+
+	function configuredProjectPath(project: CloudProjectDto): string | undefined {
+		if (project.location.kind === "local") return project.location.path;
+		const location = project.location;
+		const workspace = workspaces().find((candidate) => candidate.id === location.workspaceId);
+		return workspace
+			? joinedPath(workspace.path, location.relativePath, snapshot()?.pathStyle === "windows")
+			: undefined;
+	}
+
+	function connectFolder() {
+		if (disposed || pending() || !snapshot() || !folderPath()) return;
+		const path = folderPath();
+		setSetupPath(undefined);
+		const known = projects().find(
+			(project) =>
+				configuredProjectPath(project) === path || (project.status.available && project.status.path === path),
+		);
+		void mutate(
+			() =>
+				api.linkProject({
+					path,
+					...(known ? { projectId: known.id } : {}),
+					...(known?.location.kind === "workspace" ? { workspaceId: known.location.workspaceId } : {}),
+				}),
+			`Folder connected successfully: ${path}`,
+			undefined,
+			(error) => {
+				const body = error && typeof error === "object" && "body" in error ? error.body : undefined;
+				if (body && typeof body === "object" && "code" in body && body.code === "NOT_FOUND") {
+					if (folderPath() === path) setSetupPath(path);
+					return true;
+				}
+				return false;
+			},
+		);
+	}
+
+	const storageReady = () => !!storage() && !storageLoading() && !storageError();
+	function confirmStorage(root: string | null) {
+		const current = storage();
+		if (disposed || pending() || !storageReady() || !current || root === "") return;
+		setStorageConfirmation({
+			root,
+			expected: { sessionDir: current.sessionDir, subagentSessionDir: current.subagentSessionDir },
+			subdirectories: { ...current.subdirectories },
+		});
+	}
+
+	async function saveStorage() {
+		const confirmation = storageConfirmation();
+		if (disposed || pending() || !storageReady() || !confirmation) return;
+		// Share the synchronous single-flight guard with all metadata forms/actions.
+		setPending(true);
+		const generation = ++mutationGeneration;
+		setWriteError("");
+		setNotice("");
+		try {
+			const data = await api.saveCloudSessionStorage(confirmation.root, confirmation.expected);
+			if (disposed || generation !== mutationGeneration) return;
+			setStorage(data);
+			setStorageConfirmation(undefined);
+			setNotice("Session log locations saved. Existing logs and active sessions are unchanged.");
+		} catch (error) {
+			if (!disposed && generation === mutationGeneration) setWriteError(errorMessage(error));
+		} finally {
+			if (!disposed && generation === mutationGeneration) setPending(false);
+		}
 	}
 
 	function beginEdit(target: Target, path: string, binding = "") {
@@ -268,13 +387,16 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 						type="button"
 						disabled={pending()}
 						onClick={() => {
-							if (!pending()) void load();
+							if (!pending()) {
+								void load();
+								void loadStorage();
+							}
 						}}
 					>
 						Refresh metadata
 					</button>
 					<Show when={pending()}>
-						<output aria-live="polite">Saving metadata…</output>
+						<output aria-live="polite">Saving changes…</output>
 					</Show>
 				</div>
 				<Show when={loading()}>
@@ -296,118 +418,278 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 				<Show when={notice()}>
 					<output aria-live="polite">{notice()}</output>
 				</Show>
-				<div class="cloud-forms">
-					<form
-						aria-label="Connect workspace"
-						onSubmit={(event) => {
-							event.preventDefault();
-							const path = workspacePath();
-							const initialize = workspaceMode() === "initialize";
-							void mutate(
-								() => api.connectWorkspace({ path, ...(initialize ? { initialize: true } : {}) }),
-								"Workspace connected successfully.",
-							);
-						}}
-					>
-						<fieldset disabled={pending() || !snapshot()}>
-							<legend>Connect workspace</legend>
-							<label>
-								Workspace absolute host path
-								<input
-									required
-									value={workspacePath()}
-									placeholder={placeholder()}
-									onInput={(event) => setWorkspacePath(event.currentTarget.value)}
-								/>
-							</label>
-							<label>
-								Workspace identity mode
-								<select
-									value={workspaceMode()}
-									onChange={(event) => setWorkspaceMode(event.currentTarget.value)}
+				<form
+					aria-label="Connect folder"
+					onSubmit={(event) => {
+						event.preventDefault();
+						connectFolder();
+					}}
+				>
+					<fieldset disabled={pending()}>
+						<legend>Connect a folder</legend>
+						<label>
+							Folder path on this computer
+							<input
+								required
+								value={folderPath()}
+								placeholder={placeholder()}
+								onInput={(event) => {
+									setFolderPath(event.currentTarget.value);
+									setSetupPath(undefined);
+									setStorageConfirmation(undefined);
+								}}
+							/>
+						</label>
+						<p>
+							The same path can be used independently for a project connection and optional session logs.
+							Projects may remain elsewhere. Connecting a folder does not change log locations.
+						</p>
+						<button class="btn" type="submit" disabled={!snapshot() || !folderPath()}>
+							Connect folder
+						</button>
+					</fieldset>
+				</form>
+				<Show when={setupPath()}>
+					{(path) => (
+						<fieldset class="cloud-confirmation" disabled={pending()}>
+							<legend>Set up this folder for the first time?</legend>
+							<p>{path()}</p>
+							<p>
+								If this folder was already set up on another computer, wait for its synced identity to arrive.
+								Do not set it up again or initialize a replacement identity.
+							</p>
+							<div class="cloud-actions">
+								<button
+									class="btn"
+									type="button"
+									onClick={() => {
+										if (disposed || pending() || setupPath() !== folderPath()) return;
+										const capturedPath = path();
+										// Dismiss before writing: a partial initialization must retry through Connect.
+										setSetupPath(undefined);
+										void mutate(
+											() => api.linkProject({ path: capturedPath, initialize: true }),
+											`Folder connected successfully: ${capturedPath}`,
+										);
+									}}
 								>
-									<option value="existing">Existing identity (default)</option>
-									<option value="initialize">Initialize first marker</option>
-								</select>
-							</label>
-							<button class="btn" type="submit">
-								Connect workspace
-							</button>
+									Set up folder
+								</button>
+								<button class="btn" type="button" onClick={() => setSetupPath(undefined)}>
+									Cancel setup
+								</button>
+							</div>
 						</fieldset>
-					</form>
-					<form
-						aria-label="Link project"
-						onSubmit={(event) => {
-							event.preventDefault();
-							const body = {
-								path: projectPath(),
-								...(projectMode() === "initialize" ? { initialize: true } : {}),
-								...(projectMode() === "known" ? { projectId: projectId() } : {}),
-								...(workspaceBinding() ? { workspaceId: workspaceBinding() } : {}),
-							};
-							void mutate(() => api.linkProject(body), "Project linked successfully.");
-						}}
-					>
-						<fieldset disabled={pending() || !snapshot()}>
-							<legend>Link project</legend>
-							<label>
-								Project absolute host path
-								<input
-									required
-									value={projectPath()}
-									placeholder={placeholder()}
-									onInput={(event) => setProjectPath(event.currentTarget.value)}
-								/>
-							</label>
-							<label>
-								Project identity mode
-								<select value={projectMode()} onChange={(event) => setProjectMode(event.currentTarget.value)}>
-									<option value="existing">Existing marker (default)</option>
-									<option value="initialize">Initialize first marker</option>
-									<option value="known">Known full ID (markerless)</option>
-								</select>
-							</label>
-							<Show when={projectMode() === "known"}>
+					)}
+				</Show>
+				<section aria-label="Session log storage">
+					<h2>Session log storage</h2>
+					<Show when={storageLoading()}>
+						<output aria-live="polite">Loading session storage…</output>
+					</Show>
+					<Show when={storageError()}>
+						<p role="alert" class="cloud-error">
+							Could not load session storage: {storageError()} Project connections are independent.
+						</p>
+						<button
+							class="btn"
+							type="button"
+							disabled={pending()}
+							onClick={() => {
+								if (!pending()) void loadStorage();
+							}}
+						>
+							Retry session storage
+						</button>
+					</Show>
+					<Show when={storage()}>
+						{(current) => (
+							<>
+								<p>Main session logs: {current().sessionDir ?? "Local default (~/.dreb/agent/sessions)"}</p>
+								<p>
+									Subagent session logs:{" "}
+									{current().subagentSessionDir ?? "Local default (~/.dreb/agent/subagent-sessions)"}
+								</p>
+								<Show when={current().restartRequired}>
+									<output aria-live="polite">
+										Dashboard inventory still uses its startup log location. Restart Dashboard only when
+										agents are idle to refresh inventory. Saving does not restart Dashboard.
+									</output>
+								</Show>
+							</>
+						)}
+					</Show>
+					<div class="cloud-actions">
+						<button
+							class="btn"
+							type="button"
+							disabled={pending() || !storageReady() || !folderPath()}
+							onClick={() => confirmStorage(folderPath())}
+						>
+							Store session logs here
+						</button>
+						<button
+							class="btn"
+							type="button"
+							disabled={pending() || !storageReady()}
+							onClick={() => confirmStorage(null)}
+						>
+							Use local log defaults
+						</button>
+					</div>
+					<Show when={storageConfirmation()}>
+						{(confirmation) => (
+							<fieldset class="cloud-confirmation" disabled={pending()}>
+								<legend>
+									{confirmation().root === null
+										? "Return to local log defaults?"
+										: "Store session logs in this folder?"}
+								</legend>
+								<Show
+									when={confirmation().root !== null}
+									fallback={<p>Use local defaults for main and subagent session logs.</p>}
+								>
+									<p>Folder: {confirmation().root}</p>
+									<p>Main logs: {confirmation().subdirectories.sessionDir}</p>
+									<p>Subagent logs: {confirmation().subdirectories.subagentSessionDir}</p>
+								</Show>
+								<p>
+									This changes global defaults for all projects. Existing logs are not moved, copied or
+									deleted. Active sessions keep their existing files. Project/CLI overrides remain in effect.
+									No folders or markers are created. There is no automatic restart. Cloud sync is not a lock.
+								</p>
+								<div class="cloud-actions">
+									<button class="btn" type="button" onClick={() => void saveStorage()}>
+										Save log locations
+									</button>
+									<button class="btn" type="button" onClick={() => setStorageConfirmation(undefined)}>
+										Cancel log change
+									</button>
+								</div>
+							</fieldset>
+						)}
+					</Show>
+				</section>
+				<details class="cloud-advanced">
+					<summary>advanced setup</summary>
+					<div class="cloud-forms">
+						<form
+							aria-label="Connect workspace"
+							onSubmit={(event) => {
+								event.preventDefault();
+								const path = workspacePath();
+								const initialize = workspaceMode() === "initialize";
+								void mutate(
+									() => api.connectWorkspace({ path, ...(initialize ? { initialize: true } : {}) }),
+									"Workspace connected successfully.",
+								);
+							}}
+						>
+							<fieldset disabled={pending() || !snapshot()}>
+								<legend>Connect workspace</legend>
 								<label>
-									Known full project ID
+									Workspace absolute host path
 									<input
 										required
-										value={projectId()}
-										onInput={(event) => setProjectId(event.currentTarget.value)}
+										value={workspacePath()}
+										placeholder={placeholder()}
+										onInput={(event) => setWorkspacePath(event.currentTarget.value)}
 									/>
 								</label>
+								<label>
+									Workspace identity mode
+									<select
+										value={workspaceMode()}
+										onChange={(event) => setWorkspaceMode(event.currentTarget.value)}
+									>
+										<option value="existing">Existing identity (default)</option>
+										<option value="initialize">Initialize first marker</option>
+									</select>
+								</label>
+								<button class="btn" type="submit">
+									Connect workspace
+								</button>
+							</fieldset>
+						</form>
+						<form
+							aria-label="Link project"
+							onSubmit={(event) => {
+								event.preventDefault();
+								const body = {
+									path: projectPath(),
+									...(projectMode() === "initialize" ? { initialize: true } : {}),
+									...(projectMode() === "known" ? { projectId: projectId() } : {}),
+									...(workspaceBinding() ? { workspaceId: workspaceBinding() } : {}),
+								};
+								void mutate(() => api.linkProject(body), "Project linked successfully.");
+							}}
+						>
+							<fieldset disabled={pending() || !snapshot()}>
+								<legend>Link project</legend>
+								<label>
+									Project absolute host path
+									<input
+										required
+										value={projectPath()}
+										placeholder={placeholder()}
+										onInput={(event) => setProjectPath(event.currentTarget.value)}
+									/>
+								</label>
+								<label>
+									Project identity mode
+									<select
+										value={projectMode()}
+										onChange={(event) => setProjectMode(event.currentTarget.value)}
+									>
+										<option value="existing">Existing marker (default)</option>
+										<option value="initialize">Initialize first marker</option>
+										<option value="known">Known full ID (markerless)</option>
+									</select>
+								</label>
+								<Show when={projectMode() === "known"}>
+									<label>
+										Known full project ID
+										<input
+											required
+											value={projectId()}
+											onInput={(event) => setProjectId(event.currentTarget.value)}
+										/>
+									</label>
+								</Show>
+								<BindingSelect value={workspaceBinding()} onChange={setWorkspaceBinding} />
+								<p>
+									Enter an absolute host path in either mode. Workspace-relative binding records its
+									relationship to the explicitly selected workspace; no folders are moved or discovered.
+								</p>
+								<button class="btn" type="submit">
+									Link project
+								</button>
+							</fieldset>
+						</form>
+					</div>
+					<Show when={snapshot()}>
+						<section aria-label="Registered workspaces">
+							<h2>Workspaces</h2>
+							<Show when={workspaces().length === 0}>
+								<p>No workspaces registered.</p>
 							</Show>
-							<BindingSelect value={workspaceBinding()} onChange={setWorkspaceBinding} />
-							<p>
-								Enter an absolute host path in either mode. Workspace-relative binding records its relationship
-								to the explicitly selected workspace; no folders are moved or discovered.
-							</p>
-							<button class="btn" type="submit">
-								Link project
-							</button>
-						</fieldset>
-					</form>
-				</div>
+							<For each={workspaces()}>
+								{(workspace) => (
+									<article class="cloud-row" aria-label={`Workspace ${workspace.id}`}>
+										<h3>{workspace.id}</h3>
+										<p>Configured host path: {workspace.path}</p>
+										<Availability status={workspace.status} />
+										<RowActions kind="workspace" id={workspace.id} path={workspace.path} />
+									</article>
+								)}
+							</For>
+						</section>
+					</Show>
+				</details>
 				<Show when={snapshot()}>
 					<Show when={workspaces().length === 0 && projects().length === 0}>
 						<p>No registered workspaces or projects. Ordinary local sessions work without setup.</p>
 					</Show>
-					<section aria-label="Registered workspaces">
-						<h2>Workspaces</h2>
-						<Show when={workspaces().length === 0}>
-							<p>No workspaces registered.</p>
-						</Show>
-						<For each={workspaces()}>
-							{(workspace) => (
-								<article class="cloud-row" aria-label={`Workspace ${workspace.id}`}>
-									<h3>{workspace.id}</h3>
-									<p>Configured host path: {workspace.path}</p>
-									<Availability status={workspace.status} />
-									<RowActions kind="workspace" id={workspace.id} path={workspace.path} />
-								</article>
-							)}
-						</For>
-					</section>
 					<section aria-label="Registered projects">
 						<h2>Projects</h2>
 						<Show when={projects().length === 0}>
@@ -416,13 +698,26 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 						<For each={projects()}>
 							{(project) => (
 								<article class="cloud-row" aria-label={`Project ${project.id}`}>
-									<h3>{project.id}</h3>
-									<p>
-										{project.location.kind === "local"
-											? `Configured local path: ${project.location.path}`
-											: `Workspace ID: ${project.location.workspaceId} — relative path: ${project.location.relativePath}`}
-									</p>
-									<p>Marker required: {project.markerRequired ? "yes" : "no (known-ID markerless binding)"}</p>
+									<h3>
+										{configuredProjectPath(project) ??
+											(project.status.available
+												? project.status.path
+												: project.location.kind === "workspace"
+													? project.location.relativePath
+													: "")}
+									</h3>
+									<details class="cloud-technical">
+										<summary>technical details</summary>
+										<p>Project ID: {project.id}</p>
+										<p>
+											{project.location.kind === "local"
+												? `Configured local path: ${project.location.path}`
+												: `Workspace ID: ${project.location.workspaceId} — relative path: ${project.location.relativePath}`}
+										</p>
+										<p>
+											Marker required: {project.markerRequired ? "yes" : "no (known-ID markerless binding)"}
+										</p>
+									</details>
 									<Availability status={project.status} />
 									<RowActions
 										kind="project"

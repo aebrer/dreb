@@ -1,6 +1,11 @@
 /** Authenticated host metadata adapter. No RPC, CLI subprocess, context or provider calls. */
 import { isAbsolute } from "node:path";
-import { CloudWorkspaceError, type CloudWorkspaceRegistry } from "@dreb/coding-agent/cloud-workspaces";
+import {
+	type CloudSessionDirectories,
+	type CloudSessionStorage,
+	CloudWorkspaceError,
+	type CloudWorkspaceRegistry,
+} from "@dreb/coding-agent/cloud-workspaces";
 import type { Express, Response } from "express";
 import type { CloudAvailabilityDto, CloudWorkspacesDto } from "../shared/protocol.js";
 
@@ -67,6 +72,7 @@ export function registerCloudWorkspaceRoutes(
 	app: Express,
 	registry: () => CloudWorkspaceRegistry,
 	log: (line: string) => void,
+	sessionStorage: () => CloudSessionStorage,
 ): void {
 	// Installed after DashboardAuth and JSON parsing, never on a public/auth-bypass router.
 	app.use("/api/cloud-workspaces", (req, res, next) => {
@@ -77,6 +83,25 @@ export function registerCloudWorkspaceRoutes(
 		} catch (error) {
 			sendCloudError(res, error);
 		}
+	});
+	app.get("/api/cloud-workspaces/session-storage", (_req, res) => {
+		(async () => res.json(await sessionStorage().read()))().catch((error) => sendCloudError(res, error));
+	});
+	app.put("/api/cloud-workspaces/session-storage", (req, res) => {
+		(async () => {
+			const body = object(req.body, ["root", "expected"]);
+			const root = body.root === null ? null : hostPath(body.root);
+			const expectedBody = object(body.expected, ["sessionDir", "subagentSessionDir"]);
+			for (const key of ["sessionDir", "subagentSessionDir"] as const) {
+				if (expectedBody[key] !== null && typeof expectedBody[key] !== "string") {
+					throw new CloudRequestError("Expected both current session-log locations as strings or null.");
+				}
+			}
+			const expected = expectedBody as unknown as CloudSessionDirectories;
+			const settings = await sessionStorage().setRoot(root, expected);
+			log("cloud session-log locations updated");
+			res.json(settings);
+		})().catch((error) => sendCloudError(res, error));
 	});
 	app.get("/api/cloud-workspaces", (_req, res) => {
 		(async () => {

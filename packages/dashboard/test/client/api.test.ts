@@ -226,6 +226,46 @@ describe("Cloud Workspaces transport", () => {
 		expect(fetchMock.mock.calls).toEqual([["/api/cloud-workspaces", undefined]]);
 	});
 
+	it("reads only the narrow global session-storage endpoint", async () => {
+		const body = { sessionDir: null, subagentSessionDir: null, restartRequired: false };
+		const fetchMock = mockJson(body);
+		expect(await api.cloudSessionStorage()).toEqual(body);
+		expect(fetchMock.mock.calls).toEqual([["/api/cloud-workspaces/session-storage", undefined]]);
+	});
+
+	it.each([" /cloud root/ ", null])("PUTs an explicit log root/reset and captured expected pair: %s", async (root) => {
+		const expected = { sessionDir: "/old main", subagentSessionDir: null };
+		const fetchMock = mockJson({ ...expected, restartRequired: true });
+		await api.saveCloudSessionStorage(root, expected);
+		expect(fetchMock.mock.calls).toEqual([
+			[
+				"/api/cloud-workspaces/session-storage",
+				{
+					method: "PUT",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ root, expected }),
+				},
+			],
+		]);
+	});
+
+	it("retains session-storage conflict details without retrying", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 409,
+			headers: new Headers({ "content-type": "application/json" }),
+			json: async () => ({ code: "CONFLICT", error: "Reload current log locations" }),
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(
+			api.saveCloudSessionStorage(null, { sessionDir: null, subagentSessionDir: null }),
+		).rejects.toMatchObject({
+			status: 409,
+			body: { code: "CONFLICT", error: "Reload current log locations" },
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it.each([undefined, false, true])(
 		"POSTs connect with initialize=%s without changing the path",
 		async (initialize) => {

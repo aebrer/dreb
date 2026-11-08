@@ -1,4 +1,4 @@
-/** PR566 acceptance against the shipped App, production CSS and unchanged SSE fixture in Chromium.
+/** PR567 acceptance against the shipped App, production CSS and unchanged SSE fixture in Chromium.
  * All host state is synthetic. This does not certify native touch, Safari or general accessibility.
  */
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,7 +9,13 @@ import { type Browser, chromium, type Locator, type Page } from "playwright";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import solid from "vite-plugin-solid";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { CloudProjectDto, CloudWorkspacesDto, RuntimeInfoDto, SessionInfoDto } from "../../src/shared/protocol.js";
+import type {
+	CloudProjectDto,
+	CloudSessionStorageDto,
+	CloudWorkspacesDto,
+	RuntimeInfoDto,
+	SessionInfoDto,
+} from "../../src/shared/protocol.js";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const PROJECT = "22222222-2222-4222-8222-222222222222";
@@ -20,6 +26,13 @@ const SESSION = "66666666-6666-4666-8666-666666666666";
 const LONG_PATH = `/synthetic-host/${"unbroken-project-path-".repeat(22)}/project`;
 const LONG_ERROR = `Host directory unavailable: ${"synthetic-storage-error-".repeat(24)}`;
 const CLOUD_ROUTE = "#/settings/cloud-workspaces";
+const STORAGE_PATH = "/api/cloud-workspaces/session-storage";
+const defaultStorage = (): CloudSessionStorageDto => ({
+	sessionDir: null,
+	subagentSessionDir: null,
+	subdirectories: { sessionDir: ".dreb/sessions", subagentSessionDir: ".dreb/subagent-sessions" },
+	restartRequired: false,
+});
 const emptyOverview = (): CloudWorkspacesDto => ({ version: 1, pathStyle: "posix", workspaces: [], projects: [] });
 function project(id = PROJECT, path = LONG_PATH): CloudProjectDto {
 	return { id, location: { kind: "local", path }, markerRequired: false, status: { available: true, path } };
@@ -103,6 +116,9 @@ let calls: Call[];
 let unexpected: string[];
 let pageErrors: string[];
 let overviewFailure: Failure | undefined;
+let sessionStorage: CloudSessionStorageDto;
+let storageReadFailure: Failure | undefined;
+let storageWriteFailure: Failure | undefined;
 let mutationFailure: Failure | undefined;
 let createFailure: Failure | undefined;
 let inventoryFails: boolean;
@@ -142,6 +158,9 @@ beforeEach(async () => {
 	unexpected = [];
 	pageErrors = [];
 	overviewFailure = undefined;
+	sessionStorage = defaultStorage();
+	storageReadFailure = undefined;
+	storageWriteFailure = undefined;
 	mutationFailure = undefined;
 	createFailure = undefined;
 	inventoryFails = false;
@@ -172,8 +191,27 @@ beforeEach(async () => {
 		if (method === "POST" && path === "/api/events/diagnostic") return json({ ok: true });
 		if (method === "GET" && path === "/api/cloud-workspaces")
 			return overviewFailure ? json(overviewFailure, 500) : json(overview);
+		// Only management can read/write storage; local/linked New Session must never touch it.
+		if (path === STORAGE_PATH && page.url().endsWith(CLOUD_ROUTE)) {
+			if (method === "GET") return storageReadFailure ? json(storageReadFailure, 500) : json(sessionStorage);
+			if (method === "PUT") {
+				await mutationGate?.promise;
+				if (storageWriteFailure) return json(storageWriteFailure, 409);
+				const root = body?.root;
+				sessionStorage =
+					root === null
+						? defaultStorage()
+						: {
+								...defaultStorage(),
+								sessionDir: `${String(root)}/.dreb/sessions`,
+								subagentSessionDir: `${String(root)}/.dreb/subagent-sessions`,
+								restartRequired: true,
+							};
+				return json(sessionStorage);
+			}
+		}
 		// Only explicit Settings discovery tests permit its existing resource loaders.
-		// Keep the cold Cloud route's strict metadata-only allowlist unchanged.
+		// The cold Cloud route allows only registry and narrow session-storage metadata.
 		if (permitSettings && method === "GET") {
 			if (path === "/api/settings")
 				return settingsFail ? json({ error: "Synthetic settings failure" }, 500) : json({});
@@ -314,7 +352,13 @@ async function open(width: number, hash = "#/"): Promise<void> {
 	await page.setViewportSize({ width, height: width <= 390 ? 844 : 900 });
 	await page.goto(`${fixtureUrl}${hash}`, { waitUntil: "domcontentloaded" });
 	await page.locator(hash === CLOUD_ROUTE ? ".cloud-workspaces" : ".session-card").waitFor();
-	if (hash === CLOUD_ROUTE) await page.getByRole("button", { name: "Connect workspace", exact: true }).waitFor();
+	if (hash === CLOUD_ROUTE) {
+		const connect = page.getByRole("button", { name: "Connect folder", exact: true });
+		await connect.waitFor();
+		await expect
+			.poll(() => page.locator(".cloud-workspaces output").allTextContents())
+			.not.toContain("Loading metadata…");
+	}
 }
 async function waitText(selector: string, text: string): Promise<void> {
 	await page.waitForFunction(
@@ -448,7 +492,7 @@ describe("Cloud Workspaces discovery within Settings Devices", () => {
 				} else {
 					await link.click();
 				}
-				await page.locator(".cloud-workspaces .cloud-row").first().waitFor();
+				await page.locator(".cloud-workspaces .cloud-row:visible").first().waitFor();
 				expect(new URL(page.url()).hash).toBe(CLOUD_ROUTE);
 				expect(await page.locator(".settings-wrap").count()).toBe(0);
 				expect(calls.filter((call) => call.path.startsWith("/api/settings"))).toHaveLength(settingsCalls);
@@ -469,6 +513,10 @@ for (const width of [1024, 390]) {
 				".cloud-workspaces",
 				"No registered workspaces or projects. Ordinary local sessions work without setup.",
 			);
+			expect(await page.locator(".cloud-advanced").getAttribute("open")).toBeNull();
+			expect(await page.getByRole("form", { name: "Connect workspace", exact: true }).isVisible()).toBe(false);
+			expect(await page.locator("main input:visible").count()).toBe(1);
+			expect(await page.getByLabel("Folder path on this computer", { exact: true }).isVisible()).toBe(true);
 			expect(await page.getByLabel("Workspace identity mode").inputValue()).toBe("existing");
 			expect(await page.getByLabel("Project identity mode").inputValue()).toBe("existing");
 			expect(await page.getByLabel("Project binding").inputValue()).toBe("");
@@ -480,6 +528,7 @@ for (const width of [1024, 390]) {
 						"/api/sessions",
 						"/api/events/diagnostic",
 						"/api/cloud-workspaces",
+						STORAGE_PATH,
 					].includes(c.path),
 				),
 			).toBe(true);
@@ -487,9 +536,207 @@ for (const width of [1024, 390]) {
 			await expectLayout("body", width <= 700);
 		});
 
+		it("connects a folder using its registered identity without workspace or log writes, with path-first technical disclosures", async () => {
+			await open(width, CLOUD_ROUTE);
+			const row = page.getByRole("article", { name: `Project ${PROJECT}`, exact: true });
+			expect(await row.getByRole("heading", { level: 3, name: LONG_PATH, exact: true }).isVisible()).toBe(true);
+			expect(await row.getByText(`Project ID: ${PROJECT}`, { exact: true }).isVisible()).toBe(false);
+			await row.getByText("technical details", { exact: true }).click();
+			expect(await row.getByText(`Project ID: ${PROJECT}`, { exact: true }).isVisible()).toBe(true);
+			expect(
+				await row.getByText("Marker required: no (known-ID markerless binding)", { exact: true }).isVisible(),
+			).toBe(true);
+			await page.getByLabel("Folder path on this computer", { exact: true }).fill(LONG_PATH);
+			await page.getByRole("button", { name: "Connect folder", exact: true }).click();
+			await waitText(".cloud-workspaces output", "Folder connected successfully:");
+			expect(writes()).toEqual([
+				{ method: "POST", path: "/api/cloud-workspaces/link", body: { path: LONG_PATH, projectId: PROJECT } },
+			]);
+			expect(await page.locator(".cloud-advanced").getAttribute("open")).toBeNull();
+			await expectLayout("body", width <= 700);
+		});
+
+		it("requires first-use confirmation, cancels or invalidates it on path edit, and clears it before partial-init retry", async () => {
+			overview = emptyOverview();
+			mutationFailure = { code: "NOT_FOUND", error: "No marker yet" };
+			await open(width, CLOUD_ROUTE);
+			const input = page.getByLabel("Folder path on this computer", { exact: true });
+			const connect = page.getByRole("button", { name: "Connect folder", exact: true });
+			await input.fill("/synthetic/first ");
+			await connect.click();
+			await page.getByText("Set up this folder for the first time?", { exact: true }).waitFor();
+			expect(await page.locator(".cloud-confirmation").textContent()).toContain("/synthetic/first ");
+			expect(await page.locator("[role=alert]").count()).toBe(0);
+			expect(writes()).toHaveLength(1);
+			await page.getByRole("button", { name: "Cancel setup", exact: true }).click();
+			expect(writes()).toHaveLength(1);
+			await connect.click();
+			await page.getByText("Set up this folder for the first time?", { exact: true }).waitFor();
+			await input.fill("/synthetic/other");
+			expect(await page.locator(".cloud-confirmation").count()).toBe(0);
+			await connect.click();
+			await page.getByText("Set up this folder for the first time?", { exact: true }).waitFor();
+			mutationFailure = { code: "PARTIAL_INITIALIZATION", error: "Synthetic persistence failed after marker write" };
+			await page.getByRole("button", { name: "Set up folder", exact: true }).click();
+			await waitText("[role=alert]", "A marker may already have been written");
+			expect(await page.locator(".cloud-confirmation").count()).toBe(0);
+			expect(writes().at(-1)?.body).toEqual({ path: "/synthetic/other", initialize: true });
+			mutationFailure = undefined;
+			await connect.click();
+			await waitText(".cloud-workspaces output", "Folder connected successfully:");
+			expect(writes().at(-1)?.body).toEqual({ path: "/synthetic/other" });
+			expect(writes().filter((c) => c.body?.initialize)).toHaveLength(1);
+			await expectLayout("body", width <= 700);
+		});
+
+		it("never offers first-use setup for corrupt, conflicting or IO metadata failures", async () => {
+			await open(width, CLOUD_ROUTE);
+			await page.getByLabel("Folder path on this computer", { exact: true }).fill("/synthetic/existing");
+			for (const code of ["INVALID_METADATA", "CONFLICT", "IO_ERROR"]) {
+				mutationFailure = { code, error: LONG_ERROR };
+				await page.getByRole("button", { name: "Connect folder", exact: true }).click();
+				await waitText("[role=alert]", `Mutation failed: ${code}:`);
+				expect(await page.getByRole("button", { name: "Set up folder", exact: true }).count()).toBe(0);
+			}
+			expect(writes().map((c) => c.body)).toEqual(
+				Array.from({ length: 3 }, () => ({ path: "/synthetic/existing" })),
+			);
+			await expectLayout("body", width <= 700);
+		});
+
+		it("allows linking after failed storage GET, but requires explicit successful storage retry before changes", async () => {
+			storageReadFailure = { code: "INVALID_METADATA", error: "Synthetic settings are malformed" };
+			await open(width, CLOUD_ROUTE);
+			await waitText("[role=alert]", "Could not load session storage: INVALID_METADATA");
+			await page.getByLabel("Folder path on this computer", { exact: true }).fill("/synthetic/project");
+			expect(await page.getByRole("button", { name: "Store session logs here", exact: true }).isDisabled()).toBe(
+				true,
+			);
+			expect(await page.getByRole("button", { name: "Use local log defaults", exact: true }).isDisabled()).toBe(
+				true,
+			);
+			expect(await page.getByText("Main session logs:", { exact: false }).count()).toBe(0);
+			await page.getByRole("button", { name: "Connect folder", exact: true }).click();
+			await waitText(".cloud-workspaces output", "Folder connected successfully:");
+			expect(calls.filter((c) => c.path === STORAGE_PATH)).toHaveLength(1);
+			storageReadFailure = undefined;
+			await page.getByRole("button", { name: "Retry session storage", exact: true }).click();
+			await waitText(".cloud-workspaces", "Local default (~/.dreb/agent/sessions)");
+			expect(writes().map((c) => c.path)).toEqual(["/api/cloud-workspaces/link"]);
+			await expectLayout("body", width <= 700);
+		});
+
+		it("saves logs independently with captured expected settings and confirmed reset, never linking a project", async () => {
+			sessionStorage = {
+				...defaultStorage(),
+				sessionDir: "/previous/main",
+				subagentSessionDir: "relative/subagents",
+			};
+			await open(width, CLOUD_ROUTE);
+			await waitText(".cloud-workspaces", "Main session logs: /previous/main");
+			const input = page.getByLabel("Folder path on this computer", { exact: true });
+			await input.fill(LONG_PATH);
+			await page.getByRole("button", { name: "Store session logs here", exact: true }).click();
+			expect(writes()).toEqual([]);
+			expect(await page.locator(".cloud-confirmation").textContent()).toContain("Cloud sync is not a lock");
+			expect(await page.locator(".cloud-confirmation").textContent()).toContain(".dreb/subagent-sessions");
+			await expectLayout("body", width <= 700);
+			await page.getByRole("button", { name: "Cancel log change", exact: true }).click();
+			await page.getByRole("button", { name: "Store session logs here", exact: true }).click();
+			await input.fill(`${LONG_PATH}/other`);
+			expect(await page.locator(".cloud-confirmation").count()).toBe(0);
+			await page.getByRole("button", { name: "Store session logs here", exact: true }).click();
+			await page.getByRole("button", { name: "Save log locations", exact: true }).click();
+			await waitText(".cloud-workspaces output", "Session log locations saved");
+			expect(writes()).toEqual([
+				{
+					method: "PUT",
+					path: STORAGE_PATH,
+					body: {
+						root: `${LONG_PATH}/other`,
+						expected: { sessionDir: "/previous/main", subagentSessionDir: "relative/subagents" },
+					},
+				},
+			]);
+			await waitText(".cloud-workspaces output", "Restart Dashboard only when agents are idle");
+			await page.getByRole("button", { name: "Use local log defaults", exact: true }).click();
+			expect(writes()).toHaveLength(1);
+			expect(await page.getByText("Return to local log defaults?", { exact: true }).isVisible()).toBe(true);
+			await page.getByRole("button", { name: "Save log locations", exact: true }).click();
+			await waitText(".cloud-workspaces", "Local default (~/.dreb/agent/subagent-sessions)");
+			expect(writes().at(-1)).toEqual({
+				method: "PUT",
+				path: STORAGE_PATH,
+				body: {
+					root: null,
+					expected: {
+						sessionDir: `${LONG_PATH}/other/.dreb/sessions`,
+						subagentSessionDir: `${LONG_PATH}/other/.dreb/subagent-sessions`,
+					},
+				},
+			});
+			expect(writes().every((c) => c.path === STORAGE_PATH)).toBe(true);
+			expect(await input.inputValue()).toBe(`${LONG_PATH}/other`);
+			await expectLayout("body", width <= 700);
+		});
+
+		it("retains failed log confirmation and uses global pending protection with explicit retry only", async () => {
+			await open(width, CLOUD_ROUTE);
+			await page.getByLabel("Folder path on this computer", { exact: true }).fill("/synthetic/logs");
+			await page.getByRole("button", { name: "Store session logs here", exact: true }).click();
+			storageWriteFailure = { code: "CONFLICT", error: "Synthetic settings changed since confirmation" };
+			mutationGate = gate();
+			const save = page.getByRole("button", { name: "Save log locations", exact: true });
+			await save.click();
+			await save.dispatchEvent("click");
+			await page
+				.getByRole("form", { name: "Connect folder", exact: true })
+				.evaluate((form) => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+			await expect.poll(() => writes().length).toBe(1);
+			for (const control of await page.locator("main button, main input, main select").all())
+				expect(await control.isDisabled()).toBe(true);
+			mutationGate.release();
+			await waitText("[role=alert]", "CONFLICT: Synthetic settings changed since confirmation");
+			expect(await page.locator(".cloud-confirmation").count()).toBe(1);
+			expect(await page.getByLabel("Folder path on this computer", { exact: true }).inputValue()).toBe(
+				"/synthetic/logs",
+			);
+			expect(writes()).toHaveLength(1);
+			storageWriteFailure = undefined;
+			await save.click();
+			await waitText(".cloud-workspaces output", "Session log locations saved");
+			expect(writes()).toHaveLength(2);
+			expect(writes().every((c) => c.path === STORAGE_PATH)).toBe(true);
+			expect(writes().map((c) => c.body)).toEqual(
+				Array.from({ length: 2 }, () => ({
+					root: "/synthetic/logs",
+					expected: { sessionDir: null, subagentSessionDir: null },
+				})),
+			);
+			await expectLayout("body", width <= 700);
+		});
+
+		it("does not apply late storage completion or reset settings after leaving management", async () => {
+			await open(width, CLOUD_ROUTE);
+			await page.getByLabel("Folder path on this computer", { exact: true }).fill("/synthetic/logs");
+			await page.getByRole("button", { name: "Store session logs here", exact: true }).click();
+			mutationGate = gate();
+			await page.getByRole("button", { name: "Save log locations", exact: true }).click();
+			await expect.poll(() => writes().length).toBe(1);
+			await page.getByRole("link", { name: "fleet", exact: true }).click();
+			await page.locator(".session-card").waitFor();
+			mutationGate.release();
+			await expect.poll(() => sessionStorage.sessionDir).toBe("/synthetic/logs/.dreb/sessions");
+			expect(await page.locator(".cloud-workspaces").count()).toBe(0);
+			const dialog = await openNew();
+			expect(await dialog.getByLabel("directory source", { exact: true }).inputValue()).toBe("local");
+			expect(writes()).toHaveLength(1);
+		});
+
 		it("submits exact initialize/connect, known-ID local/workspace links, same-ID rebinds and confirmed removals", async () => {
 			overview = emptyOverview();
 			await open(width, CLOUD_ROUTE);
+			await page.getByText("advanced setup", { exact: true }).click();
 			const connect = page.getByRole("form", { name: "Connect workspace", exact: true });
 			await connect.getByLabel("Workspace absolute host path").fill(LONG_PATH);
 			await connect.getByLabel("Workspace identity mode").selectOption("initialize");
@@ -567,7 +814,7 @@ for (const width of [1024, 390]) {
 
 		it("retains last-good rows on refresh failure, wraps errors and prevents pending duplicate mutations", async () => {
 			await open(width, CLOUD_ROUTE);
-			await page.locator(".cloud-row").first().waitFor();
+			await page.locator(".cloud-row:visible").first().waitFor();
 			overviewFailure = { code: "IO_ERROR", error: LONG_ERROR };
 			await page.getByRole("button", { name: "Refresh metadata", exact: true }).click();
 			await waitText("[role=alert]", "Refresh failed. Last-good metadata is stale: IO_ERROR:");
@@ -576,6 +823,7 @@ for (const width of [1024, 390]) {
 			overviewFailure = undefined;
 			mutationGate = gate();
 			mutationFailure = { code: "PARTIAL_INITIALIZATION", error: LONG_ERROR };
+			await page.getByText("advanced setup", { exact: true }).click();
 			const form = page.getByRole("form", { name: "Connect workspace", exact: true });
 			await form.getByLabel("Workspace absolute host path").fill(LONG_PATH);
 			await form.getByLabel("Workspace identity mode").selectOption("initialize");
@@ -858,7 +1106,7 @@ it.each([1024, 390])("owns pending Resume focus and escaped question keys at %ip
 
 it("contains long cloud rows, errors and the selected project identity at 320px", async () => {
 	await open(320, CLOUD_ROUTE);
-	await page.locator(".cloud-row").first().waitFor();
+	await page.locator(".cloud-row:visible").first().waitFor();
 	overviewFailure = { code: "IO_ERROR", error: LONG_ERROR };
 	await page.getByRole("button", { name: "Refresh metadata", exact: true }).click();
 	await waitText("[role=alert]", LONG_ERROR);

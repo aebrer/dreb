@@ -29,7 +29,7 @@ export function cloudError(error: unknown, context: string): CloudWorkspaceError
 }
 
 /** Bounded regular-file reads; never treat a corrupt/partial file as an absent file. */
-async function readJson(path: string, limit: number): Promise<unknown | undefined> {
+export async function readJson(path: string, limit: number): Promise<unknown | undefined> {
 	try {
 		const info = await lstat(path);
 		if (!info.isFile() || info.isSymbolicLink()) {

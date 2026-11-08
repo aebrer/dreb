@@ -8,6 +8,8 @@ import type {
 	AuthStatusDto,
 	BackgroundAgentDto,
 	ClientConnectionDiagnosticDto,
+	CloudSessionDirectoriesDto,
+	CloudSessionStorageDto,
 	CloudWorkspacesDto,
 	CommandDto,
 	ConnectWorkspaceRequestDto,
@@ -128,6 +130,12 @@ export const api = {
 		return request<DashboardResyncDto>(`/api/resync${suffix}`, { signal });
 	},
 	cloudWorkspaces: () => request<CloudWorkspacesDto>("/api/cloud-workspaces"),
+	cloudSessionStorage: () => request<CloudSessionStorageDto>("/api/cloud-workspaces/session-storage"),
+	saveCloudSessionStorage: (root: string | null, expected: CloudSessionDirectoriesDto) =>
+		request<CloudSessionStorageDto>(
+			"/api/cloud-workspaces/session-storage",
+			jsonWithMethod("PUT", { root, expected }),
+		),
 	connectWorkspace: (body: ConnectWorkspaceRequestDto) =>
 		request<{ id: string; path: string }>("/api/cloud-workspaces/connect", json(body)),
 	linkProject: (body: LinkProjectRequestDto) => request<{ id: string }>("/api/cloud-workspaces/link", json(body)),

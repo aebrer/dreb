@@ -2,6 +2,11 @@
 export { getCloudWorkspaceRegistryPath } from "../../config.js";
 export { CloudWorkspaceRegistry } from "./registry.js";
 export {
+	type CloudSessionDirectories,
+	CloudSessionStorage,
+	type CloudSessionStorageStatus,
+} from "./session-storage.js";
+export {
 	CLOUD_WORKSPACE_VERSION,
 	type CloudIdentityMarker,
 	type CloudLocationStatus,

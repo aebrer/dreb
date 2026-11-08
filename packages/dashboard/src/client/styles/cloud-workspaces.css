@@ -78,3 +78,16 @@
 .cloud-workspaces .cloud-confirmation {
 	border-color: var(--status-attention);
 }
+
+.cloud-workspaces details {
+	min-width: 0;
+	margin-block: var(--space-4);
+}
+
+.cloud-workspaces summary {
+	min-height: 2.75rem;
+	padding-block: var(--space-3);
+	box-sizing: border-box;
+	cursor: pointer;
+	font-weight: 600;
+}

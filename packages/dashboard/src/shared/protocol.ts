@@ -43,6 +43,18 @@ export interface CloudWorkspacesDto {
 	projects: CloudProjectDto[];
 }
 
+/** Only the global session-log locations, never other host settings. */
+export interface CloudSessionDirectoriesDto {
+	sessionDir: string | null;
+	subagentSessionDir: string | null;
+}
+
+export interface CloudSessionStorageDto extends CloudSessionDirectoriesDto {
+	subdirectories: { sessionDir: string; subagentSessionDir: string };
+	/** Dashboard inventory retains the main-session root selected at startup. */
+	restartRequired: boolean;
+}
+
 export interface ConnectWorkspaceRequestDto {
 	path: string;
 	initialize?: boolean;

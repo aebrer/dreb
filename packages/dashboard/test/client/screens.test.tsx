@@ -243,6 +243,13 @@ vi.mock("../../src/client/api.js", () => ({
 			workspaces: [],
 			projects: [],
 		})),
+		cloudSessionStorage: vi.fn(async () => ({
+			sessionDir: null,
+			subagentSessionDir: null,
+			subdirectories: { sessionDir: ".dreb/sessions", subagentSessionDir: ".dreb/subagent-sessions" },
+			restartRequired: false,
+		})),
+		saveCloudSessionStorage: vi.fn(),
 		createProjectRuntime: vi.fn(),
 		createRuntime: vi.fn(async (cwd: string) => ({
 			key: "new-key",
@@ -9867,6 +9874,7 @@ describe("Cloud Workspaces screen integration", () => {
 	function expectNoExecutionOrSettings(): void {
 		for (const method of [
 			api.settings,
+			api.saveCloudSessionStorage,
 			api.settingsModels,
 			api.agentTypes,
 			api.version,
@@ -9901,6 +9909,12 @@ describe("Cloud Workspaces screen integration", () => {
 		const el = mount(() => <App />);
 		await vi.waitFor(() => expect(el.querySelector(".cloud-workspaces")?.textContent).toContain(projectId));
 		expect(api.cloudWorkspaces).toHaveBeenCalledOnce();
+		expect(api.cloudSessionStorage).toHaveBeenCalledOnce();
+		expect(el.querySelector<HTMLDetailsElement>(".cloud-advanced")?.open).toBe(false);
+		expect(el.querySelector('form[aria-label="Connect folder"] input')).not.toBeNull();
+		expect(el.querySelector(`[aria-label="Project ${projectId}"] h3`)?.textContent).toBe(
+			"/cached/display-only/project",
+		);
 		expect(el.querySelector(".settings-wrap")).toBeNull();
 		expectNoExecutionOrSettings();
 		expect(api.auth).toHaveBeenCalled();
@@ -10049,6 +10063,8 @@ describe("Cloud Workspaces screen integration", () => {
 			firstPrompt: "local first prompt",
 		});
 		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+		expect(api.cloudSessionStorage).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
 		expect(api.createProjectRuntime).not.toHaveBeenCalled();
 		expect(store.navigate).not.toHaveBeenCalled();
 	});
@@ -10065,6 +10081,8 @@ describe("Cloud Workspaces screen integration", () => {
 			}),
 		);
 		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+		expect(api.cloudSessionStorage).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
 		expect(api.createProjectRuntime).not.toHaveBeenCalled();
 	});
 

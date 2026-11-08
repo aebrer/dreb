@@ -3,6 +3,7 @@ import { request, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+	CloudSessionStorage,
 	CloudWorkspaceError,
 	type CloudWorkspaceErrorCode,
 	CloudWorkspaceRegistry,
@@ -138,6 +139,8 @@ async function start(
 		auth?: DashboardAuth;
 		runtime?: boolean;
 		defaultRegistry?: boolean;
+		sessionStorage?: CloudSessionStorage;
+		activeInventoryRoot?: string;
 	} = {},
 ) {
 	const shared = options.registry ?? registry;
@@ -163,6 +166,9 @@ async function start(
 		auth: options.auth ?? new DashboardAuth(),
 		pool,
 		cloudWorkspaceRegistry: options.defaultRegistry ? undefined : shared,
+		cloudSessionStorage: options.sessionStorage,
+		sessionInventoryRoot: options.activeInventoryRoot,
+		sessionStorageBaseCwd: root,
 		memoryHomeDir: join(root, "synthetic-home"),
 		listAllSessions,
 		deleteSession,
@@ -213,6 +219,139 @@ function noSpawn(server: Awaited<ReturnType<typeof start>>): void {
 	expect(server.clientFactory).not.toHaveBeenCalled();
 	expect(server.pool.list()).toEqual([]);
 }
+
+describe("optional global session-log settings (no runtime or transcript access)", () => {
+	const route = `${API}/session-storage`;
+	const empty = { sessionDir: null, subagentSessionDir: null };
+
+	it("reads only storage fields without creating an absent profile", async () => {
+		const server = await start();
+		const result = await http(server.base, "GET", route);
+		expect(result).toEqual({
+			status: 200,
+			body: {
+				...empty,
+				subdirectories: { sessionDir: ".dreb/sessions", subagentSessionDir: ".dreb/subagent-sessions" },
+				restartRequired: false,
+			},
+		});
+		await absent(dirname(registry.path));
+		noRegistryCalls(server.registryCalls);
+	});
+
+	it("saves and resets only global defaults, without project metadata, log migration or restart", async () => {
+		const path = await folder(" cloud logs with whitespace ");
+		const settingsPath = join(dirname(registry.path), "settings.json");
+		await fs.mkdir(dirname(settingsPath));
+		const original = { theme: "dark", unknown: { nested: ["keep"] }, authToken: "synthetic-never-share" };
+		await fs.writeFile(settingsPath, JSON.stringify(original));
+		const transcript = join(path, "old.jsonl");
+		await fs.writeFile(transcript, "unchanged historical bytes\n");
+		const server = await start();
+		const result = await http(server.base, "PUT", route, { root: path, expected: empty });
+		const pair = {
+			sessionDir: join(path, ".dreb", "sessions"),
+			subagentSessionDir: join(path, ".dreb", "subagent-sessions"),
+		};
+		expect(result.status).toBe(200);
+		expect(result.body).toMatchObject({ ...pair, restartRequired: true });
+		expect(JSON.stringify(result.body)).not.toContain("synthetic-never-share");
+		expect(JSON.parse(await fs.readFile(settingsPath, "utf8"))).toEqual({ ...original, ...pair });
+		await absent(join(path, ".dreb"));
+		await absent(registry.path);
+		expect(await fs.readFile(transcript, "utf8")).toBe("unchanged historical bytes\n");
+		const reset = await http(server.base, "PUT", route, { root: null, expected: pair });
+		expect(reset.status).toBe(200);
+		expect(reset.body).toMatchObject({ ...empty, restartRequired: false });
+		expect(JSON.parse(await fs.readFile(settingsPath, "utf8"))).toEqual(original);
+		noRegistryCalls(server.registryCalls);
+		noSpawn(server);
+	});
+
+	it("reports inventory restart requirements against the injected startup root", async () => {
+		const path = await folder("configured");
+		const pair = {
+			sessionDir: join(path, ".dreb", "sessions"),
+			subagentSessionDir: join(path, ".dreb", "subagent-sessions"),
+		};
+		await fs.mkdir(dirname(registry.path));
+		await fs.writeFile(join(dirname(registry.path), "settings.json"), JSON.stringify(pair));
+		const { base } = await start({ activeInventoryRoot: pair.sessionDir });
+		expect((await http(base, "GET", route)).body).toMatchObject({ ...pair, restartRequired: false });
+		expect((await http(base, "PUT", route, { root: null, expected: pair })).body).toMatchObject({
+			restartRequired: true,
+		});
+	});
+
+	it("refuses stale expected locations and retains a concurrent edit", async () => {
+		const path = await folder("new-storage");
+		const { base } = await start();
+		await fs.mkdir(dirname(registry.path));
+		const settingsPath = join(dirname(registry.path), "settings.json");
+		const contents = JSON.stringify({ sessionDir: "/newer-main", theme: "light" });
+		await fs.writeFile(settingsPath, contents);
+		errorResult(await http(base, "PUT", route, { root: path, expected: empty }), 409, "CONFLICT");
+		expect(await fs.readFile(settingsPath, "utf8")).toBe(contents);
+	});
+
+	it.each([
+		undefined,
+		null,
+		[],
+		"text",
+		1,
+		{},
+		{ root: null },
+		{ root: null, expected: {} },
+		{ root: null, expected: { ...empty, extra: true } },
+		{ root: null, expected: { sessionDir: 1, subagentSessionDir: null } },
+		{ root: 5, expected: empty },
+		{ root: "relative", expected: empty },
+		{ root: null, expected: empty, sessionDir: "/forbidden" },
+	])("rejects invalid storage request %j before writes", async (body) => {
+		const server = await start();
+		errorResult(await http(server.base, "PUT", route, body), 400, "INVALID_REQUEST");
+		await absent(dirname(registry.path));
+		noRegistryCalls(server.registryCalls);
+	});
+
+	it.each(["null", "[]", "1", "{broken", '{"sessionDir":false}'])(
+		"preserves corrupt global configuration %s",
+		async (contents) => {
+			await fs.mkdir(dirname(registry.path));
+			const path = join(dirname(registry.path), "settings.json");
+			await fs.writeFile(path, contents);
+			const { base } = await start();
+			errorResult(await http(base, "GET", route), 422, "INVALID_METADATA");
+			errorResult(await http(base, "PUT", route, { root: null, expected: empty }), 422, "INVALID_METADATA");
+			expect(await fs.readFile(path, "utf8")).toBe(contents);
+		},
+	);
+
+	it("inherits bounded JSON parsing, query/body validation, and case/trailing-slash protection", async () => {
+		const { base } = await start();
+		errorResult(await http(base, "GET", `${route}?cwd=/unrelated`), 400, "INVALID_REQUEST");
+		errorResult(await http(base, "GET", route, { root: null }), 400, "INVALID_REQUEST");
+		errorResult(await http(base, "PUT", route, undefined, {}, "{broken"), 400, "INVALID_REQUEST");
+		const raw = JSON.stringify({ root: null, expected: empty });
+		const exact = raw + " ".repeat(16 * 1024 - Buffer.byteLength(raw));
+		expect((await http(base, "PUT", route, undefined, {}, exact)).status).toBe(200);
+		for (const variant of [route, `${route.toUpperCase()}/`]) {
+			errorResult(await http(base, "PUT", variant, undefined, {}, `${exact} `), 413, "INVALID_REQUEST");
+		}
+	});
+
+	it("sanitizes storage-service failures and keeps settings reads out of ordinary metadata GET", async () => {
+		const storage = new CloudSessionStorage({ agentDir: dirname(registry.path) });
+		const read = vi.spyOn(storage, "read").mockRejectedValue(new Error("private secret"));
+		const { base } = await start({ sessionStorage: storage });
+		expect((await http(base, "GET", API)).status).toBe(200);
+		expect(read).not.toHaveBeenCalled();
+		const result = await http(base, "GET", route);
+		errorResult(result, 500, "IO_ERROR");
+		expect(JSON.stringify(result.body)).not.toContain("private secret");
+	});
+});
 
 describe("cloud metadata HTTP workflow (real isolated registry)", () => {
 	it("lists absent state without creating the agent directory or any project metadata", async () => {
@@ -846,6 +985,8 @@ describe("synthetic error projection (separate from actual filesystem cases)", (
 
 const endpoints = [
 	["GET", API],
+	["GET", `${API}/session-storage`],
+	["PUT", `${API}/session-storage`],
 	["POST", `${API}/connect`],
 	["POST", `${API}/link`],
 	["PUT", `${API}/workspaces/${WORKSPACE}`],

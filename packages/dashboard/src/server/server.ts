@@ -10,8 +10,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
-import { CloudWorkspaceError, CloudWorkspaceRegistry } from "@dreb/coding-agent/cloud-workspaces";
+import { basename, dirname, join } from "node:path";
+import { CloudSessionStorage, CloudWorkspaceError, CloudWorkspaceRegistry } from "@dreb/coding-agent/cloud-workspaces";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type {
@@ -91,6 +91,12 @@ export interface DashboardServerOptions {
 	memoryHomeDir?: string;
 	/** Isolated host metadata registry; defaults lazily to the coding-agent directory convention. */
 	cloudWorkspaceRegistry?: CloudWorkspaceRegistry;
+	/** Global-only session storage; isolated profile injected by tests. */
+	cloudSessionStorage?: CloudSessionStorage;
+	/** Resolved main inventory root captured at server startup (undefined = built-in). */
+	sessionInventoryRoot?: string;
+	/** Base used for legacy relative global storage settings, matching startup inventory. */
+	sessionStorageBaseCwd?: string;
 }
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
@@ -202,6 +208,15 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const getCloudRegistry = () => {
 		cloudRegistry ??= new CloudWorkspaceRegistry();
 		return cloudRegistry;
+	};
+	let cloudSessionStorage = options.cloudSessionStorage;
+	const getCloudSessionStorage = () => {
+		cloudSessionStorage ??= new CloudSessionStorage({
+			agentDir: dirname(getCloudRegistry().path),
+			baseCwd: options.sessionStorageBaseCwd,
+			activeSessionDir: options.sessionInventoryRoot,
+		});
+		return cloudSessionStorage;
 	};
 	const serverStartedAt = new Date().toISOString();
 	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
@@ -722,7 +737,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	// -- metadata-only workspaces (same authentication, no utility runtime) -------
-	registerCloudWorkspaceRoutes(app, getCloudRegistry, log);
+	registerCloudWorkspaceRoutes(app, getCloudRegistry, log, getCloudSessionStorage);
 
 	// -- runtimes ---------------------------------------------------------------
 	app.post("/api/runtimes", (req, res) => {

@@ -8,12 +8,24 @@ Use folders you already manage, including folders delivered by a desktop sync cl
 
 Open **Settings → Devices → cloud workspaces**, or go directly to `#/settings/cloud-workspaces`. The link is in a separate cloud workspaces subsection below the Devices pairing/access controls. This independent screen does not mount ordinary Settings/model/version loaders. Enter or paste **native absolute paths on the backend host** (for example, `/Users/alex/SharedWork` or `D:\SharedWork`), not paths on your phone/browser. No terminal commands or model credentials are needed for management. There is no new folder browser/native picker, browser preference or polling for cloud mappings; use **Refresh metadata** explicitly.
 
-1. **Connect workspace:** leave **Existing identity** selected to connect a delivered `.dreb/workspace.json`, or deliberately choose **Initialize first marker** on the first host only. Folders must already exist.
-2. **Link project:** choose **Existing marker** (default), **Initialize first marker** (once), or **Known full ID (markerless)**. The last mode explicitly binds a known project UUID without creating a missing marker; any existing marker must agree. Choose **Direct local** or an explicit **Workspace-relative** relationship. Enter an absolute host path in either case; no folders are moved and connecting a root does not discover all its projects. Direct-local projects may be outside synced roots.
-3. Review full IDs, configured paths/relationships, canonical available paths and per-row errors. **Available** means locally reachable with valid required metadata, not delivered elsewhere or equivalent code. Rows are ordered by stable ID, not activity/availability. Failed refreshes retain last-good rows labelled stale, not a misleading empty registry; failed mutations retain entered values and report errors, including partial initialization guidance.
+1. Enter **Folder path on this computer** in the single basic input and choose **Connect folder**. It reuses an existing project marker or known already-registered mapping; no separate workspace setup or typed UUID is required. The folder must already exist. Only an exact missing-project-marker result offers **Set up folder** with explicit first-device confirmation for the captured path. It never initializes automatically or repairs a missing required identity by inventing another one.
+2. Project rows show folder paths first. Open **technical details** for full IDs, configured bindings/root relationships and marker details. **Refresh metadata** reports canonical available paths and per-row errors. **Available** means locally reachable with valid required metadata, not delivered elsewhere or equivalent code. Rows are ordered by stable ID, not activity/availability. Failed refreshes retain last-good rows labelled stale, not a misleading empty registry; failed mutations retain entered values and report errors, including partial initialization guidance.
+3. Open the closed native **advanced setup** disclosure for manual **Connect workspace**/**Link project** forms and workspace management. Connect a delivered workspace marker using **Existing identity**, or deliberately choose **Initialize first marker** on the first host only. Manual project linking retains **Existing marker**, **Initialize first marker** (once), or **Known full ID (markerless)**. The last mode explicitly binds a known project UUID without creating a missing marker; any existing marker must agree. Choose **Direct local** or an explicit **Workspace-relative** relationship and enter an absolute host path in either case. No folders are moved; connecting a root does not discover all its projects. Direct-local projects may be outside synced roots.
 4. Use **Rebind workspace/project** after a move to target the same full identity. Workspace rebinds require its matching marker. Project rebinds explicitly supply the row's known ID and retain known-ID markerless semantics; a conflicting marker is rejected. No replacement identity is initialized. Confirm **Unlink project** or **Disconnect workspace** to remove only this host's mapping. Markers, folders, cloud content and transcript bytes are preserved; dependent project IDs stay visible but unavailable until reconnected or rebound.
 
 **Initialize each shared workspace/project marker once.** On other hosts, wait for its delivery, then connect/link the existing identity. A missing required marker is not permission to initialize a replacement. If `PARTIAL_INITIALIZATION` reports a preserved marker, fix the local failure and retry with that same identity.
+
+### Optional session-log storage
+
+Project linking and log configuration are **independent operations**, not a combined marker/registry/settings transaction. Use the same **Folder path on this computer** input, choose **Store session logs here**, review the locations, then explicitly confirm **Save log locations**. The folder can be logs-only: it need not be a connected project or workspace, and runnable projects can remain elsewhere.
+
+The selected root must be a native absolute existing readable/writable/searchable backend directory. dreb canonicalizes it and derives `<root>/.dreb/sessions` for main logs and `<root>/.dreb/subagent-sessions` for child logs (`.dreb` follows `CONFIG_DIR_NAME`). Existing derived path components are checked; files and symlinks there are rejected. Saving updates only the existing global `sessionDir` and `subagentSessionDir` fields in host-local `<agent-dir>/settings.json`, preserving all other settings. These are defaults for **all projects**, not a project-specific route or new cloud-preference key. Current configured/default locations are shown separately from the input.
+
+Opening/reading the page, basic connect, path edits or cancelling confirmation never changes log settings. To reset, choose **Use local log defaults** and confirm **Save log locations**; this removes only those two global fields. Saves compare the expected current pair against a fresh settings read under `settings.json.lock`; stale values fail with `409 CONFLICT` and require a reload. Malformed/nonregular metadata is rejected without overwrite. Mapping and storage failures remain separate; a log-save failure does not undo or retry a successful project link.
+
+Saving or resetting creates **no target log directories, markers, registry or logs**, moves/copies/deletes **no existing logs**, changes no active session files and performs no restart. It only changes future process defaults: main sessions retain CLI → merged project/global → extension-hook → built-in precedence, while subagent storage remains global-only. Machine configuration, authentication, trust and the mapping registry stay local.
+
+Dashboard inventory keeps the global main root it actually snapshotted at startup. `restartRequired` compares the current configured main root with that active snapshot, not with the previous save. Restart Dashboard only when agents are idle to switch inventory; saving never does this for you. The new inventory may not list logs in an old flat root, but those files remain accessible by exact path. There is no migration, concurrent-writer safety, sync service or full-history handoff. See [session settings](settings.md#sessions), [session compatibility](session.md#cloud-workspace-compatibility), the [REST contract](dashboard.md#cloud-workspace-api) and the [storage SDK API](#sdk-api).
 
 ### Choosing a runtime directory
 
@@ -36,7 +48,7 @@ dreb cloud status
 dreb cloud resolve PROJECT_UUID
 ```
 
-`WORKSPACE_UUID` and `PROJECT_UUID` throughout these commands are placeholders: replace them with the distinct full UUIDs returned by `connect` and `link`. Project IDs are not workspace IDs; partial UUIDs are not accepted.
+`WORKSPACE_UUID` and `PROJECT_UUID` throughout these commands are placeholders: replace them with the full UUIDs returned by `connect` and `link`. Workspace and project identities/records occupy separate namespaces: the same UUID string is allowed in both without making them the same identity. Distinct projects within the project namespace must still have distinct project IDs. Partial UUIDs are not accepted.
 
 - `connect --init` creates a workspace marker, or reuses its existing valid identity. Without `--init`, `connect` requires an existing workspace marker.
 - `link --init` creates a project marker, or reuses its existing valid identity. Without `--init` or `--id`, `link` requires an existing project marker.
@@ -157,7 +169,7 @@ Each marker has exactly `version`, `kind`, and `id`. These are **example UUIDs**
 
 Markers contain no machine paths, trust grants, or credentials. Their directories and files cannot be symlinks. Existing identities are reused, never silently reset. Invalid, incomplete, future-version, wrong-kind, or conflicting metadata is an error; a missing required marker is also an error, not permission to invent a replacement identity.
 
-The **device-local** registry is `<agent-dir>/cloud-workspaces.json`, normally `~/.dreb/agent/cloud-workspaces.json`. CLI, SDK defaults and Dashboard mapping storage honor `DREB_CODING_AGENT_DIR`; the SDK can explicitly select `agentDir`. Dashboard pairing storage is separate and is not redirected by this mapping choice. The browser cannot select an agent directory. There are no new `settings.json` options or merged project/global settings for this registry.
+The **device-local** registry is `<agent-dir>/cloud-workspaces.json`, normally `~/.dreb/agent/cloud-workspaces.json`. CLI, SDK defaults and Dashboard mapping storage honor `DREB_CODING_AGENT_DIR`; the SDK can explicitly select `agentDir`. Dashboard pairing storage is separate and is not redirected by this mapping choice. The browser cannot select an agent directory. Registry mappings are not merged project/global settings and add no new preference keys. The separate, explicitly confirmed log configuration updates only the existing global `sessionDir` and `subagentSessionDir` fields in that agent directory's `settings.json`; mapping operations do not change them.
 
 Version 1 registry shape (the paths and IDs below are illustrative):
 
@@ -192,7 +204,7 @@ A workspace binding is `{id, path}`. A project binding is `{id, location, marker
 
 ## SDK API
 
-Import `CloudWorkspaceRegistry`, `CloudWorkspaceError`, `getCloudWorkspaceRegistryPath`, and associated types from the narrow public `@dreb/coding-agent/cloud-workspaces` subpath. It exposes the metadata registry, errors/types, version constant and registry-path helper without importing the agent/session/provider/UI runtime barrel. Existing `@dreb/coding-agent` root exports remain compatible.
+Import `CloudWorkspaceRegistry`, `CloudSessionStorage`, `CloudWorkspaceError`, `getCloudWorkspaceRegistryPath`, and associated types from the narrow public `@dreb/coding-agent/cloud-workspaces` subpath. It exposes the metadata registry, global session-storage helper, errors/types, version constant and registry-path helper without importing the agent/session/provider/UI runtime barrel. Existing `@dreb/coding-agent` root exports remain compatible; no root-barrel runtime export is added for `CloudSessionStorage`.
 
 ```typescript
 import { CloudWorkspaceRegistry } from "@dreb/coding-agent/cloud-workspaces";
@@ -217,7 +229,15 @@ Optional SDK `expectedId` is a same-identity precondition, validated as a full U
 
 `CloudWorkspaceStatus` is `{version: 1, workspaces, projects}` with per-record `{id, available, path?, error?: {code, message}}`. Errors expose `CloudWorkspaceError.code` and `.message`. Marker and registry versions are both 1; this is independent of the session-file version.
 
-See the [metadata-only SDK usage](sdk.md#cloud-workspace-registry) and [SDK example](../examples/sdk/13-cloud-workspaces.ts). Callers may explicitly pass a resolved CWD to the existing SDK; resolution itself neither creates nor resumes an agent session.
+The subpath also exports `CloudSessionStorage` and the `CloudSessionDirectories` / `CloudSessionStorageStatus` types:
+
+- `new CloudSessionStorage({agentDir?, baseCwd?, activeSessionDir?})` selects host-local `settings.json` using the same default/profile agent-directory convention (`DREB_CODING_AGENT_DIR` unless `agentDir` is supplied). `baseCwd` defaults to `process.cwd()` for resolving existing relative main-root settings. `activeSessionDir` is the actual startup-snapshotted global main inventory root, or omitted for the built-in inventory.
+- `read(): Promise<CloudSessionStorageStatus>` reads only global storage metadata; it does not create settings, log directories or a registry.
+- `setRoot(root: string | null, expected: CloudSessionDirectories): Promise<CloudSessionStorageStatus>` validates a native absolute existing root and saves its two derived paths, or removes only the two fields for `null`. `expected` must match the fresh pair under `settings.json.lock`; a stale pair raises `CloudWorkspaceError` with code `CONFLICT`. Unrelated settings are preserved and malformed/nonregular metadata is not overwritten.
+
+`CloudSessionDirectories` is `{sessionDir: string | null, subagentSessionDir: string | null}`: the current stored values, with absent fields represented as `null`. `CloudSessionStorageStatus` adds `subdirectories: {sessionDir: string, subagentSessionDir: string}` (normally `.dreb/sessions` and `.dreb/subagent-sessions`, following `CONFIG_DIR_NAME`) and `restartRequired: boolean`. Restart status compares the configured main root resolved against `baseCwd` with the supplied active snapshot; it does not track subagent-root changes or restart a process. The helper loads no project settings/context, trust, providers or transcripts, and has the same no-migration/no-active-session-change limits as the UI.
+
+See the [metadata-only registry SDK usage](sdk.md#cloud-workspace-registry) and [SDK example](../examples/sdk/13-cloud-workspaces.ts). Callers may explicitly pass a resolved CWD to the existing SDK; resolution itself neither creates nor resumes an agent session.
 
 ## Errors, repair, and removal
 
