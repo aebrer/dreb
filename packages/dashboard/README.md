@@ -116,7 +116,63 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   current pairing code, the 1–3650 day lifetime used by future pairings
   (180 days by default), and
   paired-device expiry/unpair management.
+- **Cloud Workspaces** — independent `#/settings/cloud-workspaces`, linked from
+  Settings. Connect/link identities, refresh local availability, rebind the same
+  ID and confirm local-only unlink/disconnect without terminal or model setup.
+  See [Cloud Workspaces](#cloud-workspaces).
 - **Pairing** — remote first-login rotating-code flow.
+
+### Cloud Workspaces
+
+Open **Settings → Cloud Workspaces** (`#/settings/cloud-workspaces`) and enter
+native absolute paths on the **backend host**, not your phone/browser. This
+independent page does not load ordinary Settings/model/version resources and
+needs no model credentials or terminal commands. Ordinary local workflows need
+no registration; projects can remain outside synced roots.
+
+Connect an existing workspace marker (default) or deliberately initialize its
+first marker once. Link projects using **Existing marker**, **Initialize first
+marker**, or **Known full ID (markerless)**; any present marker must agree with
+the full UUID. Choose direct-local or explicit workspace-relative binding and
+enter an absolute host path in either mode. No folders are moved or discovered.
+On other hosts, wait for marker delivery and connect/link the existing identity;
+never initialize a replacement because a required marker is missing.
+
+**Refresh metadata** shows stable IDs, configured paths/root relationships,
+canonical available paths and per-location errors. Availability means local
+reachability/metadata validity, not synchronization or code equivalence. Failed
+refreshes keep last-good rows labelled stale; failed writes retain inputs and
+report errors/partial-initialization guidance. Same-ID **Rebind** uses the shared
+SDK `expectedId` guard, never initializes a replacement marker, and preserves
+explicit known-ID markerless project semantics. Confirmed **Unlink/Disconnect**
+removes only local mappings, not markers, folders, cloud content or transcripts.
+Dependent project IDs remain visible but unavailable after disconnect.
+
+Every **New Session** and replacement-directory dialog defaults to **local
+directory**, with recent choices unchanged and no registry request. Explicitly
+choose **linked project** in New Session, Fleet historical resume, or closed
+main Session/Subagent parent-resume replacement flows. The selected full ID,
+not its cached displayed path, goes to the backend for resolution immediately
+before canonical directory validation/runtime creation. Changed required markers
+or unavailable mappings fail without launch or fallback. Subagent-view resume
+still opens the captured parent transcript, not a child as a main session.
+
+Metadata operations start no utility/agent runtime, discover no providers, load
+no project context/settings/extensions and change no trust; the existing shell
+retains its normal inventory/SSE. Start/Resume follows normal startup in the
+chosen directory, including project settings, context and extensions. The local
+registry honors `DREB_CODING_AGENT_DIR`, separately from Dashboard pairing
+storage. Never sync the registry or entire agent directory. There is no new
+cloud preference, polling or folder browser/native picker.
+
+This does not persist main/subagent project associations, automatically remap
+resume, or deliver portable parent/child/full-history continuation or safe
+cross-device handoff. Exact transcript paths, historical headers/CWDs, effective
+runtime CWD and storage precedence remain distinct. OneDrive transports files,
+not distributed locks, running processes or guaranteed checkpoints. See
+[setup and limits](../coding-agent/docs/cloud-workspaces.md) and the
+[exact REST/DTO contract](../coding-agent/docs/dashboard.md#cloud-workspace-api),
+including exclusive `cwd`/`projectId` runtime creation.
 
 ### Fleet search and filters
 

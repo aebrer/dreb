@@ -356,3 +356,239 @@ describe("portable relative directory syntax", () => {
 		expect(() => portableRelativePath(path)).toThrow(CloudWorkspaceError);
 	});
 });
+
+describe("expected identity preconditions", () => {
+	const WORKSPACE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+	// Include directory names as well as every file's bytes: even an empty .dreb
+	// created by a failed operation is a partial initialization worth catching.
+	async function snapshot(directory = root): Promise<Record<string, Buffer | null>> {
+		const result: Record<string, Buffer | null> = {};
+		for (const entry of (await fs.readdir(directory, { withFileTypes: true })).sort((a, b) =>
+			a.name.localeCompare(b.name),
+		)) {
+			const path = join(directory, entry.name);
+			if (entry.isDirectory()) {
+				result[path] = null;
+				Object.assign(result, await snapshot(path));
+			} else {
+				result[path] = await fs.readFile(path);
+			}
+		}
+		return result;
+	}
+
+	async function seed() {
+		const workspace = await folder("original-workspace");
+		const project = await folder("original-project");
+		await marker(workspace, "workspace", WORKSPACE);
+		await marker(project, "project", PROJECT);
+		await registry.connect(workspace);
+		await registry.link(project);
+		const unrelated = await folder("unrelated/.dreb");
+		await fs.writeFile(join(unrelated, "settings.json"), '{"context":{"trustedFolders":[]}}\n');
+		await fs.writeFile(join(unrelated, "session.jsonl"), "unrelated transcript\n");
+		await fs.writeFile(join(root, "unrelated", "AGENTS.md"), "Never load these instructions.\n");
+		return { workspace, project };
+	}
+
+	function watchWrites() {
+		const mkdir = vi.spyOn(fs, "mkdir");
+		const rename = vi.spyOn(fs, "rename");
+		const unlink = vi.spyOn(fs, "unlink");
+		const writeFile = vi.spyOn(fs, "writeFile");
+		const open = vi.spyOn(fs, "open");
+		return () => {
+			expect(mkdir).not.toHaveBeenCalled();
+			expect(rename).not.toHaveBeenCalled();
+			expect(unlink).not.toHaveBeenCalled();
+			expect(writeFile).not.toHaveBeenCalled();
+			expect(
+				open.mock.calls.filter(([, flags]) =>
+					typeof flags === "string"
+						? flags !== "r"
+						: ((flags ?? 0) &
+								(fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC)) !==
+							0,
+				),
+			).toEqual([]);
+		};
+	}
+
+	it.each(["workspace", "project"] as const)(
+		"requires explicit same-ID %s rebind and normalizes uppercase expected IDs",
+		async (kind) => {
+			const original = await seed();
+			const second = await folder("copied-marker");
+			await copyMarker(original[kind], second, kind);
+			const id = kind === "workspace" ? WORKSPACE : PROJECT;
+			const before = await snapshot();
+			const previousState = await registry.list();
+			const options = { expectedId: id.toUpperCase() };
+			const attempt = () =>
+				kind === "workspace" ? registry.connect(second, options) : registry.link(second, options);
+			await expect(attempt()).rejects.toMatchObject({ code: "CONFLICT" });
+			expect(await snapshot()).toEqual(before);
+			const rebound =
+				kind === "workspace"
+					? await registry.connect(second, { ...options, rebind: true })
+					: await registry.link(second, { ...options, rebind: true });
+			expect(rebound.id).toBe(id);
+			const state = await registry.list();
+			if (kind === "workspace") {
+				expect(state).toEqual({ ...previousState, workspaces: [{ id, path: second }] });
+			} else {
+				expect(state).toEqual({
+					...previousState,
+					projects: [{ id, location: { kind: "local", path: second }, markerRequired: true }],
+				});
+				expect(await registry.resolve(id)).toBe(second);
+			}
+			const after = await snapshot();
+			delete before[registry.path];
+			delete after[registry.path];
+			expect(after).toEqual(before);
+		},
+	);
+
+	it.each(
+		(["workspace", "project"] as const).flatMap((kind) =>
+			(["wrong marker", "missing marker"] as const).map((target) => ({ kind, target })),
+		),
+	)("rejects a $kind $target before any metadata writes", async ({ kind, target }) => {
+		await seed();
+		const directory = await folder("rebind-target");
+		if (target === "wrong marker") await marker(directory, kind, OTHER);
+		const before = await snapshot();
+		const assertNoWrites = watchWrites();
+		const options = { expectedId: kind === "workspace" ? WORKSPACE : PROJECT, rebind: true };
+		await expect(
+			kind === "workspace" ? registry.connect(directory, options) : registry.link(directory, options),
+		).rejects.toMatchObject({ code: target === "wrong marker" ? "CONFLICT" : "NOT_FOUND" });
+		assertNoWrites();
+		expect(await snapshot()).toEqual(before);
+		if (target === "missing marker") {
+			await expect(fs.stat(join(directory, CONFIG_DIR_NAME))).rejects.toMatchObject({ code: "ENOENT" });
+		}
+	});
+
+	it.each(
+		(["workspace", "project"] as const).flatMap((kind) =>
+			(["absent", "existing"] as const).flatMap((state) =>
+				(
+					[
+						{ label: "expected plus initialize", expectedId: PROJECT, initialize: true, code: "CONFLICT" },
+						{ label: "invalid expected ID", expectedId: "not-a-uuid", code: "INVALID_METADATA" },
+						{
+							label: "invalid expected plus initialize",
+							expectedId: "",
+							initialize: true,
+							code: "INVALID_METADATA",
+						},
+					] as const
+				).map((options) => ({ kind, state, ...options })),
+			),
+		),
+	)("rejects $kind $label with $state state before reads or writes", async ({ kind, state, code, ...options }) => {
+		if (state === "existing") await seed();
+		const directory = await folder("target");
+		if (state === "existing") await marker(directory, kind, OTHER);
+		const before = await snapshot();
+		const list = vi.spyOn(registry, "list");
+		const reads = [
+			vi.spyOn(fs, "lstat"),
+			vi.spyOn(fs, "realpath"),
+			vi.spyOn(fs, "stat"),
+			vi.spyOn(fs, "access"),
+			vi.spyOn(fs, "open"),
+			vi.spyOn(fs, "readFile"),
+		];
+		const assertNoWrites = watchWrites();
+		const { label: _label, ...precondition } = options;
+		await expect(
+			kind === "workspace"
+				? registry.connect(directory, { ...precondition, rebind: true })
+				: registry.link(directory, { ...precondition, rebind: true }),
+		).rejects.toMatchObject({ code });
+		expect(list).not.toHaveBeenCalled();
+		for (const read of reads) expect(read).not.toHaveBeenCalled();
+		assertNoWrites();
+		expect(await snapshot()).toEqual(before);
+		if (state === "absent") {
+			await expect(fs.stat(join(directory, CONFIG_DIR_NAME))).rejects.toMatchObject({ code: "ENOENT" });
+			await expect(fs.stat(join(root, "device-a"))).rejects.toMatchObject({ code: "ENOENT" });
+		}
+	});
+
+	it.each(["absent", "existing"] as const)(
+		"rejects contradictory known and expected project IDs before reading %s metadata",
+		async (state) => {
+			if (state === "existing") await seed();
+			const directory = await folder("contradictory-target");
+			if (state === "existing") await marker(directory, "project", PROJECT);
+			const before = await snapshot();
+			const list = vi.spyOn(registry, "list");
+			const open = vi.spyOn(fs, "open");
+			const lstat = vi.spyOn(fs, "lstat");
+			const realpath = vi.spyOn(fs, "realpath");
+			const assertNoWrites = watchWrites();
+			await expect(
+				registry.link(directory, { projectId: PROJECT, expectedId: OTHER, rebind: true }),
+			).rejects.toMatchObject({ code: "CONFLICT" });
+			expect(list).not.toHaveBeenCalled();
+			expect(open).not.toHaveBeenCalled();
+			expect(lstat).not.toHaveBeenCalled();
+			expect(realpath).not.toHaveBeenCalled();
+			assertNoWrites();
+			expect(await snapshot()).toEqual(before);
+		},
+	);
+
+	it("does not let matching known and expected project IDs override a different marker", async () => {
+		await seed();
+		const directory = await folder("wrong-known-id-target");
+		await marker(directory, "project", OTHER);
+		const before = await snapshot();
+		const assertNoWrites = watchWrites();
+		await expect(
+			registry.link(directory, {
+				projectId: PROJECT,
+				expectedId: PROJECT,
+				rebind: true,
+			}),
+		).rejects.toMatchObject({ code: "CONFLICT" });
+		assertNoWrites();
+		expect(await snapshot()).toEqual(before);
+	});
+
+	it("permits markerless rebind only with an explicit matching known project ID", async () => {
+		await seed();
+		const second = await folder("markerless-target");
+		const before = await snapshot();
+		const assertNoWrites = watchWrites();
+		await expect(registry.link(second, { expectedId: PROJECT, rebind: true })).rejects.toMatchObject({
+			code: "NOT_FOUND",
+		});
+		assertNoWrites();
+		expect(await snapshot()).toEqual(before);
+		await expect(fs.stat(join(second, CONFIG_DIR_NAME))).rejects.toMatchObject({ code: "ENOENT" });
+		vi.restoreAllMocks();
+		await expect(
+			registry.link(second, { projectId: PROJECT, expectedId: PROJECT.toUpperCase() }),
+		).rejects.toMatchObject({ code: "CONFLICT" });
+		expect(await snapshot()).toEqual(before);
+		expect(
+			await registry.link(second, {
+				projectId: PROJECT,
+				expectedId: PROJECT.toUpperCase(),
+				rebind: true,
+			}),
+		).toEqual({ id: PROJECT, location: { kind: "local", path: second }, markerRequired: false });
+		expect(await registry.resolve(PROJECT)).toBe(second);
+		const after = await snapshot();
+		delete before[registry.path];
+		delete after[registry.path];
+		expect(after).toEqual(before);
+		await expect(fs.stat(join(second, CONFIG_DIR_NAME))).rejects.toMatchObject({ code: "ENOENT" });
+	});
+});

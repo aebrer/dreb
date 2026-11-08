@@ -4,7 +4,7 @@
  * never color alone).
  */
 
-import { For, type JSX, Show } from "solid-js";
+import { For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import type { RuntimeInfoDto } from "../../shared/protocol.js";
 import type { Toast } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
@@ -132,20 +132,98 @@ export function Modal(props: {
 	children: JSX.Element;
 	actions?: JSX.Element;
 	class?: string;
+	manageFocus?: boolean;
+	dismissDisabled?: boolean;
 }): JSX.Element {
+	// Capture before children mount (and before any child autofocus can run).
+	const invoker = document.activeElement;
+	let panel!: HTMLDivElement;
+	const dismiss = () => {
+		if (!props.dismissDisabled) props.onDismiss();
+	};
+
+	onMount(() => {
+		if (!props.manageFocus) return;
+		// Ownership is local to mounted DOM, not a persistent modal registry. A
+		// newer modal wins even if its render location precedes this one's.
+		const earlierModals = new Set(document.querySelectorAll("[data-managed-modal]"));
+		panel.setAttribute("data-managed-modal", "");
+		const ownsFocus = () =>
+			panel.isConnected &&
+			[...document.querySelectorAll("[data-managed-modal]")].every(
+				(other) => other === panel || earlierModals.has(other),
+			);
+		const controls = () =>
+			[...panel.querySelectorAll<HTMLElement>("input, select, textarea, button, a[href], [tabindex]")]
+				.filter((element) => {
+					if (
+						element.tabIndex < 0 ||
+						element.matches(':disabled, input[type="hidden"]') ||
+						element.closest("[hidden], [inert]")
+					)
+						return false;
+					// Do not rely on layout rectangles: jsdom has none. Ancestors can
+					// hide otherwise-enabled controls, including via stylesheet rules.
+					for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+						const style = getComputedStyle(ancestor);
+						if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse")
+							return false;
+					}
+					return true;
+				})
+				.sort((a, b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
+		const focusInside = () => (controls()[0] ?? panel).focus();
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (!ownsFocus() || (event.key !== "Tab" && event.key !== "Escape")) return;
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			if (event.key === "Escape") {
+				dismiss();
+				return;
+			}
+			const enabled = controls();
+			const index = enabled.indexOf(document.activeElement as HTMLElement);
+			const next = event.shiftKey ? (index <= 0 ? enabled.length : index) - 1 : (index + 1) % enabled.length;
+			(enabled[next] ?? panel).focus();
+		};
+		const onFocusIn = (event: FocusEvent) => {
+			if (ownsFocus() && !panel.contains(event.target as Node)) focusInside();
+		};
+		document.addEventListener("keydown", onKeyDown, true);
+		document.addEventListener("focusin", onFocusIn);
+		focusInside();
+		onCleanup(() => {
+			document.removeEventListener("keydown", onKeyDown, true);
+			document.removeEventListener("focusin", onFocusIn);
+			const restore = ownsFocus() && panel.contains(document.activeElement);
+			panel.removeAttribute("data-managed-modal");
+			if (restore && invoker instanceof HTMLElement && invoker.isConnected) invoker.focus({ preventScroll: true });
+		});
+	});
+
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-dismiss is supplementary — the modal itself provides Escape handling and dismiss buttons
 		<div
 			class="modal-backdrop"
 			role="presentation"
 			onClick={(e) => {
-				if (e.target === e.currentTarget) props.onDismiss();
+				if (e.target === e.currentTarget) dismiss();
 			}}
 			onKeyDown={(e) => {
-				if (e.key === "Escape") props.onDismiss();
+				// Keep Solid's delegated child handlers and native input defaults;
+				// stop at the delegated backdrop before window-level shortcuts.
+				if (props.manageFocus) e.stopPropagation();
+				else if (e.key === "Escape") dismiss();
 			}}
 		>
-			<div class={`modal ${props.class ?? ""}`} role="dialog" aria-label={props.title}>
+			<div
+				ref={panel}
+				class={`modal ${props.class ?? ""}`}
+				role="dialog"
+				aria-label={props.title}
+				aria-modal={props.manageFocus ? true : undefined}
+				tabindex={props.manageFocus ? -1 : undefined}
+			>
 				<div class="modal-title">{props.title}</div>
 				<div class="modal-body">{props.children}</div>
 				<Show when={props.actions}>

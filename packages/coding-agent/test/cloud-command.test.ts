@@ -171,11 +171,83 @@ describe("cloud management dispatch", () => {
 		const path = await folder("project");
 		expect((await invoke(["cloud", "link", "project", "--id", ID])).out).toContain(`Linked project ${ID}`);
 		vi.stubEnv("HOME", root);
+		vi.stubEnv("USERPROFILE", root);
 		expect((await invoke(["cloud", "link", "~/project", "--id", ID])).code).toBeUndefined();
 		expect((await invoke(["cloud", "resolve", ID.toUpperCase()])).out).toBe(path);
 		expect(process.cwd()).toBe(root);
 		expect(existsSync(cloudMarkerPath(path, "project"))).toBe(false);
 	});
+
+	it
+		.skipIf(process.platform === "win32")
+		.each(
+			(["connect", "link"] as const).flatMap((command) =>
+				(["absolute", "relative", "home"] as const).map((form) => ({ command, form })),
+			),
+		)("preserves literal whitespace for cloud $command with a $form directory", async ({ command, form }) => {
+		const name = form === "relative" ? " selected " : "selected ";
+		const selected = await folder(name);
+		const neighbor = await folder("selected");
+		await writeFile(join(neighbor, "sentinel.txt"), "unselected directory");
+		vi.stubEnv("HOME", root);
+		const argument = form === "absolute" ? selected : form === "home" ? `~/${name}` : name;
+		const result = await invoke(["cloud", command, argument, "--init", "--json"]);
+		expect(result.err).toBe("");
+		expect(result.code).toBeUndefined();
+		const binding = JSON.parse(result.out);
+		if (command === "connect") {
+			expect(binding.path).toBe(selected);
+			expect(existsSync(cloudMarkerPath(selected, "workspace"))).toBe(true);
+		} else {
+			expect(binding.location).toEqual({ kind: "local", path: selected });
+			expect((await invoke(["cloud", "resolve", binding.id])).out).toBe(selected);
+			expect(existsSync(cloudMarkerPath(selected, "project"))).toBe(true);
+		}
+		expect(existsSync(join(neighbor, config.CONFIG_DIR_NAME))).toBe(false);
+		expect(await readFile(join(neighbor, "sentinel.txt"), "utf8")).toBe("unselected directory");
+		expect(process.cwd()).toBe(root);
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"accepts a whitespace-only directory name, not an empty argument",
+		async () => {
+			const selected = await folder(" ");
+			const result = await invoke(["cloud", "link", " ", "--id", ID, "--json"]);
+			expect(result.err).toBe("");
+			expect(result.code).toBeUndefined();
+			expect(JSON.parse(result.out).location).toEqual({ kind: "local", path: selected });
+			expect((await invoke(["cloud", "resolve", ID])).out).toBe(selected);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"isolates a literal agent-profile override from its trimmed sibling",
+		async () => {
+			const neighborAgent = join(root, "profile");
+			const selectedAgent = join(root, "profile ");
+			const neighborProject = await folder("neighbor-project");
+			const selectedProject = await folder("selected-project");
+			const neighbor = new CloudWorkspaceRegistry({ agentDir: neighborAgent });
+			await neighbor.link(neighborProject, { projectId: ID });
+			const original = await readFile(neighbor.path);
+			vi.stubEnv(config.ENV_AGENT_DIR, selectedAgent);
+			expect(config.getAgentDir()).toBe(selectedAgent);
+			expect(config.getSettingsPath()).toBe(join(selectedAgent, "settings.json"));
+			expect(config.getCloudWorkspaceRegistryPath()).toBe(join(selectedAgent, "cloud-workspaces.json"));
+			expect(JSON.parse((await invoke(["cloud", "list", "--json"])).out)).toEqual({
+				version: 1,
+				workspaces: [],
+				projects: [],
+			});
+			expect(existsSync(selectedAgent)).toBe(false);
+			expect((await invoke(["cloud", "link", selectedProject, "--id", ID])).code).toBeUndefined();
+			expect((await invoke(["cloud", "resolve", ID])).out).toBe(selectedProject);
+			expect(JSON.parse((await invoke(["cloud", "unlink", ID, "--json"])).out)).toEqual({ id: ID, removed: true });
+			expect(JSON.parse((await invoke(["cloud", "unlink", ID, "--json"])).out)).toEqual({ id: ID, removed: false });
+			expect(await readFile(neighbor.path)).toEqual(original);
+			expect(await neighbor.resolve(ID)).toBe(neighborProject);
+		},
+	);
 
 	it("rebinds root-relative projects only after an explicit --rebind", async () => {
 		const drive = await folder("drive");

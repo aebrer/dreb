@@ -1,12 +1,31 @@
 # Cloud Workspaces
 
-Cloud workspaces are a provider-neutral identity registry, CLI, and SDK foundation for mapping the same project ID to different existing local folders on different computers. This initial Phase 1A slice is **metadata only**, not full session portability or a sync service.
+Cloud workspaces are a provider-neutral identity registry with CLI, SDK and optional Dashboard management for mapping the same project ID to different existing local folders on different computers. Management is **metadata only**; explicit Dashboard directory selection can use a linked ID to start/resume a runtime. This is not full session portability or a sync service.
 
-Use folders you already manage, including folders delivered by a desktop sync client. dreb makes no provider OAuth, provider API, or network calls directly. A desktop client may transfer the metadata you explicitly request; dreb does not verify that delivery.
+Use folders you already manage, including folders delivered by a desktop sync client. Registry management makes no cloud-provider OAuth/API/network calls; Dashboard uses its authenticated backend API. A desktop client may transfer the metadata you explicitly request; dreb does not verify that delivery.
+
+## Dashboard setup
+
+Open **Settings → Cloud Workspaces**, or go directly to `#/settings/cloud-workspaces`. This independent screen does not mount ordinary Settings/model/version loaders. Enter or paste **native absolute paths on the backend host** (for example, `/Users/alex/SharedWork` or `D:\SharedWork`), not paths on your phone/browser. No terminal commands or model credentials are needed for management. There is no new folder browser/native picker, browser preference or polling for cloud mappings; use **Refresh metadata** explicitly.
+
+1. **Connect workspace:** leave **Existing identity** selected to connect a delivered `.dreb/workspace.json`, or deliberately choose **Initialize first marker** on the first host only. Folders must already exist.
+2. **Link project:** choose **Existing marker** (default), **Initialize first marker** (once), or **Known full ID (markerless)**. The last mode explicitly binds a known project UUID without creating a missing marker; any existing marker must agree. Choose **Direct local** or an explicit **Workspace-relative** relationship. Enter an absolute host path in either case; no folders are moved and connecting a root does not discover all its projects. Direct-local projects may be outside synced roots.
+3. Review full IDs, configured paths/relationships, canonical available paths and per-row errors. **Available** means locally reachable with valid required metadata, not delivered elsewhere or equivalent code. Rows are ordered by stable ID, not activity/availability. Failed refreshes retain last-good rows labelled stale, not a misleading empty registry; failed mutations retain entered values and report errors, including partial initialization guidance.
+4. Use **Rebind workspace/project** after a move to target the same full identity. Workspace rebinds require its matching marker. Project rebinds explicitly supply the row's known ID and retain known-ID markerless semantics; a conflicting marker is rejected. No replacement identity is initialized. Confirm **Unlink project** or **Disconnect workspace** to remove only this host's mapping. Markers, folders, cloud content and transcript bytes are preserved; dependent project IDs stay visible but unavailable until reconnected or rebound.
+
+**Initialize each shared workspace/project marker once.** On other hosts, wait for its delivery, then connect/link the existing identity. A missing required marker is not permission to initialize a replacement. If `PARTIAL_INITIALIZATION` reports a preserved marker, fix the local failure and retry with that same identity.
+
+### Choosing a runtime directory
+
+Every **New Session** and replacement-directory dialog initially uses **local directory**, including after a prior linked choice. Ordinary local workflows need no registration and do not query the registry. Explicitly switch to **linked project** to load choices, select one full project ID, or follow **manage Cloud Workspaces**. There is no automatic project selection or fallback folder. This control appears in New Session and replacement flows for Fleet history, closed main Session, and the closed parent resumed from Subagent view; the latter resumes the captured parent transcript, not a child as a main session.
+
+The browser sends the selected ID, never its cached display path alongside the ID. The backend resolves it immediately before canonical directory validation and runtime creation. Missing/disconnected mappings, changed required markers, containment violations or inaccessible paths prevent launch without fallback. Displayed availability is advisory, not a transactional filesystem snapshot.
+
+Connect/link/status/rebind/removal do not start utility/agent runtimes, load project settings/context/extensions, discover providers, read transcripts or alter trust. The existing Dashboard shell retains its normal session inventory and SSE. **Start/Resume is execution:** it follows normal settings, initial upward context scan, extensions and resource startup in the chosen directory. Linking is neither a trust grant nor proof that the checkout matches the transcript. Directory selection does not persist a main/subagent project association, move session files or change storage precedence. See [Dashboard API](dashboard.md#cloud-workspace-api) and [session compatibility](session.md#cloud-workspace-compatibility).
 
 ## Getting started
 
-All selected workspace and project folders must already exist and be readable/searchable. Initialization creates identity metadata, not the project folders. CLI relative paths resolve from the caller's current directory; `~` is supported.
+All selected workspace and project folders must already exist and be readable/searchable. Initialization creates identity metadata, not the project folders. CLI relative paths resolve from the caller's current directory; `~` is supported. Directory arguments and agent-directory paths preserve literal whitespace in names; empty directory arguments are rejected.
 
 ```bash
 # Run once in an existing folder tree; record each returned full UUID.
@@ -138,7 +157,7 @@ Each marker has exactly `version`, `kind`, and `id`. These are **example UUIDs**
 
 Markers contain no machine paths, trust grants, or credentials. Their directories and files cannot be symlinks. Existing identities are reused, never silently reset. Invalid, incomplete, future-version, wrong-kind, or conflicting metadata is an error; a missing required marker is also an error, not permission to invent a replacement identity.
 
-The **device-local** registry is `<agent-dir>/cloud-workspaces.json`, normally `~/.dreb/agent/cloud-workspaces.json`. It honors `DREB_CODING_AGENT_DIR`; the SDK can explicitly select `agentDir`. There are no new `settings.json` options or merged project/global settings for this registry.
+The **device-local** registry is `<agent-dir>/cloud-workspaces.json`, normally `~/.dreb/agent/cloud-workspaces.json`. CLI, SDK defaults and Dashboard mapping storage honor `DREB_CODING_AGENT_DIR`; the SDK can explicitly select `agentDir`. Dashboard pairing storage is separate and is not redirected by this mapping choice. The browser cannot select an agent directory. There are no new `settings.json` options or merged project/global settings for this registry.
 
 Version 1 registry shape (the paths and IDs below are illustrative):
 
@@ -173,9 +192,11 @@ A workspace binding is `{id, path}`. A project binding is `{id, location, marker
 
 ## SDK API
 
-Import `CloudWorkspaceRegistry`, `CloudWorkspaceError`, `getCloudWorkspaceRegistryPath`, and the associated types from `@dreb/coding-agent`.
+Import `CloudWorkspaceRegistry`, `CloudWorkspaceError`, `getCloudWorkspaceRegistryPath`, and associated types from the narrow public `@dreb/coding-agent/cloud-workspaces` subpath. It exposes the metadata registry, errors/types, version constant and registry-path helper without importing the agent/session/provider/UI runtime barrel. Existing `@dreb/coding-agent` root exports remain compatible.
 
 ```typescript
+import { CloudWorkspaceRegistry } from "@dreb/coding-agent/cloud-workspaces";
+
 const registry = new CloudWorkspaceRegistry({ agentDir: "/native/absolute/local-agent-dir" });
 // Or new CloudWorkspaceRegistry() for the default agent directory.
 ```
@@ -185,12 +206,14 @@ const registry = new CloudWorkspaceRegistry({ agentDir: "/native/absolute/local-
 | Async method | Return type |
 |---|---|
 | `list()` | `Promise<CloudWorkspaceState>` |
-| `connect(directory, {initialize?, rebind?}?)` | `Promise<CloudWorkspaceBinding>` |
-| `link(directory, {initialize?, rebind?, projectId?, workspaceId?}?)` | `Promise<CloudProjectBinding>` |
+| `connect(directory, {initialize?, rebind?, expectedId?}?)` | `Promise<CloudWorkspaceBinding>` |
+| `link(directory, {initialize?, rebind?, expectedId?, projectId?, workspaceId?}?)` | `Promise<CloudProjectBinding>` |
 | `resolve(projectId)` | `Promise<string>` |
 | `status()` | `Promise<CloudWorkspaceStatus>` |
 | `unlink(projectId)` | `Promise<boolean>` |
 | `disconnect(workspaceId)` | `Promise<boolean>` |
+
+Optional SDK `expectedId` is a same-identity precondition, validated as a full UUID and normalized to lowercase. It rejects a different identity before marker/registry mutation and cannot be combined with `initialize: true`. It does not authorize markerless linking: use explicit `projectId` for that, and supply the same ID if both options are present. Dashboard row rebinds use this guard; it is **not a new CLI flag**. Existing CLI and markerless known-ID semantics remain unchanged.
 
 `CloudWorkspaceStatus` is `{version: 1, workspaces, projects}` with per-record `{id, available, path?, error?: {code, message}}`. Errors expose `CloudWorkspaceError.code` and `.message`. Marker and registry versions are both 1; this is independent of the session-file version.
 
@@ -211,7 +234,9 @@ Local locks and atomic registry replacements protect cooperating local CLI/SDK u
 
 ## Compatibility and limits
 
-- Existing [`sessionDir` and `subagentSessionDir`](settings.md#sessions), historical CWDs, exact-path actions, Dashboard/RPC/resume behavior, trust grants, and agent configuration are unchanged. Registry mappings do not automatically remap sessions. See [Session format](session.md#cloud-workspace-compatibility) and [Dashboard compatibility](dashboard.md#cloud-workspace-compatibility).
-- There is no `/cloud` slash command or Dashboard Cloud page. Main/subagent project association and automatic project-aware resume are future slices.
-- Full-history immutable checkpoints and continuations belong to a future phase. This foundation adds no concurrent live-JSONL writer safety or process migration.
+This is partial delivery of [issue #564](https://github.com/aebrer/dreb/issues/564), which remains open for the broader portability work.
+
+- Existing [`sessionDir` and `subagentSessionDir`](settings.md#sessions) precedence, exact transcript paths, historical headers/CWDs, session/RPC formats and trust policy remain separate from registry mappings. Dashboard offers explicit linked-ID directory selection, not automatic remapping. See [Session format](session.md#cloud-workspace-compatibility) and [Dashboard compatibility](dashboard.md#cloud-workspace-compatibility).
+- There is no `/cloud` slash command. Persistent main/subagent project association and automatic mapping-aware resume are not delivered.
+- Portable parent/child reconciliation, full-history checkpoints/continuations and safe cross-device handoff remain future work. OneDrive or another client transports files; it is not a distributed lock, process migration or checkpoint guarantee. No concurrent live-JSONL writer safety is added.
 - There is no provider OAuth/API integration, sync `.gitignore` enforcement, forced migration, or global-install change. This documentation makes no real OneDrive, Google Drive, or second-OS certification claim.

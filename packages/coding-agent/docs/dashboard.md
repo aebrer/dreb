@@ -41,7 +41,72 @@ Absolute paths remain absolute, `~` expands from the home directory, and relativ
 
 ## Cloud Workspace Compatibility
 
-[Cloud workspaces](cloud-workspaces.md) are currently a metadata-only CLI/SDK foundation. There is no Dashboard Cloud page or `/cloud` slash command. Registry mappings do not automatically remap inventory, historical CWDs, exact-path actions, or resume destinations; the existing explicit runtime-directory chooser remains unchanged. Session storage, Dashboard/RPC behavior, main/subagent association, trust grants, and agent configuration are not changed by connecting a workspace. Automatic project-aware resume is a future slice, not part of this foundation.
+[Cloud workspaces](cloud-workspaces.md) add optional Dashboard metadata management and explicit linked-project directory selection. **Local directory** remains the initial mode in every New Session/replacement dialog; no setup or registry read is needed for ordinary local launches, Files “new session here” or `/new`. Choose **linked project** explicitly in New Session, Fleet historical resume, or the replacement flow for a closed main Session or closed parent from Subagent view. Select a full ID; there is no automatic choice or fallback. Subagent-view resume still targets the captured parent transcript, never launches the child transcript as a main session.
+
+Mappings do not persist main/subagent project association or automatically remap inventory/resume. Exact transcript paths, historical headers/CWDs, effective runtime CWD, session/RPC formats, storage precedence and trust policy stay separate. Portable parent/child/full-history continuation and safe cross-device handoff are not delivered. OneDrive or another sync client transports files, not distributed locks, processes or guaranteed checkpoints. There is no `/cloud` slash command.
+
+### Cloud Workspaces management
+
+Open **Settings → Cloud Workspaces** or directly visit `#/settings/cloud-workspaces`. The independent screen does not mount ordinary Settings/model/version loaders and can be used without terminal commands or model credentials. Enter native absolute paths on **the backend host**, not your phone/browser; all folders must already exist. The page adds no folder browser/native picker, persisted browser selection or cloud polling.
+
+- **Connect workspace:** use an existing delivered marker (default), or deliberately initialize its first marker once.
+- **Link project:** use an existing marker, initialize its first marker, or supply its known full UUID for a markerless binding. Any present marker must agree. Explicitly choose direct-local or workspace-relative storage; projects may stay outside synced roots. Enter an absolute host path in either mode. Nothing is relocated, synchronized, trusted or automatically discovered.
+- **Refresh metadata:** inspect stable IDs, configured paths/root relationships, canonical available paths and per-row errors. Availability is local only, not sync status or code equivalence. Rows are ordered by ID; failed refreshes retain last-good rows with a stale/error label and failed mutations preserve form values.
+- **Rebind workspace/project:** target the same identity after a move. The shared SDK `expectedId` guard rejects a different marker before mutation; project rebinds also supply the row's explicit known `projectId`, preserving markerless semantics. No replacement marker is initialized.
+- **Unlink/Disconnect:** confirm local-only removal. Folders, markers, cloud content and transcript bytes survive. Disconnected dependent projects remain visible but unavailable until reconnected or rebound.
+
+Initialize shared workspace/project markers deliberately **once**. On other hosts, wait for delivery and connect/link the existing identity. A missing required marker is not permission to initialize a replacement. If partial initialization preserved a marker, fix the local registration failure and retry with that identity.
+
+Management calls touch registered paths/metadata only: no utility runtime, provider/model discovery, project settings/context/extensions loading, trust mutation, transcript hydration or agent start. The existing Dashboard shell still performs normal session inventory/SSE work. **Start/Resume runs the normal settings, context (including initial upward scan), extensions and resource startup** in the chosen directory. A linked ID is not a trust certificate.
+
+The device-local mapping registry is `<agent-dir>/cloud-workspaces.json`, honoring the coding-agent `DREB_CODING_AGENT_DIR` convention. Dashboard pairing storage is separate; the browser cannot choose the agent directory. Never sync the registry or the entire agent directory. See [setup, marker schema and repair](cloud-workspaces.md).
+
+### Cloud Workspace API
+
+All routes use the existing Dashboard authentication: local Host/Origin checks or remote Tailscale/allowlist/pairing, before registry access. No new auth bypass or trust grant is introduced. Bodies are JSON objects with only the listed fields; paths must be native absolute backend paths (no CLI relative-path/`~` expansion), IDs full UUID strings, and `initialize` a boolean. Unknown fields, wrong types and contradictory options are rejected; no agent-dir/registry-path input is accepted.
+
+| Method and path | Request body | Success body |
+|---|---|---|
+| `GET /api/cloud-workspaces` | None | Overview described below |
+| `POST /api/cloud-workspaces/connect` | `{path, initialize?}` | `{id, path}` workspace binding |
+| `POST /api/cloud-workspaces/link` | `{path, initialize?, projectId?, workspaceId?}` | `{id, location, markerRequired}` project binding |
+| `PUT /api/cloud-workspaces/workspaces/:id` | `{path}` | Workspace binding, same ID |
+| `PUT /api/cloud-workspaces/projects/:id` | `{path, workspaceId?}` | Project binding, same ID |
+| `DELETE /api/cloud-workspaces/workspaces/:id` | None | `{removed: boolean}` |
+| `DELETE /api/cloud-workspaces/projects/:id` | None | `{removed: boolean}` |
+
+`initialize: true` and `projectId` are incompatible. Omitting `workspaceId` selects direct-local binding even within a workspace. PUT routes perform explicit same-ID rebinds; DELETE is idempotent and removes only a local row.
+
+The GET overview is `{version: 1, pathStyle: "windows" | "posix", workspaces, projects}`. Workspace rows are `{id, path, status}`; project rows are `{id, location, markerRequired, status}`. `location` is `{kind: "local", path}` or `{kind: "workspace", workspaceId, relativePath}`. Each `status` is `{available: true, path}` (canonical host path) or `{available: false, error: {code, message}}`. GET joins separate registry `list()` and `status()` observations by ID, **not a transactional snapshot**. Concurrent changes may require refresh; launch revalidation is authoritative. Listing absent state does not create a registry.
+
+Metadata operation failures return `{code, error}` with stable codes:
+
+| Code | HTTP status |
+|---|---|
+| `INVALID_REQUEST` | 400 |
+| `INVALID_METADATA` (shared registry/marker validation) | 422 |
+| `INVALID_PATH` | 400 |
+| `NOT_FOUND` | 404 |
+| `CONFLICT`, `UNAVAILABLE` | 409 |
+| `IO_ERROR`, `PARTIAL_INITIALIZATION` | 500 |
+
+A failed durable mutation is not success. `PARTIAL_INITIALIZATION` preserves retry guidance for a marker already created; do not reset identities or discard corrupt state to hide an error. Per-row unavailable status remains an ordinary successful GET response, distinct from a failed overview load.
+
+### Runtime directory API
+
+`POST /api/runtimes` accepts **exactly one** `cwd: string` or `projectId: full UUID`, with optional `sessionPath: string` and `firstPrompt: string`. Unknown fields, both/neither source and wrong types fail. Existing local requests remain supported without registry access:
+
+```json
+{"cwd":"/home/alex/src/widget","firstPrompt":"Inspect the build"}
+```
+
+An explicit linked resume sends the ID and exact transcript path, never a cached path plus ID (the UUID/path below are illustrative):
+
+```json
+{"projectId":"22222222-2222-4222-8222-222222222222","sessionPath":"/home/alex/history/session.jsonl"}
+```
+
+The backend resolves the ID immediately before normal canonical readable/searchable-directory validation and `pool.create`; unavailable/disconnected/changed required markers prevent launch with no fallback. Success returns the runtime DTO with HTTP 201. The client API keeps `createRuntime(cwd, {sessionPath?, firstPrompt?})` and adds `createProjectRuntime(projectId, {sessionPath?, firstPrompt?})`. Directory selection does not change transcript identity or storage and is not automatic project-aware resume.
 
 ## Local vs remote — exactly two modes
 
@@ -148,6 +213,7 @@ networking window above.
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
 | **Memories** | Dreb-only memory management for `~/.dreb/memory` and `.dreb/memory` under active/disk project roots. It lists existing `MEMORY.md` indexes and direct child `.md` entries only (no Claude paths, create, or rename), shows entry frontmatter or metadata errors so malformed files can be repaired, renders sanitized Markdown preview beside a raw editor, and uses exact SHA-256 revisions so stale saves/deletes return conflicts while preserving drafts. The index view is complete, not truncated, and warns when it exceeds the 200-line memory-index convention. Entry deletion requires both entry and index revisions, removes only matching safe Markdown-link index lines (`file.md` / `./file.md`), writes the cleaned index atomically before unlinking the entry, and rolls back loudly if the unlink fails. |
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, opt-in continuation of pending work after successful automatic compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The continuation option is off by default, can keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. The tab-title card exposes the default-enabled generator toggle and an exact authenticated `provider/model` picker; an unset model clearly retains Explore-agent routing, a pinned model can be cleared back to that route, and edits apply to new unnamed sessions. The scoped-models editor controls model cycling for new sessions only: grouped search, model/provider/all toggles, responsive controls, accessible up/down partial-scope ordering, and save/reset. An absent `enabledModels` is future-inclusive all models in registry order and cannot be reordered; a partial scope is a non-empty ordered list of canonical `provider/model` references. Editing legacy glob, fuzzy, or thinking-suffix values saves normalized exact references. The selected context reads effective global + project settings but writes global; a project-level `enabledModels` shadow is warned. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions, including **Max concurrent subagents** (default 4). Setting it to 0 starts new parents without the subagent tool and tells the parent model to perform normally delegated work itself; positive values cap running children per parent session. Context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards plus system/light/dark mode and a font picker with 36 explicit choices plus Theme default (the existing IBM Plex Mono/JetBrains Mono/Fira Code/Iosevka/OpenDyslexic/Atkinson Hyperlegible plus 15 sans-serif and 15 serif families), regular-face previews in the open listbox, saved per browser. Shows the current rotating pairing code on the host/local dashboard, the 1–3650 day lifetime used only for future pairings (180-day default), and paired-device expiry dates with unpair. |
+| **Cloud Workspaces** | Independent `#/settings/cloud-workspaces` page linked from Settings: connect/link existing identities or deliberately initialize first markers, refresh local availability, same-ID rebind and confirmed local-only unlink/disconnect. Enter backend host paths without terminal/model setup. See [management](#cloud-workspaces-management). |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
 ### Fleet search and filters
@@ -343,9 +409,10 @@ memory scopes, recent-project choices, and new-session shortcuts.
 
 A live runtime has a separate effective CWD. Valid historical paths are
 canonicalized and continue to resume directly. If the historical path is
-unavailable, Dashboard requires the user to choose an existing absolute
-directory; missing, unreadable, and non-directory paths are rejected before the
-RPC child is created. Tools, initial project context, settings, extensions, skills, git state,
+unavailable, Dashboard requires an explicit runtime-directory choice: an existing
+absolute local directory (default), or an explicitly selected linked project ID
+resolved on the backend. Missing, unreadable, non-directory or invalid linked
+locations are rejected before the RPC child is created. Tools, initial project context, settings, extensions, skills, git state,
 and project agent discovery use the effective runtime directory. Fleet cards and
 session chrome show that effective directory and retain the historical path as a
 separate note whenever they differ. Switching to another transcript inside an

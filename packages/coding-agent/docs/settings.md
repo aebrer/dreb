@@ -11,11 +11,15 @@ Edit directly or use `/settings` for common options.
 
 ## Cloud Workspace Registry
 
-[Cloud workspaces](cloud-workspaces.md) use a dedicated **device-local** `<agent-dir>/cloud-workspaces.json` file, normally `~/.dreb/agent/cloud-workspaces.json`. It honors `DREB_CODING_AGENT_DIR`; SDK callers may explicitly select `agentDir`. This version 1 registry is not a merged global/project setting and adds no `settings.json` options.
+[Cloud workspaces](cloud-workspaces.md) use a dedicated **device-local** `<agent-dir>/cloud-workspaces.json` file, normally `~/.dreb/agent/cloud-workspaces.json`. CLI, SDK defaults and Dashboard mappings honor `DREB_CODING_AGENT_DIR`; SDK callers may explicitly select `agentDir`. Dashboard pairing storage is separate, not redirected by the registry convention. This version 1 registry is not a merged global/project setting and adds no `settings.json` options or browser preference.
+
+Dashboard **Settings → Cloud Workspaces** (`#/settings/cloud-workspaces`) is an independent metadata page, usable with backend host paths without terminal commands, model credentials or ordinary Settings/model loaders. It offers connect/link, local availability, same-ID rebind and confirmed local-only removal; no utility runtime, provider discovery, project context or trust change is involved. The shell's normal inventory/SSE remains. Local directory is always the initial choice in New Session/replacement dialogs; linked-project selection is explicit and Start/Resume follows normal project settings/context/extensions startup. Projects need not live under synced roots. See [Dashboard setup](cloud-workspaces.md#dashboard-setup).
 
 Only identity markers at `<selected-workspace>/.dreb/workspace.json` and `<selected-project>/.dreb/project.json` are portable metadata (`.dreb` follows `CONFIG_DIR_NAME`). They contain only `{version: 1, kind: "workspace" | "project", id: "full UUID"}`, not paths, trust, or credentials. Local-only project metadata is not automatically distributed to another device; transfer its marker deliberately or explicitly link the same full project ID there.
 
-Never sync the registry or the entire agent directory. Keep machine-specific settings, context-trust grants, and authentication local; a shared identity does not grant trust or relocate agent configuration. Existing `sessionDir`/`subagentSessionDir` behavior is unchanged. See [schemas and local/shared boundaries](cloud-workspaces.md#shared-markers-and-local-schema).
+Initialize each shared marker deliberately once; on other hosts wait for delivery and connect/link the existing identity, never initialize a replacement for a missing required marker. Known-ID markerless project links remain an explicit alternative. Unlink/disconnect removes only local mappings, not markers, folders or transcripts; disconnected dependent IDs remain visible but unavailable.
+
+Never sync the registry or the entire agent directory. Keep machine-specific settings, context-trust grants, and authentication local; a shared identity does not grant trust, relocate configuration or synchronize files. Existing `sessionDir`/`subagentSessionDir` precedence remains separate. Persistent main/subagent project association, automatic mapping-aware resume, portable parent/child/full-history continuation and safe handoff are not delivered; OneDrive file transport is no distributed lock, process migration or checkpoint guarantee. See [schemas and local/shared boundaries](cloud-workspaces.md#shared-markers-and-local-schema).
 
 ## All Settings
 

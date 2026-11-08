@@ -66,6 +66,8 @@ export interface CloudWorkspaceStatus {
 export interface ConnectCloudWorkspaceOptions {
 	initialize?: boolean;
 	rebind?: boolean;
+	/** Require this existing identity; never initialize a replacement marker. */
+	expectedId?: string;
 }
 
 export interface LinkCloudProjectOptions extends ConnectCloudWorkspaceOptions {

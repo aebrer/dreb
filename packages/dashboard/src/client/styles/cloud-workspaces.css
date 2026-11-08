@@ -1,0 +1,80 @@
+.cloud-workspaces {
+	min-width: 0;
+	padding-block: var(--space-5);
+	overflow-wrap: anywhere;
+}
+
+.cloud-workspaces h1,
+.cloud-workspaces h2,
+.cloud-workspaces p {
+	margin-block: var(--space-4);
+}
+
+.cloud-workspaces .cloud-forms {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+	gap: var(--space-4);
+	margin-block: var(--space-5);
+}
+
+.cloud-workspaces form,
+.cloud-workspaces fieldset,
+.cloud-workspaces .cloud-row {
+	min-width: 0;
+}
+
+.cloud-workspaces fieldset,
+.cloud-workspaces .cloud-row {
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: var(--space-4);
+	margin: 0 0 var(--space-4);
+}
+
+.cloud-workspaces legend,
+.cloud-workspaces h3 {
+	font-size: 1rem;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.cloud-workspaces label {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-block: var(--space-4);
+}
+
+.cloud-workspaces input,
+.cloud-workspaces select {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	min-height: 2.75rem;
+}
+
+.cloud-workspaces .cloud-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+	margin-block: var(--space-3);
+}
+
+.cloud-workspaces button {
+	min-height: 2.75rem;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+.cloud-workspaces .cloud-error {
+	color: var(--status-error);
+	border-inline-start: 3px solid currentColor;
+	padding-inline-start: var(--space-3);
+}
+
+.cloud-workspaces .cloud-confirmation {
+	border-color: var(--status-attention);
+}

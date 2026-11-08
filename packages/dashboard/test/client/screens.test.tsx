@@ -237,6 +237,13 @@ vi.mock("../../src/client/api.js", () => ({
 		saveSettings: vi.fn(async (settings) => settings),
 		deleteSession: vi.fn(async () => ({ ok: true })),
 		stopRuntime: vi.fn(async () => ({ ok: true })),
+		cloudWorkspaces: vi.fn(async () => ({
+			version: 1,
+			pathStyle: "posix",
+			workspaces: [],
+			projects: [],
+		})),
+		createProjectRuntime: vi.fn(),
 		createRuntime: vi.fn(async (cwd: string) => ({
 			key: "new-key",
 			cwd,
@@ -311,6 +318,7 @@ import {
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
 import {
+	type CloudWorkspacesDto,
 	type CommandDto,
 	type FleetDto,
 	MAX_TOTAL_IMAGE_BYTES,
@@ -9754,4 +9762,536 @@ describe("dashboard client regressions", () => {
 		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
 		expect(el.querySelectorAll("img.tool-image")).toHaveLength(2);
 	});
+});
+
+// Real screens and store transitions, with synthetic API responses only. The
+// selector/modal unit suites cover the remaining focus and metadata form cases.
+describe("Cloud Workspaces screen integration", () => {
+	const projectId = "11111111-1111-4111-8111-111111111111";
+	const unavailableId = "22222222-2222-4222-8222-222222222222";
+	const metadata: CloudWorkspacesDto = {
+		version: 1,
+		pathStyle: "posix",
+		workspaces: [],
+		projects: [
+			{
+				id: projectId,
+				location: { kind: "local", path: "/cached/display-only/project" },
+				markerRequired: true,
+				status: { available: true, path: "/cached/canonical/display-only" },
+			},
+			{
+				id: unavailableId,
+				location: { kind: "local", path: "/missing/linked/project" },
+				markerRequired: true,
+				status: { available: false, error: { code: "UNAVAILABLE", message: "marker has not arrived" } },
+			},
+		],
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		vi.mocked(api.cloudWorkspaces).mockReset().mockResolvedValue(metadata);
+		vi.mocked(api.createProjectRuntime)
+			.mockReset()
+			.mockResolvedValue(runtimeInfo("linked-runtime", "/server/resolved"));
+	});
+
+	function deferred<T>() {
+		let resolve!: (value: T) => void;
+		let reject!: (error: Error) => void;
+		const promise = new Promise<T>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		return { promise, resolve, reject };
+	}
+
+	function button(root: ParentNode, text: string): HTMLButtonElement {
+		const result = [...root.querySelectorAll<HTMLButtonElement>("button")].find(
+			(candidate) => candidate.textContent?.trim() === text,
+		);
+		if (!result) throw new Error(`Missing button: ${text}`);
+		return result;
+	}
+
+	function change(root: ParentNode, selector: string, value: string): void {
+		const control = root.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(selector);
+		if (!control) throw new Error(`Missing control: ${selector}`);
+		control.value = value;
+		control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+	}
+
+	function diskSession(available = false): SessionInfoDto {
+		return {
+			path: "/synthetic/sessions/exact historical parent.jsonl",
+			id: "historical-parent",
+			cwd: "/other-host/historical-project",
+			cwdAvailable: available,
+			...(available ? { resolvedCwd: "/current-host/recent-project" } : {}),
+			name: "historical parent",
+			created: new Date(0).toISOString(),
+			modified: new Date(0).toISOString(),
+			messageCount: 3,
+			firstMessage: "historical request",
+		};
+	}
+
+	function fleetHarness(fleet: FleetDto = { runtimes: [], diskSessions: [] }) {
+		const base = makeStore();
+		disposers.push(() => base.stop());
+		const store = {
+			...base,
+			fleet: () => fleet,
+			upsertRuntime: vi.fn(),
+			refreshDiskSessions: vi.fn(async () => {}),
+			navigate: vi.fn(),
+		};
+		return store;
+	}
+
+	function openNew(root: ParentNode): HTMLButtonElement {
+		const invoker = button(root, "+ new session");
+		invoker.focus();
+		invoker.click();
+		return invoker;
+	}
+
+	async function selectLinked(root: ParentNode, prefix: string): Promise<void> {
+		change(root, `#${prefix}-source`, "project");
+		await vi.waitFor(() => expect(root.querySelectorAll(`#${prefix}-project option`)).toHaveLength(3));
+		expect(root.querySelector<HTMLSelectElement>(`#${prefix}-project`)?.value).toBe("");
+		change(root, `#${prefix}-project`, projectId);
+	}
+
+	function expectNoExecutionOrSettings(): void {
+		for (const method of [
+			api.settings,
+			api.settingsModels,
+			api.agentTypes,
+			api.version,
+			api.serverInfo,
+			api.listFiles,
+			api.models,
+			api.resources,
+			api.createRuntime,
+			api.createProjectRuntime,
+			api.hydrate,
+		])
+			expect(method).not.toHaveBeenCalled();
+	}
+
+	function expectPending(root: HTMLElement, submit: HTMLButtonElement): void {
+		expect(submit.disabled).toBe(true);
+		for (const control of root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+			".modal input, .modal select, .modal textarea",
+		))
+			expect(control.matches(":disabled")).toBe(true);
+		const cancel = button(root.querySelector(".modal-actions")!, "cancel");
+		expect(cancel.disabled).toBe(true);
+		cancel.click();
+		const backdrop = root.querySelector<HTMLElement>(".modal-backdrop")!;
+		backdrop.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		backdrop.click();
+		expect(root.querySelector('[role="dialog"]')).not.toBeNull();
+	}
+
+	it("cold Cloud deep link mounts the independent metadata screen, not Settings or a runtime", async () => {
+		window.location.hash = "#/settings/cloud-workspaces";
+		const el = mount(() => <App />);
+		await vi.waitFor(() => expect(el.querySelector(".cloud-workspaces")?.textContent).toContain(projectId));
+		expect(api.cloudWorkspaces).toHaveBeenCalledOnce();
+		expect(el.querySelector(".settings-wrap")).toBeNull();
+		expectNoExecutionOrSettings();
+		expect(api.auth).toHaveBeenCalled();
+		expect(api.fleet).toHaveBeenCalled();
+		expect(connectEvents).toHaveBeenCalled();
+	});
+
+	it.each(["#/settings", "#/settings/scoped-models?cwd=%2Fsynthetic%2Fscoped"])(
+		"%s still mounts real Settings rather than the Cloud screen",
+		async (hash) => {
+			window.location.hash = hash;
+			const el = mount(() => <App />);
+			await vi.waitFor(() => expect(api.settingsModels).toHaveBeenCalled());
+			expect(el.querySelector(".settings-wrap")).not.toBeNull();
+			expect(el.textContent).toContain("Ordinary defaults apply only to new sessions");
+			expect(api.settings).toHaveBeenCalled();
+			expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+			if (hash.includes("scoped-models")) {
+				expect(api.settings).toHaveBeenCalledWith("/synthetic/scoped");
+				expect(api.settingsModels).toHaveBeenCalledWith("/synthetic/scoped");
+				expect(el.querySelector<HTMLSelectElement>(".scoped-models-context select")?.value).toBe(
+					"/synthetic/scoped",
+				);
+			}
+		},
+	);
+
+	it("Settings exposes working Cloud navigation even when ordinary settings fail", async () => {
+		vi.mocked(api.settings).mockRejectedValueOnce(new Error("synthetic settings failure"));
+		window.location.hash = "#/settings";
+		const el = mount(() => <App />);
+		await vi.waitFor(() =>
+			expect(el.querySelector(".settings-error")?.textContent).toContain("synthetic settings failure"),
+		);
+		const link = el.querySelector<HTMLAnchorElement>('main a[href="#/settings/cloud-workspaces"]')!;
+		expect(link.textContent).toBe("Cloud Workspaces");
+		const settingsCalls = vi.mocked(api.settings).mock.calls.length;
+		link.click();
+		await vi.waitFor(() => expect(el.querySelector(".cloud-workspaces")?.textContent).toContain(projectId));
+		expect(el.querySelector(".settings-wrap")).toBeNull();
+		expect(api.settings).toHaveBeenCalledTimes(settingsCalls);
+	});
+
+	it("Fleet New Session starts local, keeps recent choices and the group initial cwd without reading metadata", () => {
+		const store = fleetHarness({
+			runtimes: [runtimeInfo("recent", "/recent/live")],
+			diskSessions: [diskSession(true)],
+		});
+		const el = mount(() => <FleetScreen store={store} />);
+		const invoker = openNew(el);
+		expect(el.querySelector<HTMLSelectElement>("#new-session-source")?.value).toBe("local");
+		expect(el.querySelector<HTMLInputElement>("#new-session-cwd")?.value).toBe("");
+		button(el.querySelector(".recent-projects")!, "/recent/live").click();
+		expect(el.querySelector<HTMLInputElement>("#new-session-cwd")?.value).toBe("/recent/live");
+		button(el.querySelector(".modal-actions")!, "cancel").click();
+		expect(document.activeElement).toBe(invoker);
+		el.querySelector<HTMLButtonElement>(".project-group .group-head .btn")!.click();
+		expect(el.querySelector<HTMLInputElement>("#new-session-cwd")?.value).toBe("/current-host/recent-project");
+		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+	});
+
+	it("explicit linked New Session loads metadata only, chooses no default, sends the ID and prompt, and stays on Fleet", async () => {
+		const store = fleetHarness();
+		const el = mount(() => <FleetScreen store={store} />);
+		openNew(el);
+		await selectLinked(el, "new-session");
+		expect(api.cloudWorkspaces).toHaveBeenCalledOnce();
+		expectNoExecutionOrSettings();
+		change(el, "#new-session-prompt", "synthetic first prompt");
+		button(el, "start session").click();
+		await vi.waitFor(() => expect(el.querySelector(".modal")).toBeNull());
+		expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith(projectId, {
+			firstPrompt: "synthetic first prompt",
+		});
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(store.upsertRuntime).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ key: "linked-runtime", cwd: "/server/resolved" }),
+		);
+		expect(store.navigate).not.toHaveBeenCalled();
+		openNew(el);
+		expect(el.querySelector<HTMLSelectElement>("#new-session-source")?.value).toBe("local");
+		expect(el.querySelector<HTMLInputElement>("#new-session-cwd")?.value).toBe("");
+		expect(api.cloudWorkspaces).toHaveBeenCalledOnce();
+	});
+
+	it("linked choices show empty, unavailable and failed-load retry states without an automatic fallback", async () => {
+		vi.mocked(api.cloudWorkspaces)
+			.mockResolvedValueOnce({ ...metadata, projects: [] })
+			.mockRejectedValueOnce(new Error("synthetic registry unreadable"));
+		const el = mount(() => <FleetScreen store={fleetHarness()} />);
+		openNew(el);
+		change(el, "#new-session-source", "project");
+		await vi.waitFor(() => expect(el.textContent).toContain("No linked projects are registered on this host"));
+		expect(button(el, "start session").disabled).toBe(true);
+		expect(el.querySelector('a[href="#/settings/cloud-workspaces"]')).not.toBeNull();
+		button(el, "refresh linked projects").click();
+		await vi.waitFor(() =>
+			expect(el.querySelector('[role="alert"]')?.textContent).toContain("synthetic registry unreadable"),
+		);
+		expect(button(el, "start session").disabled).toBe(true);
+		button(el, "retry linked projects").click();
+		await vi.waitFor(() => expect(el.querySelectorAll("#new-session-project option")).toHaveLength(3));
+		expect(el.querySelector<HTMLOptionElement>(`option[value="${unavailableId}"]`)?.disabled).toBe(true);
+		expect(el.textContent).toContain("UNAVAILABLE: marker has not arrived");
+		expect(el.querySelector<HTMLSelectElement>("#new-session-project")?.value).toBe("");
+		expect(button(el, "start session").disabled).toBe(true);
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(api.createProjectRuntime).not.toHaveBeenCalled();
+	});
+
+	it("a selected project disappearing on refresh clears the ID rather than choosing another or falling back locally", async () => {
+		const el = mount(() => <FleetScreen store={fleetHarness()} />);
+		openNew(el);
+		await selectLinked(el, "new-session");
+		vi.mocked(api.cloudWorkspaces).mockResolvedValueOnce({ ...metadata, projects: [] });
+		button(el, "refresh linked projects").click();
+		await vi.waitFor(() => expect(el.textContent).toContain("is no longer registered"));
+		expect(el.querySelector<HTMLSelectElement>("#new-session-source")?.value).toBe("project");
+		expect(el.querySelector<HTMLSelectElement>("#new-session-project")?.value).toBe("");
+		expect(button(el, "start session").disabled).toBe(true);
+		expect(api.createProjectRuntime).not.toHaveBeenCalled();
+		expect(api.createRuntime).not.toHaveBeenCalled();
+	});
+
+	it("default local New Session sends the local cwd and prompt without consulting the registry", async () => {
+		const store = fleetHarness();
+		const el = mount(() => <FleetScreen store={store} />);
+		openNew(el);
+		change(el, "#new-session-cwd", "/synthetic/local-new");
+		change(el, "#new-session-prompt", "local first prompt");
+		button(el, "start session").click();
+		await vi.waitFor(() => expect(el.querySelector(".modal")).toBeNull());
+		expect(api.createRuntime).toHaveBeenCalledExactlyOnceWith("/synthetic/local-new", {
+			firstPrompt: "local first prompt",
+		});
+		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+		expect(api.createProjectRuntime).not.toHaveBeenCalled();
+		expect(store.navigate).not.toHaveBeenCalled();
+	});
+
+	it("default local Fleet replacement keeps the exact historical transcript without consulting the registry", async () => {
+		const session = diskSession();
+		const el = mount(() => <FleetScreen store={fleetHarness({ runtimes: [], diskSessions: [session] })} />);
+		button(el.querySelector(".disk-row")!, "resume").click();
+		change(el, "#resume-runtime-cwd", "/synthetic/local-replacement");
+		button(el, "resume session").click();
+		await vi.waitFor(() =>
+			expect(api.createRuntime).toHaveBeenCalledExactlyOnceWith("/synthetic/local-replacement", {
+				sessionPath: session.path,
+			}),
+		);
+		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+		expect(api.createProjectRuntime).not.toHaveBeenCalled();
+	});
+
+	it("New Session guards synchronous duplicates and all pending dismissal, then retains ID/prompt on failure", async () => {
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+		const store = fleetHarness();
+		const el = mount(() => <FleetScreen store={store} />);
+		openNew(el);
+		await selectLinked(el, "new-session");
+		change(el, "#new-session-prompt", "retained first prompt");
+		const submit = button(el, "start session");
+		submit.click();
+		submit.click();
+		expect(api.createProjectRuntime).toHaveBeenCalledOnce();
+		expectPending(el, submit);
+		request.reject(new Error("synthetic project moved"));
+		await vi.waitFor(() => expect(el.querySelector(".modal")?.textContent).toContain("synthetic project moved"));
+		expect(el.querySelector<HTMLSelectElement>("#new-session-project")?.value).toBe(projectId);
+		expect(el.querySelector<HTMLTextAreaElement>("#new-session-prompt")?.value).toBe("retained first prompt");
+		expect(submit.disabled).toBe(false);
+		expect(store.upsertRuntime).not.toHaveBeenCalled();
+		expect(store.navigate).not.toHaveBeenCalled();
+	});
+
+	it("successful linked creation closes once even when the secondary inventory refresh fails", async () => {
+		const store = fleetHarness();
+		store.refreshDiskSessions.mockRejectedValue(new Error("synthetic inventory failure"));
+		const el = mount(() => <FleetScreen store={store} />);
+		openNew(el);
+		await selectLinked(el, "new-session");
+		button(el, "start session").click();
+		await vi.waitFor(() => expect(el.querySelector(".modal")).toBeNull());
+		expect(api.createProjectRuntime).toHaveBeenCalledOnce();
+		expect(store.upsertRuntime).toHaveBeenCalledOnce();
+		expect(store.refreshDiskSessions).toHaveBeenCalledOnce();
+		expect(store.navigate).not.toHaveBeenCalled();
+		expect(el.textContent).not.toContain("synthetic inventory failure");
+	});
+
+	it("Fleet unavailable-history replacement sends the ID and exact transcript, with pending guards and authoritative success", async () => {
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+		const session = diskSession();
+		const store = fleetHarness({ runtimes: [], diskSessions: [session] });
+		store.refreshDiskSessions.mockRejectedValue(new Error("synthetic inventory failure"));
+		const el = mount(() => <FleetScreen store={store} />);
+		button(el.querySelector(".disk-row")!, "resume").click();
+		expect(el.querySelector<HTMLSelectElement>("#resume-runtime-source")?.value).toBe("local");
+		expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+		expect(el.querySelector(".resume-historical-cwd")?.textContent).toBe(session.cwd);
+		await selectLinked(el, "resume-runtime");
+		const submit = button(el, "resume session");
+		submit.click();
+		submit.click();
+		await vi.waitFor(() =>
+			expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith(projectId, { sessionPath: session.path }),
+		);
+		expectPending(el, submit);
+		request.resolve(runtimeInfo("resumed-linked"));
+		await vi.waitFor(() => expect(el.querySelector(".resume-session-modal")).toBeNull());
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(store.upsertRuntime).toHaveBeenCalledOnce();
+		expect(store.navigate).toHaveBeenCalledExactlyOnceWith({ screen: "session", key: "resumed-linked" });
+	});
+
+	async function closedHarness(screen: "session" | "subagent") {
+		const key = `captured-parent-${screen}`;
+		const runtime = runtimeInfo(key, "/captured/effective/parent-project");
+		runtime.state.sessionFile = "/synthetic/captured/parent transcript.jsonl";
+		runtime.historicalCwd = "/historical/parent-project";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		vi.mocked(api.hydrate).mockResolvedValueOnce({
+			key,
+			state: runtime.state,
+			messages: [{ role: "assistant", content: [{ type: "text", text: "retained parent transcript" }] }],
+			backgroundAgents: [
+				{
+					agentId: "distinct-child",
+					agentType: "Explore",
+					taskSummary: "child task",
+					startedAt: new Date(0).toISOString(),
+					status: "completed",
+					sessionFile: "/synthetic/child/not-the-parent.jsonl",
+				},
+			],
+			barrierSeq: 0,
+		});
+		window.location.hash = screen === "session" ? `#/session/${key}` : `#/session/${key}/subagent/distinct-child`;
+		const store = makeStore();
+		disposers.push(() => store.stop());
+		await store.start();
+		await store.hydrateSession(key);
+		await store.removeRuntime(key, runtime);
+		expect(store.sessions[key]?.closed?.sessionFile).toBe(runtime.state.sessionFile);
+		const resume = vi.spyOn(store, "resumeClosedSession");
+		const screenStore = { ...store, hydrateSession: vi.fn(async () => {}), hydrateSubagent: vi.fn(async () => {}) };
+		const el = mount(() =>
+			screen === "session" ? (
+				<SessionScreen store={screenStore} sessionKey={key} />
+			) : (
+				<SubagentScreen store={screenStore} sessionKey={key} agentId="distinct-child" />
+			),
+		);
+		const invoker = button(el.querySelector('[data-banner-key="closed"]')!, "Choose directory…");
+		invoker.focus();
+		invoker.click();
+		return { el, store, resume, key, runtime, invoker };
+	}
+
+	it.each(["session", "subagent"] as const)(
+		"closed %s replacement passes the captured PARENT key and ID through the real store, never the child path",
+		async (screen) => {
+			const { el, store, resume, key, runtime } = await closedHarness(screen);
+			expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+			await selectLinked(el, "resume-runtime");
+			button(el, "resume session").click();
+			await vi.waitFor(() =>
+				expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith(projectId, {
+					sessionPath: runtime.state.sessionFile,
+				}),
+			);
+			expect(resume).toHaveBeenCalledExactlyOnceWith(key, { kind: "project", projectId });
+			expect(api.createRuntime).not.toHaveBeenCalled();
+			await vi.waitFor(() => expect(el.querySelector(".resume-session-modal")).toBeNull());
+			expect(store.fleet().runtimes.map((item) => item.key)).toContain("linked-runtime");
+			expect(window.location.hash).toBe("#/session/linked-runtime");
+		},
+	);
+
+	it.each(["session", "subagent"] as const)(
+		"closed %s local replacement retains the old string signature and never reads the registry",
+		async (screen) => {
+			const { el, resume, key, runtime } = await closedHarness(screen);
+			expect(el.querySelector<HTMLInputElement>("#resume-runtime-cwd")?.value).toBe(runtime.cwd);
+			change(el, "#resume-runtime-cwd", "/synthetic/local/replacement");
+			button(el, "resume session").click();
+			await vi.waitFor(() =>
+				expect(api.createRuntime).toHaveBeenCalledExactlyOnceWith("/synthetic/local/replacement", {
+					sessionPath: runtime.state.sessionFile,
+				}),
+			);
+			expect(resume).toHaveBeenCalledExactlyOnceWith(key, "/synthetic/local/replacement");
+			expect(api.cloudWorkspaces).not.toHaveBeenCalled();
+			expect(api.createProjectRuntime).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["session", "subagent"] as const)(
+		"closed %s linked replacement blocks pending dismissal/duplicates and retains selection after failure",
+		async (screen) => {
+			const request = deferred<RuntimeInfoDto>();
+			vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+			const { el, resume } = await closedHarness(screen);
+			await selectLinked(el, "resume-runtime");
+			const submit = button(el, "resume session");
+			submit.click();
+			submit.click();
+			expect(resume).toHaveBeenCalledOnce();
+			expect(api.createProjectRuntime).toHaveBeenCalledOnce();
+			expectPending(el, submit);
+			request.reject(new Error("synthetic parent resume failure"));
+			await vi.waitFor(() =>
+				expect(el.querySelector(".modal")?.textContent).toContain("synthetic parent resume failure"),
+			);
+			expect(el.querySelector<HTMLSelectElement>("#resume-runtime-project")?.value).toBe(projectId);
+			expect(submit.disabled).toBe(false);
+		},
+	);
+
+	it("a replacement modal owns number shortcuts over a background question and returns focus to its invoker", async () => {
+		const session = populatedSession("closed-question");
+		session.closed = { cwd: "/synthetic/project", sessionFile: "/synthetic/parent.jsonl" };
+		session.uiRequests = [
+			{ id: "background-question", method: "ask", questions: [{ question: "First?", options: ["A", "B"] }] },
+		];
+		const store = {
+			...fleetHarness(),
+			sessions: { "closed-question": session },
+			hydrateSession: vi.fn(async () => {}),
+		};
+		const el = mount(() => <SessionScreen store={store} sessionKey="closed-question" />);
+		expect(el.querySelector(".ask-option input")).not.toBeNull();
+		const invoker = button(el.querySelector('[data-banner-key="closed"]')!, "Choose directory…");
+		invoker.focus();
+		invoker.click();
+		const source = el.querySelector<HTMLSelectElement>("#resume-runtime-source")!;
+		source.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true }));
+		expect(el.querySelector<HTMLInputElement>(".ask-option input")?.checked).toBe(false);
+		expect(api.extensionUiResponse).not.toHaveBeenCalled();
+		button(el.querySelector(".modal-actions")!, "cancel").click();
+		expect(el.querySelector(".resume-session-modal")).toBeNull();
+		expect(document.activeElement).toBe(invoker);
+	});
+
+	it.each([
+		["new", "success"],
+		["new", "error"],
+		["resume", "success"],
+		["resume", "error"],
+	] as const)(
+		"obsolete Fleet %s completion (%s) cannot affect a newly mounted route/dialog; success keeps the authoritative runtime",
+		async (operation, outcome) => {
+			const request = deferred<RuntimeInfoDto>();
+			vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+			vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [], diskSessions: [diskSession()] });
+			window.location.hash = "#/";
+			const el = mount(() => <App />);
+			await vi.waitFor(() => expect(el.querySelector(".disk-row")).not.toBeNull());
+			if (operation === "new") openNew(el);
+			else button(el.querySelector(".disk-row")!, "resume").click();
+			await selectLinked(el, operation === "new" ? "new-session" : "resume-runtime");
+			button(el, operation === "new" ? "start session" : "resume session").click();
+			await vi.waitFor(() => expect(api.createProjectRuntime).toHaveBeenCalledOnce());
+			window.location.hash = "#/settings/cloud-workspaces";
+			await vi.waitFor(() => expect(el.querySelector(".cloud-workspaces")).not.toBeNull());
+			expect(el.querySelector(".modal")).toBeNull();
+			window.location.hash = "#/";
+			await vi.waitFor(() => expect(el.querySelector(".fleet-head")).not.toBeNull());
+			openNew(el);
+			change(el, "#new-session-cwd", "/synthetic/new-dialog");
+			const runtime = runtimeInfo("obsolete-authoritative");
+			runtime.state.sessionName = "authoritative obsolete completion";
+			if (outcome === "success") {
+				request.resolve(runtime);
+				await vi.waitFor(() =>
+					expect(el.querySelector(".session-card")?.textContent).toContain(runtime.state.sessionName),
+				);
+			} else {
+				request.reject(new Error("obsolete error must stay invisible"));
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				expect(el.querySelector(".session-card")).toBeNull();
+			}
+			expect(window.location.hash).toBe("#/");
+			expect(el.querySelector<HTMLInputElement>("#new-session-cwd")?.value).toBe("/synthetic/new-dialog");
+			expect(el.querySelector(".modal .pair-error")).toBeNull();
+			expect(el.textContent).not.toContain("obsolete error");
+			expect(api.createProjectRuntime).toHaveBeenCalledOnce();
+			expect(api.createRuntime).not.toHaveBeenCalled();
+		},
+	);
 });

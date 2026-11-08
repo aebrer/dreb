@@ -5,11 +5,12 @@
  * and live-only attention filtering. "+ new session" modal.
  */
 
-import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
-import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
+import { createMemo, createSignal, For, type JSX, onCleanup, Show } from "solid-js";
+import type { RuntimeDirectorySelection, RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
 import { FleetSortHeader, FleetSortReset, fleetColumnSort } from "../components/fleet-sort-headers.js";
+import { ProjectDirectorySelector } from "../components/project-directory-selector.js";
 import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { SessionCardSummary, sessionCardStatus } from "../components/session-card-summary.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "../state/fleet-sorting.js";
 import { createFleetStatsRefresh } from "../state/fleet-stats-refresh.js";
 import { fleetSort } from "../state/preferences.js";
+import { createRuntimeInDirectory, runtimeDirectoryReady } from "../state/runtime-directory.js";
 import type { AppStore } from "../state/store.js";
 
 export { fleetGroupKey } from "../state/fleet-sorting.js";
@@ -88,73 +90,82 @@ function NewSessionModal(props: {
 	recentProjects: string[];
 	onClose: () => void;
 }): JSX.Element {
-	const [cwd, setCwd] = createSignal(props.initialCwd ?? "");
+	const [directory, setDirectory] = createSignal<RuntimeDirectorySelection>({
+		kind: "local",
+		cwd: props.initialCwd ?? "",
+	});
 	const [firstPrompt, setFirstPrompt] = createSignal("");
 	const [error, setError] = createSignal<string>();
 	const [busy, setBusy] = createSignal(false);
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 
 	async function create() {
+		if (disposed || busy() || !runtimeDirectoryReady(directory())) return;
 		setBusy(true);
 		setError(undefined);
+		let runtime: RuntimeInfoDto;
 		try {
-			const runtime = await api.createRuntime(cwd(), {
-				firstPrompt: firstPrompt() || undefined,
-			});
-			props.store.upsertRuntime(runtime);
-			await props.store.refreshDiskSessions();
-			props.onClose();
+			runtime = await createRuntimeInDirectory(directory(), { firstPrompt: firstPrompt() || undefined });
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
+			if (!disposed) {
+				setError(err instanceof Error ? err.message : String(err));
+				setBusy(false);
+			}
+			return;
 		}
+		props.store.upsertRuntime(runtime);
+		// Creation is authoritative; inventory errors belong to the Fleet, not a retryable launch.
+		void props.store.refreshDiskSessions().catch(() => {});
+		if (!disposed) props.onClose();
 	}
 
 	return (
 		<Modal
 			title="new session"
+			manageFocus
+			dismissDisabled={busy()}
 			onDismiss={props.onClose}
 			actions={
 				<>
-					<button type="button" class="btn btn-small" onClick={props.onClose}>
+					<button
+						type="button"
+						class="btn btn-small"
+						disabled={busy()}
+						onClick={() => {
+							if (!busy()) props.onClose();
+						}}
+					>
 						cancel
 					</button>
-					<button type="button" class="btn btn-small btn-primary" disabled={busy() || !cwd()} onClick={create}>
+					<button
+						type="button"
+						class="btn btn-small btn-primary"
+						disabled={busy() || !runtimeDirectoryReady(directory())}
+						onClick={create}
+					>
 						{busy() ? "starting…" : "start session"}
 					</button>
 				</>
 			}
 		>
-			<div class="field">
-				<label for="new-session-cwd">project path</label>
-				<input
-					id="new-session-cwd"
-					type="text"
-					value={cwd()}
-					placeholder="/path/to/project"
-					onInput={(e) => setCwd(e.currentTarget.value)}
-				/>
-			</div>
-			<Show when={props.recentProjects.length > 0}>
-				<div class="field">
-					<label for="recent-projects-list">recent projects</label>
-					<div class="recent-projects" id="recent-projects-list">
-						<For each={props.recentProjects}>
-							{(project) => (
-								<button type="button" onClick={() => setCwd(project)}>
-									{fleetDisplayPath(project)}
-								</button>
-							)}
-						</For>
-					</div>
-				</div>
-			</Show>
+			<ProjectDirectorySelector
+				idPrefix="new-session"
+				selection={directory()}
+				onChange={setDirectory}
+				recentProjects={props.recentProjects}
+				disabled={busy()}
+				localLabel="project path"
+			/>
 			<div class="field">
 				<label for="new-session-prompt">first prompt (optional)</label>
 				<textarea
 					id="new-session-prompt"
 					rows="3"
 					value={firstPrompt()}
+					disabled={busy()}
 					onInput={(e) => setFirstPrompt(e.currentTarget.value)}
 				/>
 			</div>
@@ -177,6 +188,10 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const filtersActive = createMemo(() => searchActive() || attentionOnly());
 	const [resumeError, setResumeError] = createSignal<string>();
 	const resumeRequests = new Map<string, Promise<void>>();
+	let fleetDisposed = false;
+	onCleanup(() => {
+		fleetDisposed = true;
+	});
 	let fleetMain: HTMLElement | undefined;
 
 	// Moving an existing card/group with insertBefore can blur its focused control.
@@ -238,19 +253,19 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 
 	createFleetStatsRefresh(props.store, () => true);
 
-	function resumeIn(session: SessionInfoDto, cwd: string): Promise<void> {
+	function resumeIn(session: SessionInfoDto, directory: string | RuntimeDirectorySelection): Promise<void> {
 		const existing = resumeRequests.get(session.path);
 		if (existing) return existing;
 
 		const request = Promise.resolve()
 			.then(async () => {
 				setResumeError(undefined);
-				const runtime = await api.createRuntime(cwd, { sessionPath: session.path });
+				const runtime = await createRuntimeInDirectory(directory, { sessionPath: session.path });
 				props.store.upsertRuntime(runtime);
 				// Runtime creation is authoritative. Inventory refresh failure is surfaced
 				// separately and must not make a successful resume retryable.
 				void props.store.refreshDiskSessions().catch(() => {});
-				props.store.navigate({ screen: "session", key: runtime.key });
+				if (!fleetDisposed) props.store.navigate({ screen: "session", key: runtime.key });
 			})
 			.finally(() => resumeRequests.delete(session.path));
 		resumeRequests.set(session.path, request);

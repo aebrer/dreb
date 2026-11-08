@@ -14,6 +14,7 @@ vi.mock("../../src/client/api.js", () => ({
 		backgroundAgents: vi.fn(),
 		runtime: vi.fn(),
 		createRuntime: vi.fn(),
+		createProjectRuntime: vi.fn(),
 		stopRuntime: vi.fn(),
 		stats: vi.fn(),
 		subagentMessages: vi.fn(),
@@ -132,6 +133,7 @@ beforeEach(() => {
 	vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 	vi.mocked(api.runtime).mockResolvedValue(runtimeSnapshot("default", false));
 	vi.mocked(api.createRuntime).mockResolvedValue(runtimeSnapshot("resumed", false));
+	vi.mocked(api.createProjectRuntime).mockReset().mockResolvedValue(runtimeSnapshot("project-resumed", false));
 	vi.mocked(api.stopRuntime).mockResolvedValue({ ok: true });
 	vi.mocked(api.stats).mockResolvedValue({
 		sessionId: "default",
@@ -176,6 +178,297 @@ describe("settings routes", () => {
 		expect(store.route()).toEqual({ screen: "settings", target: "scoped-models", cwd: "/tmp/a b" });
 		store.stop();
 	});
+});
+
+describe("Cloud Workspaces settings routes", () => {
+	it("round-trips the cloud target on a cold load without changing legacy or scoped routes", () => {
+		expect(routeToHash({ screen: "settings", target: "cloud-workspaces" })).toBe("#/settings/cloud-workspaces");
+		for (const [hash, route] of [
+			["#/settings/cloud-workspaces", { screen: "settings", target: "cloud-workspaces" }],
+			["#/settings", { screen: "settings" }],
+			[
+				"#/settings/scoped-models?cwd=%20%2Ftmp%2Fa%20b%3F%23%25%20",
+				{ screen: "settings", target: "scoped-models", cwd: " /tmp/a b?#% " },
+			],
+		] as const) {
+			window.history.replaceState(null, "", hash);
+			const store = createAppStore();
+			expect(store.route()).toEqual(route);
+			expect(routeToHash(store.route())).toBe(hash);
+			store.stop();
+		}
+	});
+
+	it("preserves targets and exact cwd through started-store Back/Forward hashchanges", async () => {
+		window.history.replaceState(null, "", "#/settings/cloud-workspaces");
+		const store = await makeStartedStore();
+		try {
+			const scoped = { screen: "settings", target: "scoped-models", cwd: " /tmp/a b?#% " } as const;
+			const legacy = { screen: "settings" } as const;
+			const cloud = { screen: "settings", target: "cloud-workspaces" } as const;
+			expect(store.route()).toEqual(cloud);
+			for (const next of [legacy, scoped, cloud, scoped, legacy, cloud]) {
+				window.history.replaceState(null, "", routeToHash(next));
+				window.dispatchEvent(new HashChangeEvent("hashchange"));
+				expect(store.route()).toEqual(next);
+			}
+		} finally {
+			store.stop();
+		}
+	});
+});
+
+describe("project-selected closed-session resume", () => {
+	const parentKey = "project-closed";
+	const parentFile = " /sessions/PARENT transcript?#%.jsonl ";
+	const historicalCwd = "/historical/offline/project";
+	const stores: ReturnType<typeof createAppStore>[] = [];
+
+	afterEach(() => {
+		for (const store of stores.splice(0)) store.stop();
+	});
+
+	async function closedStore(options: { subagent?: boolean; cwd?: string } = {}) {
+		const runtime = runtimeSnapshot(parentKey, false);
+		runtime.cwd = options.cwd ?? "/missing/current/project";
+		runtime.state.sessionFile = parentFile;
+		const child = {
+			...agentSnapshot("child/full-id", "completed"),
+			cwd: "/child/project",
+			sessionFile: "/sessions/CHILD.jsonl",
+		};
+		runtime.backgroundAgents = [child];
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [runtime],
+			diskSessions: [
+				{
+					path: parentFile,
+					id: parentKey,
+					cwd: historicalCwd,
+					cwdAvailable: false,
+					created: new Date(0).toISOString(),
+					modified: new Date(0).toISOString(),
+					messageCount: 1,
+					firstMessage: "parent history",
+				},
+			],
+		});
+		window.history.replaceState(
+			null,
+			"",
+			options.subagent ? `#/session/${parentKey}/subagent/child%2Ffull-id` : `#/session/${parentKey}`,
+		);
+		const store = await makeStartedStore();
+		stores.push(store);
+		if (options.subagent) {
+			vi.mocked(api.subagentMessages).mockResolvedValueOnce({
+				agent: child,
+				messages: [{ role: "user", content: "child transcript" }],
+			});
+			await store.hydrateSubagent(parentKey, child.agentId);
+		}
+		emit(parentKey, { type: "message_start", message: { role: "user", content: "parent transcript" } });
+		emit(parentKey, { type: "runtime_removed" });
+		await flushAsyncWork();
+		return store;
+	}
+
+	it.each([false, true])(
+		"uses only the explicit project ID and captured parent file from subagent=%s",
+		async (subagent) => {
+			const store = await closedStore({ subagent });
+			expect(store.sessions[parentKey]?.closed).toEqual({
+				cwd: "/missing/current/project",
+				historicalCwd,
+				sessionFile: parentFile,
+			});
+			if (subagent) {
+				expect(store.sessions[parentKey]?.backgroundAgents["child/full-id"]?.sessionFile).toBe(
+					"/sessions/CHILD.jsonl",
+				);
+			}
+			const request = deferred<RuntimeInfoDto>();
+			vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+			const resume = store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/full-id" });
+			expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith("project/full-id", {
+				sessionPath: parentFile,
+			});
+			expect(api.createRuntime).not.toHaveBeenCalled();
+			expect(store.sessions[parentKey]?.closed).toEqual({
+				cwd: "/missing/current/project",
+				historicalCwd,
+				sessionFile: parentFile,
+				resuming: true,
+			});
+			const resumed = runtimeSnapshot("project-resumed", false);
+			request.resolve(resumed);
+			await resume;
+			window.dispatchEvent(new HashChangeEvent("hashchange"));
+			expect(store.route()).toEqual({ screen: "session", key: "project-resumed" });
+			expect(store.fleet().runtimes).toEqual([resumed]);
+			expect(window.location.hash).toBe("#/session/project-resumed");
+			expect(store.sessions[parentKey]).toBeUndefined();
+		},
+	);
+
+	it("can resume by ID and captured session file with no captured runtime cwd", async () => {
+		const runtime = runtimeSnapshot("no-cwd", false);
+		runtime.cwd = "";
+		runtime.state.sessionFile = parentFile;
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		window.history.replaceState(null, "", "#/session/no-cwd");
+		const store = await makeStartedStore();
+		stores.push(store);
+		emit("no-cwd", { type: "runtime_removed" });
+		await flushAsyncWork();
+		expect(store.sessions["no-cwd"]?.closed).toEqual({ sessionFile: parentFile });
+		await store.resumeClosedSession("no-cwd", { kind: "project", projectId: "project/full-id" });
+		expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith("project/full-id", { sessionPath: parentFile });
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(window.location.hash).toBe("#/session/project-resumed");
+	});
+
+	it.each([" /literal/replacement path/ ", { kind: "local", cwd: " /literal/replacement path/ " } as const])(
+		"keeps local create signatures as strings for %j",
+		async (selection) => {
+			const store = await closedStore();
+			await store.resumeClosedSession(parentKey, selection);
+			expect(api.createRuntime).toHaveBeenCalledExactlyOnceWith(" /literal/replacement path/ ", {
+				sessionPath: parentFile,
+			});
+			expect(api.createProjectRuntime).not.toHaveBeenCalled();
+			expect(window.location.hash).toBe("#/session/resumed");
+		},
+	);
+
+	it("single-flights repeated ID and local override attempts, then re-exposes errors on the captured parent", async () => {
+		const store = await closedStore({ subagent: true });
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+		const first = store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/first" });
+		store.dismissClosedBanner(parentKey);
+		const repeated = [
+			store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/first" }),
+			store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/other" }),
+			store.resumeClosedSession(parentKey, "/local/override"),
+			store.resumeClosedSession(parentKey, { kind: "local", cwd: "/local/other" }),
+		];
+		expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith("project/first", { sessionPath: parentFile });
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(store.sessions[parentKey]?.closed).toEqual({
+			cwd: "/missing/current/project",
+			historicalCwd,
+			sessionFile: parentFile,
+			resuming: true,
+			bannerDismissed: true,
+		});
+		request.reject(new Error("Selected project is unavailable"));
+		await Promise.all([first, ...repeated]);
+		expect(store.sessions[parentKey]?.closed).toEqual({
+			cwd: "/missing/current/project",
+			historicalCwd,
+			sessionFile: parentFile,
+			resuming: false,
+			bannerDismissed: false,
+			resumeError: "Selected project is unavailable",
+		});
+		expect(window.location.hash).toBe(`#/session/${parentKey}/subagent/child%2Ffull-id`);
+		expect(store.fleet().runtimes).toEqual([]);
+
+		const retry = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createProjectRuntime).mockReturnValueOnce(retry.promise);
+		const pending = store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/retry" });
+		expect(store.sessions[parentKey]?.closed).toEqual({
+			cwd: "/missing/current/project",
+			historicalCwd,
+			sessionFile: parentFile,
+			resuming: true,
+			bannerDismissed: false,
+		});
+		retry.resolve(runtimeSnapshot("retry-resumed", false));
+		await pending;
+		expect(api.createProjectRuntime).toHaveBeenCalledTimes(2);
+		expect(window.location.hash).toBe("#/session/retry-resumed");
+	});
+
+	it("single-flights ID overrides while a local create is pending", async () => {
+		const store = await closedStore();
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createRuntime).mockReturnValueOnce(request.promise);
+		const first = store.resumeClosedSession(parentKey, "/local/first");
+		const repeated = store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/override" });
+		expect(api.createRuntime).toHaveBeenCalledExactlyOnceWith("/local/first", { sessionPath: parentFile });
+		expect(api.createProjectRuntime).not.toHaveBeenCalled();
+		request.resolve(runtimeSnapshot("local-resumed", false));
+		await Promise.all([first, repeated]);
+		expect(window.location.hash).toBe("#/session/local-resumed");
+	});
+
+	it("commits successful ID creation despite a rejected secondary inventory refresh without retrying", async () => {
+		const store = await closedStore({ subagent: true });
+		vi.mocked(api.sessions).mockRejectedValueOnce(new Error("Inventory offline"));
+		await expect(
+			store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/full-id" }),
+		).resolves.toBeUndefined();
+		await flushAsyncWork();
+		expect(store.fleet().runtimes).toEqual([runtimeSnapshot("project-resumed", false)]);
+		expect(store.fleetError()).toBe("Inventory offline");
+		window.dispatchEvent(new HashChangeEvent("hashchange"));
+		expect(store.route()).toEqual({ screen: "session", key: "project-resumed" });
+		expect(window.location.hash).toBe("#/session/project-resumed");
+		expect(store.sessions[parentKey]).toBeUndefined();
+		await store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/full-id" });
+		expect(api.createProjectRuntime).toHaveBeenCalledExactlyOnceWith("project/full-id", { sessionPath: parentFile });
+		expect(api.createRuntime).not.toHaveBeenCalled();
+	});
+
+	it("upserts a late successful runtime without leaving the user's new route", async () => {
+		const store = await closedStore({ subagent: true });
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+		const pending = store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/full-id" });
+		store.navigate({ screen: "settings", target: "cloud-workspaces" });
+		window.dispatchEvent(new HashChangeEvent("hashchange"));
+		expect(store.sessions[parentKey]).toBeUndefined();
+		const resumed = runtimeSnapshot("late-resumed", false);
+		request.resolve(resumed);
+		await pending;
+		expect(store.fleet().runtimes).toEqual([resumed]);
+		expect(store.route()).toEqual({ screen: "settings", target: "cloud-workspaces" });
+		expect(window.location.hash).toBe("#/settings/cloud-workspaces");
+		expect(store.sessions[parentKey]).toBeUndefined();
+	});
+
+	it.each([false, true])(
+		"does not attach a late failure to a new closed state (same parent=%s)",
+		async (sameParent) => {
+			const store = await closedStore();
+			const request = deferred<RuntimeInfoDto>();
+			vi.mocked(api.createProjectRuntime).mockReturnValueOnce(request.promise);
+			const pending = store.resumeClosedSession(parentKey, { kind: "project", projectId: "project/full-id" });
+			store.navigate({ screen: "fleet" });
+			window.dispatchEvent(new HashChangeEvent("hashchange"));
+			expect(store.sessions[parentKey]).toBeUndefined();
+			const nextKey = sameParent ? parentKey : "other-closed";
+			const nextRuntime = runtimeSnapshot(nextKey, false);
+			nextRuntime.cwd = "/new/project";
+			nextRuntime.state.sessionFile = "/sessions/NEW.jsonl";
+			store.upsertRuntime(nextRuntime);
+			store.navigate({ screen: "session", key: nextKey });
+			window.dispatchEvent(new HashChangeEvent("hashchange"));
+			emit(nextKey, { type: "runtime_removed" });
+			await flushAsyncWork();
+			store.dismissClosedBanner(nextKey);
+			const expected = { cwd: "/new/project", sessionFile: "/sessions/NEW.jsonl", bannerDismissed: true };
+			expect(store.sessions[nextKey]?.closed).toEqual(expected);
+			request.reject(new Error("Old project failed late"));
+			await pending;
+			expect(store.sessions[nextKey]?.closed).toEqual(expected);
+			expect(store.route()).toEqual({ screen: "session", key: nextKey });
+			expect(window.location.hash).toBe(`#/session/${nextKey}`);
+			expect(store.notices()).toEqual([]);
+		},
+	);
 });
 
 describe("composer memory", () => {

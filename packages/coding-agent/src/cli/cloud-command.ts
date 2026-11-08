@@ -1,5 +1,5 @@
 import { isAbsolute, win32 } from "node:path";
-import { APP_NAME, resolveConfiguredDirectory } from "../config.js";
+import { APP_NAME, resolveDirectoryPath } from "../config.js";
 import { CloudWorkspaceRegistry } from "../core/cloud-workspaces/registry.js";
 import {
 	type CloudProjectLocation,
@@ -88,7 +88,7 @@ function directory(value: string): string {
 	if ((win32.isAbsolute(value) || /^[a-z]:/i.test(value)) && !isAbsolute(value)) {
 		throw new Error("Use an existing absolute path on this device.");
 	}
-	const path = resolveConfiguredDirectory(value, process.cwd());
+	const path = resolveDirectoryPath(value, process.cwd());
 	if (!path) throw new Error("Directory must not be empty.");
 	return path;
 }

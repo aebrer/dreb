@@ -7,6 +7,60 @@
  * compatibility at the mapping sites.
  */
 
+/** Host-local metadata only; availability is advisory, never synchronization or trust. */
+export type CloudErrorCodeDto =
+	| "INVALID_REQUEST"
+	| "INVALID_METADATA"
+	| "INVALID_PATH"
+	| "NOT_FOUND"
+	| "CONFLICT"
+	| "UNAVAILABLE"
+	| "IO_ERROR"
+	| "PARTIAL_INITIALIZATION";
+
+export type CloudAvailabilityDto =
+	| { available: true; path: string }
+	| { available: false; error: { code: CloudErrorCodeDto; message: string } };
+
+export interface CloudWorkspaceDto {
+	id: string;
+	path: string;
+	status: CloudAvailabilityDto;
+}
+
+export interface CloudProjectDto {
+	id: string;
+	location: { kind: "local"; path: string } | { kind: "workspace"; workspaceId: string; relativePath: string };
+	markerRequired: boolean;
+	status: CloudAvailabilityDto;
+}
+
+/** List and status are joined by identity, not a transactional filesystem snapshot. */
+export interface CloudWorkspacesDto {
+	version: 1;
+	pathStyle: "windows" | "posix";
+	workspaces: CloudWorkspaceDto[];
+	projects: CloudProjectDto[];
+}
+
+export interface ConnectWorkspaceRequestDto {
+	path: string;
+	initialize?: boolean;
+}
+
+export interface LinkProjectRequestDto extends ConnectWorkspaceRequestDto {
+	projectId?: string;
+	workspaceId?: string;
+}
+
+export interface RebindProjectRequestDto {
+	path: string;
+	workspaceId?: string;
+}
+
+/** Exactly one launch source. The server resolves projectId immediately before creation. */
+export type RuntimeDirectorySelection = { kind: "local"; cwd: string } | { kind: "project"; projectId: string };
+
 /** Maximum Unicode code points carried for an on-disk session's first-message preview. */
 export const MAX_SESSION_PREVIEW_CHARACTERS = 256;
 

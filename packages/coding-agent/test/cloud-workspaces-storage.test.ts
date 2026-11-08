@@ -97,7 +97,8 @@ const invalidRegistries: { name: string; bytes: (path: string) => string; code: 
 	...[
 		["relative", "relative/project"],
 		["NUL-containing", "/project\0invalid"],
-		["foreign-native", "C:\\projects\\example"],
+		// This spelling is foreign only on non-Windows hosts.
+		...(process.platform === "win32" ? [] : [["foreign-native", "C:\\projects\\example"]]),
 	].flatMap(([name, path]) => [
 		{
 			name: `${name} workspace path`,

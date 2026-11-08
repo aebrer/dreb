@@ -62,6 +62,12 @@ function checkOptions(options: ConnectCloudWorkspaceOptions): void {
 			throw new CloudWorkspaceError("INVALID_METADATA", `${key} must be a boolean.`);
 		}
 	}
+	if (options.expectedId !== undefined) {
+		cloudId(options.expectedId);
+		if (options.initialize) {
+			throw new CloudWorkspaceError("CONFLICT", "An expected identity cannot initialize a replacement marker.");
+		}
+	}
 }
 
 /**
@@ -134,6 +140,9 @@ export class CloudWorkspaceRegistry {
 			);
 		}
 		const { marker, created } = await this.marker(path, "workspace", options.initialize ?? false);
+		if (options.expectedId !== undefined && marker.id !== cloudId(options.expectedId)) {
+			throw new CloudWorkspaceError("CONFLICT", "Workspace marker does not match the intended identity.");
+		}
 		try {
 			return await this.update((state) => {
 				const existing = state.workspaces.find((item) => item.id === marker.id);
@@ -159,6 +168,10 @@ export class CloudWorkspaceRegistry {
 			throw new CloudWorkspaceError("CONFLICT", "Choose initialize or a known project ID, not both.");
 		}
 		const explicitId = options.projectId === undefined ? undefined : cloudId(options.projectId);
+		const expectedId = options.expectedId === undefined ? undefined : cloudId(options.expectedId);
+		if (explicitId && expectedId && explicitId !== expectedId) {
+			throw new CloudWorkspaceError("CONFLICT", "Known project ID does not match the intended identity.");
+		}
 		const workspaceId = options.workspaceId === undefined ? undefined : cloudId(options.workspaceId);
 		const state = await this.list();
 		const path = await existingDirectory(directory);
@@ -197,7 +210,7 @@ export class CloudWorkspaceRegistry {
 				"Project has no marker; explicitly initialize one or supply its known ID.",
 			);
 		}
-		if (result.marker && result.marker.id !== id) {
+		if ((expectedId && id !== expectedId) || (result.marker && result.marker.id !== id)) {
 			throw new CloudWorkspaceError("CONFLICT", "Project marker does not match the supplied identity.");
 		}
 		const binding: CloudProjectBinding = { id, location, markerRequired: result.marker !== undefined };

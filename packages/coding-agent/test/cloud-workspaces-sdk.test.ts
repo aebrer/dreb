@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +60,47 @@ describe("cloud workspace public SDK", () => {
 		vi.stubEnv(ENV_AGENT_DIR, agentA);
 		expect(await resolveRegisteredProject(ID)).toBe(first);
 	});
+
+	it("preserves literal agent-directory paths through absolute, relative and home expansion", () => {
+		vi.stubEnv("HOME", root);
+		vi.stubEnv("USERPROFILE", root);
+		for (const [argument, expected] of [
+			[join(root, "profile "), join(root, "profile ")],
+			[" profile ", join(process.cwd(), " profile ")],
+			[" ", join(process.cwd(), " ")],
+			["~/profile ", join(root, "profile ")],
+			["~\\profile ", join(root, "profile ")],
+			["~", root],
+		]) {
+			expect(getCloudWorkspaceRegistryPath(argument)).toBe(join(expected, "cloud-workspaces.json"));
+			expect(new CloudWorkspaceRegistry({ agentDir: argument }).path).toBe(join(expected, "cloud-workspaces.json"));
+		}
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"keeps literal SDK profiles isolated during reads, links and removals",
+		async () => {
+			const neighborAgent = join(root, "profile");
+			const selectedAgent = join(root, "profile ");
+			const neighborProject = join(root, "neighbor-project");
+			const selectedProject = join(root, "selected-project");
+			await mkdir(neighborProject);
+			await mkdir(selectedProject);
+			const neighbor = new CloudWorkspaceRegistry({ agentDir: neighborAgent });
+			const selected = new CloudWorkspaceRegistry({ agentDir: selectedAgent });
+			await neighbor.link(neighborProject, { projectId: ID });
+			const original = await readFile(neighbor.path);
+			expect(await selected.list()).toEqual({ version: 1, workspaces: [], projects: [] });
+			expect(await selected.unlink(ID)).toBe(false);
+			await selected.link(selectedProject, { projectId: ID });
+			expect(await selected.resolve(ID)).toBe(selectedProject);
+			expect(await resolveRegisteredProject(ID, selectedAgent)).toBe(selectedProject);
+			expect(await selected.unlink(ID)).toBe(true);
+			expect(await selected.list()).toEqual({ version: 1, workspaces: [], projects: [] });
+			expect(await readFile(neighbor.path)).toEqual(original);
+			expect(await neighbor.resolve(ID)).toBe(neighborProject);
+		},
+	);
 
 	it("reports lookup failures using the public structured error", async () => {
 		const registry = new CloudWorkspaceRegistry({ agentDir: join(root, "agent") });

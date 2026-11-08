@@ -295,7 +295,11 @@ Set `tabTitle.model` to pin the primary call to one exact `provider/model`. When
 
 ## Cloud Workspaces
 
-The initial cloud-workspace foundation maps portable workspace/project UUIDs to existing local folders through an explicit CLI and SDK registry. Different devices can bind the same ID to different roots. It is metadata only: no session synchronization, automatic resume remapping, agent launch, or trust grant.
+Cloud workspaces map portable workspace/project UUIDs to existing folders on each backend host through a shared registry, CLI, SDK and optional Dashboard controls. Different hosts can bind the same ID to different paths; projects can remain outside synced roots. **Settings → Cloud Workspaces** (`#/settings/cloud-workspaces`) is an independent page usable by entering host paths without terminal commands or model credentials. The host is the backend computer, not your phone/browser.
+
+Connect an existing workspace marker or deliberately initialize its first marker once. Project linking offers **Existing marker**, **Initialize first marker**, or **Known full ID (markerless)**, with explicit direct-local or workspace-relative binding. On other hosts, wait for marker delivery and connect/link the existing identity; a missing marker is never a reason to initialize a replacement. Status reports local availability, not synchronization or matching code. Rebind targets the same ID; confirmed unlink/disconnect removes only local mappings, preserving markers, folders and transcripts. Dependent projects remain visible but unavailable after disconnect.
+
+Every New Session and replacement-directory dialog starts in **local directory** mode. **Linked project** is an explicit opt-in in New Session and Fleet/main Session/Subagent parent-resume directory flows. The server resolves the selected ID at launch, with no fallback on unavailable or changed markers. Metadata operations start no utility/agent runtime, discover no providers, load no project context and grant no trust; the existing Dashboard shell still uses normal inventory/SSE. Start/Resume performs normal project settings, context and extensions startup.
 
 ```bash
 # These folders must already exist; initialize shared identities only once.
@@ -306,7 +310,9 @@ dreb cloud resolve PROJECT_UUID
 
 Replace `WORKSPACE_UUID` and `PROJECT_UUID` with the distinct full IDs returned by `connect` and `link`. Wait for shared markers to arrive before connecting another device. Without `--workspace`, `link` stores a direct local path, even inside a synced folder. Never sync `<agent-dir>/cloud-workspaces.json` or the entire agent directory.
 
-See [Cloud workspaces](docs/cloud-workspaces.md) for two-device setup, local-only projects, rebinding, safety limits, and the [SDK API](docs/sdk.md#cloud-workspace-registry). There is no `/cloud` slash command or Dashboard Cloud page.
+Use the narrow metadata-only `@dreb/coding-agent/cloud-workspaces` SDK subpath; existing root imports and CLI commands remain compatible. See [Cloud workspaces](docs/cloud-workspaces.md) for Dashboard/two-device setup, local-only projects, rebinding, safety limits, and the [SDK API](docs/sdk.md#cloud-workspace-registry). There is no `/cloud` slash command.
+
+Persistent main/subagent project association, automatic mapping-aware resume, portable parent/child/full-history continuation and safe cross-device handoff are not delivered. Exact transcript paths, historical headers/CWDs, effective runtime CWD and session-storage precedence remain distinct. OneDrive or another sync client transports files, not distributed locks, running processes or guaranteed checkpoints.
 
 ---
 

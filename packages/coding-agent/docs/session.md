@@ -18,9 +18,13 @@ Configured roots share path semantics: absolute paths stay absolute, `~` expands
 
 ## Cloud Workspace Compatibility
 
-[Cloud workspaces](cloud-workspaces.md) currently provide portable identity markers and a device-local CLI/SDK folder registry only. They do not change `sessionDir`, `subagentSessionDir`, session headers or historical CWDs, exact-path actions, Dashboard/RPC/resume behavior, trust grants, or agent configuration. Registry resolution does not automatically remap or resume sessions.
+[Cloud workspaces](cloud-workspaces.md) provide portable identity markers, a device-local CLI/SDK registry, independent Dashboard management at `#/settings/cloud-workspaces`, and explicit linked-project runtime-directory selection. Metadata setup uses backend host paths without terminal/model credentials and starts no utility/agent runtime or context/trust loading; the Dashboard shell still has normal inventory/SSE. Projects may stay outside synced roots. Initialize shared markers once, then wait for delivery and connect/link existing identities on other hosts, never initialize replacements for missing markers.
 
-Main/subagent project association and automatic project-aware resume are future slices; full-history immutable checkpoints and continuations belong to a future phase. This foundation adds neither concurrent live-JSONL writer safety nor process migration. Linking or removing a local binding never migrates or deletes sessions.
+Every New Session/replacement-directory dialog defaults to **local directory**. Explicit **linked project** selection is available for New Session, Fleet history, closed main Session and closed parent resume from Subagent view. The backend resolves the selected ID immediately before canonical validation/runtime creation; unavailable mappings or changed required markers fail without launch/fallback. Subagent-view resume preserves the captured **parent** transcript path rather than starting the child transcript as a main session. Start/Resume uses normal settings, context and extensions startup in the effective runtime directory.
+
+Directory selection does not change `sessionDir`/`subagentSessionDir` precedence, exact transcript-path actions, historical headers/CWDs, session/RPC formats or trust policy. The historical CWD and effective process CWD remain distinct; the chosen directory does not move transcripts or certify matching code. Linking, rebind and confirmed local-only unlink/disconnect never migrate or delete sessions, markers or folders; disconnected dependent IDs remain visible but unavailable.
+
+Persistent main/subagent project association, automatic mapping-aware resume, portable parent/child reconciliation, full-history checkpoints/continuations and safe cross-device handoff are not delivered. OneDrive or another sync client transports files; it provides no distributed lock, process migration or checkpoint guarantee, and no concurrent live-JSONL writer safety is added. See [Dashboard compatibility and API](dashboard.md#cloud-workspace-compatibility).
 
 ## Deleting Sessions
 

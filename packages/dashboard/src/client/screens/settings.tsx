@@ -560,6 +560,10 @@ export function SettingsScreen(props: {
 			<Topbar store={props.store} active="settings" />
 			<main class="container settings-wrap">
 				<h1>settings</h1>
+				<p>
+					<a href="#/settings/cloud-workspaces">Cloud Workspaces</a> — optional host-local workspace and project
+					mappings.
+				</p>
 				<p class="settings-intro">
 					Ordinary defaults apply only to new sessions. Dispatch Arbiter changes apply to subsequent child spawns.
 					Context trust changes apply to subsequent lazy loads in live sessions; already injected content cannot be

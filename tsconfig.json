@@ -15,6 +15,7 @@
 			"@dreb/dashboard/*": ["./packages/dashboard/src/*"],
 			"@dreb/telegram/*": ["./packages/telegram/src/*"],
 			"@dreb/coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"@dreb/coding-agent/cloud-workspaces": ["./packages/coding-agent/src/core/cloud-workspaces/index.ts"],
 			"@dreb/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
 			"@dreb/coding-agent/rpc": ["./packages/coding-agent/src/modes/rpc/index.ts"],
 			"@dreb/coding-agent/*": ["./packages/coding-agent/src/*"],

@@ -1,0 +1,87 @@
+.project-directory-selector {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+
+.project-directory-legend {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+.project-directory-selector .field,
+.project-directory-recents {
+	min-width: 0;
+	margin: 0;
+}
+
+.project-directory-recents {
+	border: 0;
+	padding: 0;
+}
+
+.project-directory-recents legend {
+	margin-bottom: var(--space-2);
+	font-size: var(--fs-secondary);
+}
+
+.project-directory-selector input,
+.project-directory-selector select {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+}
+
+.project-directory-selector p,
+.project-directory-selector code,
+.project-directory-selector button,
+.project-directory-selector a {
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+
+.project-directory-selector p {
+	margin: 0;
+}
+
+.project-directory-selector [aria-live] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.project-directory-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+}
+
+.project-directory-selector [aria-disabled="true"] {
+	color: var(--muted);
+	cursor: not-allowed;
+}
+
+@media (max-width: 700px) {
+	.project-directory-selector input,
+	.project-directory-selector select,
+	.project-directory-selector button,
+	.project-directory-selector a {
+		min-height: 44px;
+	}
+
+	.project-directory-selector a {
+		display: inline-flex;
+		align-items: center;
+	}
+}

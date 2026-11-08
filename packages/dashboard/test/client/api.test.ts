@@ -9,6 +9,12 @@ import {
 	type EventSourceLike,
 	type EventStreamDependencies,
 } from "../../src/client/api.js";
+import { createRuntimeInDirectory, runtimeDirectoryReady } from "../../src/client/state/runtime-directory.js";
+import type {
+	CloudWorkspacesDto,
+	LinkProjectRequestDto,
+	RuntimeDirectorySelection,
+} from "../../src/shared/protocol.js";
 
 class FakeVisibility {
 	visibilityState: DocumentVisibilityState = "visible";
@@ -179,6 +185,244 @@ describe("settings project context transport", () => {
 				},
 			],
 		]);
+	});
+});
+
+describe("Cloud Workspaces transport", () => {
+	function mockJson(body: unknown, status = 200) {
+		const fetchMock = vi
+			.fn()
+			.mockImplementation(
+				async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	it("GETs the exact workspace and project availability response", async () => {
+		const body: CloudWorkspacesDto = {
+			version: 1,
+			pathStyle: "posix",
+			workspaces: [
+				{ id: "workspace/full-id", path: "/cloud/root", status: { available: true, path: "/cloud/root" } },
+			],
+			projects: [
+				{
+					id: "project/local",
+					location: { kind: "local", path: "/local/project" },
+					markerRequired: false,
+					status: { available: true, path: "/local/project" },
+				},
+				{
+					id: "project/cloud",
+					location: { kind: "workspace", workspaceId: "workspace/full-id", relativePath: "nested/project" },
+					markerRequired: true,
+					status: { available: false, error: { code: "UNAVAILABLE", message: "Drive is offline" } },
+				},
+			],
+		};
+		const fetchMock = mockJson(body);
+		expect(await api.cloudWorkspaces()).toEqual(body);
+		expect(fetchMock.mock.calls).toEqual([["/api/cloud-workspaces", undefined]]);
+	});
+
+	it.each([undefined, false, true])(
+		"POSTs connect with initialize=%s without changing the path",
+		async (initialize) => {
+			const body = { path: " /cloud/a b/ ", ...(initialize === undefined ? {} : { initialize }) };
+			const response = { id: "workspace/full-id", path: body.path };
+			const fetchMock = mockJson(response);
+			expect(await api.connectWorkspace(body)).toEqual(response);
+			expect(fetchMock.mock.calls).toEqual([
+				[
+					"/api/cloud-workspaces/connect",
+					{ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+				],
+			]);
+		},
+	);
+
+	it.each<LinkProjectRequestDto>([
+		{ path: " /local/project " },
+		{ path: "/local/project", projectId: "project/full-id" },
+		{ path: "/local/project", initialize: true, projectId: "project/new-id" },
+		{ path: "/cloud/nested", workspaceId: "workspace/full-id" },
+		{ path: "/cloud/nested", workspaceId: "workspace/full-id", initialize: false },
+		{ path: "/cloud/nested", workspaceId: "workspace/full-id", projectId: "project/new-id", initialize: true },
+	])("POSTs the complete link mode unchanged: %j", async (body) => {
+		const fetchMock = mockJson({ id: "project/full-id" });
+		expect(await api.linkProject(body)).toEqual({ id: "project/full-id" });
+		expect(fetchMock.mock.calls).toEqual([
+			[
+				"/api/cloud-workspaces/link",
+				{ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+			],
+		]);
+	});
+
+	it("PUTs rebinds with fully encoded IDs and exact local/workspace bodies", async () => {
+		const fetchMock = mockJson({ id: "full/id", path: " /replacement/root " });
+		const id = "full/id ?branch=a&b#c%雪";
+		const encoded = "full%2Fid%20%3Fbranch%3Da%26b%23c%25%E9%9B%AA";
+		await api.rebindWorkspace(id, " /replacement/root ");
+		await api.rebindProject(id, { path: " /replacement/local " });
+		await api.rebindProject(id, { path: "/replacement/root/project", workspaceId: "workspace/full-id" });
+		expect(fetchMock.mock.calls).toEqual([
+			[
+				`/api/cloud-workspaces/workspaces/${encoded}`,
+				{
+					method: "PUT",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ path: " /replacement/root " }),
+				},
+			],
+			[
+				`/api/cloud-workspaces/projects/${encoded}`,
+				{
+					method: "PUT",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ path: " /replacement/local " }),
+				},
+			],
+			[
+				`/api/cloud-workspaces/projects/${encoded}`,
+				{
+					method: "PUT",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ path: "/replacement/root/project", workspaceId: "workspace/full-id" }),
+				},
+			],
+		]);
+	});
+
+	it.each([true, false])("DELETEs encoded rows and returns removed=%s", async (removed) => {
+		const fetchMock = mockJson({ removed });
+		expect(await api.unlinkProject("project/full id?#%")).toEqual({ removed });
+		expect(await api.disconnectWorkspace("workspace/full id?#%")).toEqual({ removed });
+		expect(fetchMock.mock.calls).toEqual([
+			["/api/cloud-workspaces/projects/project%2Ffull%20id%3F%23%25", { method: "DELETE" }],
+			["/api/cloud-workspaces/workspaces/workspace%2Ffull%20id%3F%23%25", { method: "DELETE" }],
+		]);
+	});
+
+	it.each([
+		{
+			operation: "list",
+			status: 503,
+			code: "UNAVAILABLE",
+			message: "Registry is unavailable",
+			run: () => api.cloudWorkspaces(),
+		},
+		{
+			operation: "rebind",
+			status: 409,
+			code: "CONFLICT",
+			message: "Project marker belongs to another full ID",
+			run: () => api.rebindProject("project/full-id", { path: "/replacement" }),
+		},
+		{
+			operation: "project launch",
+			status: 404,
+			code: "NOT_FOUND",
+			message: "Project ID is not linked",
+			run: () => api.createProjectRuntime("project/full-id", { sessionPath: "/sessions/parent.jsonl" }),
+		},
+	])(
+		"preserves server status, stable body.code, and message for failed $operation",
+		async ({ status, code, message, run }) => {
+			const body = { code, error: message };
+			mockJson(body, status);
+			await expect(run()).rejects.toMatchObject({ status, body, message });
+		},
+	);
+});
+
+describe("runtime directory transport", () => {
+	function mockRuntime() {
+		const runtime = { key: "created", cwd: " /host/resolved/project " };
+		const fetchMock = vi
+			.fn()
+			.mockImplementation(
+				async () =>
+					new Response(JSON.stringify(runtime), { status: 200, headers: { "content-type": "application/json" } }),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		return { fetchMock, runtime };
+	}
+
+	it("keeps legacy cwd creation separate from ID-only project creation", async () => {
+		const { fetchMock, runtime } = mockRuntime();
+		const options = { sessionPath: " /sessions/parent transcript.jsonl ", firstPrompt: "  exact prompt\n " };
+		expect(await api.createRuntime(" /literal/local path/ ", options)).toEqual(runtime);
+		expect(await api.createProjectRuntime("project/full-id", options)).toEqual(runtime);
+		await api.createRuntime(" /literal/local path/ ");
+		await api.createProjectRuntime("project/full-id");
+		expect(fetchMock.mock.calls).toEqual([
+			[
+				"/api/runtimes",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ cwd: " /literal/local path/ ", ...options }),
+				},
+			],
+			[
+				"/api/runtimes",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ projectId: "project/full-id", ...options }),
+				},
+			],
+			[
+				"/api/runtimes",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ cwd: " /literal/local path/ " }),
+				},
+			],
+			[
+				"/api/runtimes",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ projectId: "project/full-id" }),
+				},
+			],
+		]);
+	});
+
+	it.each<{ selection: string | RuntimeDirectorySelection; source: { cwd: string } | { projectId: string } }>([
+		{ selection: " /literal/local path/ ", source: { cwd: " /literal/local path/ " } },
+		{ selection: { kind: "local", cwd: " /literal/local path/ " }, source: { cwd: " /literal/local path/ " } },
+		{ selection: { kind: "project", projectId: "project/full-id" }, source: { projectId: "project/full-id" } },
+	])("centralizes directory creation without normalizing selection $selection", async ({ selection, source }) => {
+		const { fetchMock, runtime } = mockRuntime();
+		const options = { sessionPath: " /sessions/PARENT ?#%.jsonl ", firstPrompt: "  keep whitespace\n" };
+		expect(await createRuntimeInDirectory(selection, options)).toEqual(runtime);
+		expect(fetchMock.mock.calls).toEqual([
+			[
+				"/api/runtimes",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ ...source, ...options }),
+				},
+			],
+		]);
+	});
+
+	it.each<{ selection: RuntimeDirectorySelection; ready: boolean }>([
+		{ selection: { kind: "local", cwd: "" }, ready: false },
+		{ selection: { kind: "local", cwd: " \t\n " }, ready: false },
+		{ selection: { kind: "local", cwd: " /literal/local path/ " }, ready: true },
+		{ selection: { kind: "project", projectId: "" }, ready: false },
+		{ selection: { kind: "project", projectId: "project/full-id" }, ready: true },
+	])("checks readiness without mutating the literal selection: $selection", ({ selection, ready }) => {
+		const original = { ...selection };
+		expect(runtimeDirectoryReady(selection)).toBe(ready);
+		expect(selection).toEqual(original);
 	});
 });
 

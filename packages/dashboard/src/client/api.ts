@@ -8,7 +8,9 @@ import type {
 	AuthStatusDto,
 	BackgroundAgentDto,
 	ClientConnectionDiagnosticDto,
+	CloudWorkspacesDto,
 	CommandDto,
+	ConnectWorkspaceRequestDto,
 	ContextTrustMutationResultDto,
 	DashboardResyncDto,
 	DirListingDto,
@@ -16,6 +18,7 @@ import type {
 	EventEnvelope,
 	FleetDto,
 	ImageAttachmentDto,
+	LinkProjectRequestDto,
 	MemoryDocumentDto,
 	MemoryListingDto,
 	MemoryMutationResultDto,
@@ -26,6 +29,7 @@ import type {
 	PairingSettingsDto,
 	PendingMessagesDto,
 	PerformanceStatsDto,
+	RebindProjectRequestDto,
 	ResourcesDto,
 	RuntimeHydrationDto,
 	RuntimeInfoDto,
@@ -123,8 +127,25 @@ export const api = {
 		const suffix = query.size ? `?${query}` : "";
 		return request<DashboardResyncDto>(`/api/resync${suffix}`, { signal });
 	},
+	cloudWorkspaces: () => request<CloudWorkspacesDto>("/api/cloud-workspaces"),
+	connectWorkspace: (body: ConnectWorkspaceRequestDto) =>
+		request<{ id: string; path: string }>("/api/cloud-workspaces/connect", json(body)),
+	linkProject: (body: LinkProjectRequestDto) => request<{ id: string }>("/api/cloud-workspaces/link", json(body)),
+	rebindWorkspace: (id: string, path: string) =>
+		request<{ id: string; path: string }>(
+			`/api/cloud-workspaces/workspaces/${encodeURIComponent(id)}`,
+			jsonWithMethod("PUT", { path }),
+		),
+	rebindProject: (id: string, body: RebindProjectRequestDto) =>
+		request<{ id: string }>(`/api/cloud-workspaces/projects/${encodeURIComponent(id)}`, jsonWithMethod("PUT", body)),
+	unlinkProject: (id: string) =>
+		request<{ removed: boolean }>(`/api/cloud-workspaces/projects/${encodeURIComponent(id)}`, { method: "DELETE" }),
+	disconnectWorkspace: (id: string) =>
+		request<{ removed: boolean }>(`/api/cloud-workspaces/workspaces/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	createRuntime: (cwd: string, opts: { sessionPath?: string; firstPrompt?: string } = {}) =>
 		request<RuntimeInfoDto>("/api/runtimes", json({ cwd, ...opts })),
+	createProjectRuntime: (projectId: string, opts: { sessionPath?: string; firstPrompt?: string } = {}) =>
+		request<RuntimeInfoDto>("/api/runtimes", json({ projectId, ...opts })),
 	stopRuntime: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}`, { method: "DELETE" }),
 	runtime: (key: string, signal?: AbortSignal) => request<RuntimeInfoDto>(`/api/runtimes/${key}`, { signal }),
 	hydrate: (key: string, signal?: AbortSignal) =>

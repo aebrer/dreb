@@ -721,7 +721,7 @@ Project overrides global. Nested objects merge keys. Setters modify global setti
 
 ## Cloud Workspace Registry
 
-`CloudWorkspaceRegistry` manages portable identities and device-local folder bindings independently of agent sessions. This is a provider-neutral metadata foundation, not session synchronization. There are no provider OAuth/API/network calls, automatic launches, or trust grants.
+`CloudWorkspaceRegistry` manages portable identities and device-local folder bindings independently of agent sessions. Use the public **`@dreb/coding-agent/cloud-workspaces`** subpath for metadata integrations: it exports the registry, errors/types, version constant and registry-path helper without the broad agent/session/provider/UI runtime barrel. Existing `@dreb/coding-agent` root exports and CLI behavior remain compatible. Registry operations make no provider OAuth/API/network calls, load no project context/extensions, start no agent and grant no trust; they are not session synchronization.
 
 The following example only reads metadata and resolves a previously linked project. Replace the example project UUID with your own full ID:
 
@@ -731,7 +731,7 @@ import {
   CloudWorkspaceError,
   getCloudWorkspaceRegistryPath,
   type CloudWorkspaceState,
-} from "@dreb/coding-agent";
+} from "@dreb/coding-agent/cloud-workspaces";
 
 const registry = new CloudWorkspaceRegistry();
 // Optional: new CloudWorkspaceRegistry({ agentDir: "/native/absolute/local-agent-dir" })
@@ -757,18 +757,31 @@ All registry methods are asynchronous:
 | Method | Result |
 |---|---|
 | `list()` | `CloudWorkspaceState` (configuration only) |
-| `connect(nativeAbsDir, {initialize?, rebind?}?)` | `CloudWorkspaceBinding` |
-| `link(nativeAbsDir, {initialize?, rebind?, projectId?, workspaceId?}?)` | `CloudProjectBinding` |
+| `connect(nativeAbsDir, {initialize?, rebind?, expectedId?}?)` | `CloudWorkspaceBinding` |
+| `link(nativeAbsDir, {initialize?, rebind?, expectedId?, projectId?, workspaceId?}?)` | `CloudProjectBinding` |
 | `resolve(projectId)` | Canonical existing local directory string |
 | `status()` | `CloudWorkspaceStatus` with per-record local availability/errors, not sync status |
 | `unlink(projectId)` | Boolean: whether a local project binding was removed |
 | `disconnect(workspaceId)` | Boolean: whether a local workspace binding was removed |
 
-`connect` and `link` require native absolute existing directories; CLI relative-path and `~` expansion do not apply to these SDK arguments. `initialize` explicitly creates or reuses the corresponding marker; without it an existing marker is required, except that `link` can supply a known `projectId` without creating a marker. `initialize` and `projectId` cannot be combined. Without `workspaceId`, projects store direct local paths; supplying it explicitly selects root-relative mapping. Changes of location require `rebind`.
+`connect` and `link` require native absolute existing directories; CLI relative-path and `~` expansion do not apply to these SDK arguments. `initialize` explicitly creates or reuses the corresponding marker; without it an existing marker is required, except that `link` can supply a known `projectId` without creating a marker. `initialize: true` and `projectId` cannot be combined. Without `workspaceId`, projects store direct local paths; supplying it explicitly selects root-relative mapping. Changes of location require `rebind`.
 
-The registry lives at `<agent-dir>/cloud-workspaces.json` (default `~/.dreb/agent`, honoring `DREB_CODING_AGENT_DIR` unless `agentDir` is supplied). Never sync it or the entire agent directory. Both registry and markers use version 1. `CloudWorkspaceError` exposes `.code` and `.message`; associated binding, state, status, marker, error-code, and option types are exported from the same package.
+Optional `expectedId` guards an operation intended for one identity. It accepts a full UUID, normalizes it to lowercase, and rejects a different identity before marker/registry mutation. It is incompatible with `initialize: true`. This is a precondition, **not** permission to omit a required marker: markerless linking still requires explicit `projectId`; if both IDs are supplied, they must agree. It does not add a CLI flag or change existing known-ID semantics. For example, row-specific repair can use:
 
-Callers may explicitly pass the resolved CWD to the existing session SDK after deciding to execute there and handling trust separately. Registry resolution itself does not create/resume a session, associate main/subagent transcripts with a project, or change existing session storage/resume behavior.
+```typescript
+await registry.connect("/host/moved-workspace", { rebind: true, expectedId: workspaceId });
+await registry.link("/host/local-project", {
+  rebind: true,
+  expectedId: projectId,
+  projectId, // Explicit known-ID authority if this destination has no marker.
+});
+```
+
+Initialize shared markers deliberately once. On other hosts, wait for delivery and connect/link the existing identity; never initialize a replacement for a missing required marker. An available location proves only local reachability/metadata validity, not synchronization or code equivalence. Unlink/disconnect is local-only and preserves markers, folders and transcripts; disconnected dependent IDs remain registered but unavailable.
+
+The registry lives at `<agent-dir>/cloud-workspaces.json` (default `~/.dreb/agent`, honoring `DREB_CODING_AGENT_DIR` unless `agentDir` is supplied). Dashboard uses this mapping convention, not its separate pairing-storage path, and does not accept an agent-dir input from the browser. Never sync the registry or entire agent directory. Both registry and markers use version 1. `CloudWorkspaceError` exposes `.code` and `.message`; associated binding, state, status, marker, error-code, and option types are exported from the subpath as well as the compatible root API.
+
+Callers may explicitly pass the resolved CWD to the existing session SDK after deciding to execute there and handling trust separately. Dashboard exposes [metadata management and exclusive `cwd`/`projectId` runtime requests](dashboard.md#cloud-workspace-api); Start/Resume follows normal project settings/context/extensions startup. Local directory is always the initial dialog choice, and linked-project selection is explicit. Registry resolution itself does not create/resume a session or persist main/subagent project association. Automatic mapping-aware resume, portable parent/child/full-history continuation and safe cross-device handoff remain undelivered. Exact transcript paths, historical headers/CWDs, effective runtime CWD and storage precedence stay separate; OneDrive file transport is not a distributed lock, process migration or checkpoint guarantee.
 
 See [Cloud workspaces](cloud-workspaces.md) for schemas, two-device setup, repair, and limits, and [examples/sdk/13-cloud-workspaces.ts](../examples/sdk/13-cloud-workspaces.ts) for a metadata-only example.
 
