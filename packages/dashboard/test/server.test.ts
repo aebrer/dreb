@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } fro
 import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CloudWorkspaceRegistry } from "@dreb/coding-agent/cloud-workspaces";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDashboardSessionLister } from "../src/index.js";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
@@ -30,6 +31,7 @@ afterEach(async () => {
 
 interface TestServerOptions {
 	auth?: DashboardAuth;
+	cloudWorkspaceRegistry?: CloudWorkspaceRegistry;
 	listAllSessions?: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession?: (path: string) => Promise<unknown>;
 	staticDir?: string;
@@ -126,6 +128,7 @@ async function startServer(options: TestServerOptions = {}) {
 	const app = createDashboardServer({
 		auth: options.auth ?? new DashboardAuth(),
 		pool,
+		cloudWorkspaceRegistry: options.cloudWorkspaceRegistry,
 		listAllSessions: options.listAllSessions ?? (async () => []),
 		deleteSession: options.deleteSession ?? (async () => ({ method: "trash" })),
 		staticDir: options.staticDir,
@@ -186,6 +189,67 @@ describe("dashboard server — auth middleware", () => {
 		const res = await fetch(`${base}/api/fleet`, { headers: { origin: "https://evil.example" } });
 		expect(res.status).toBe(403);
 	});
+
+	it.each(
+		[
+			{ status: 401, needsPairing: true },
+			{ status: 403, needsPairing: false },
+		].flatMap((decision) =>
+			[
+				"/api/cloud-workspaces",
+				"/API/CLOUD-WORKSPACES/",
+				"/Api/cloud-workspaces",
+				"/api/cloud-workspaces/session-storage",
+				"/API/CLOUD-WORKSPACES/SESSION-STORAGE/",
+				"/Api/cloud-workspaces/session-storage",
+				"/API",
+				"/api/",
+			].map((path) => ({ ...decision, path })),
+		),
+	)("denies metadata before access for $status GET $path", async ({ status, needsPairing, path }) => {
+		const auth = new DashboardAuth();
+		vi.spyOn(auth, "authenticate").mockResolvedValue({
+			allowed: false,
+			status,
+			needsPairing,
+			reason: needsPairing ? "Device is not paired" : "Identity is not allowlisted",
+			identity: { loginName: "operator@example.test", device: "test-device" },
+		});
+		const registry = new CloudWorkspaceRegistry({ agentDir: await createTempProject() });
+		const list = vi.spyOn(registry, "list");
+		const registryStatus = vi.spyOn(registry, "status");
+		// Session storage is lazy and obtains its profile from this getter. Even
+		// an absent/unknown API route must be denied before metadata construction.
+		const registryPath = vi.spyOn(registry, "path", "get");
+		const logger = vi.fn();
+		const { base, clients } = await startServer({ auth, cloudWorkspaceRegistry: registry, logger });
+
+		const response = await fetch(`${base}${path}`);
+		expect(response.status).toBe(status);
+		await expect(response.json()).resolves.toMatchObject({
+			needsPairing,
+			identity: "operator@example.test",
+		});
+		expect(list).not.toHaveBeenCalled();
+		expect(registryStatus).not.toHaveBeenCalled();
+		expect(registryPath).not.toHaveBeenCalled();
+		expect(clients).toHaveLength(0);
+		expect(logger).toHaveBeenCalledWith(expect.stringContaining(`denied GET ${path}:`));
+	});
+
+	it.each(["/API/CLOUD-WORKSPACES/", "/Api/cloud-workspaces"])(
+		"keeps authorized local metadata access at %s",
+		async (path) => {
+			const registry = new CloudWorkspaceRegistry({ agentDir: await createTempProject() });
+			const list = vi.spyOn(registry, "list");
+			const { base, clients } = await startServer({ cloudWorkspaceRegistry: registry });
+			const response = await fetch(`${base}${path}`);
+			expect(response.status).toBe(200);
+			await expect(response.json()).resolves.toMatchObject({ workspaces: [], projects: [] });
+			expect(list).toHaveBeenCalled();
+			expect(clients).toHaveLength(0);
+		},
+	);
 
 	it("lets rejected Tailscale identities load the SPA denial screen and /api/auth identity", async () => {
 		const staticDir = await mkdtemp(join(tmpdir(), "dreb-dash-static-"));
