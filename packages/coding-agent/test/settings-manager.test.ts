@@ -3,7 +3,12 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matchContextTrust } from "../src/core/context-trust.js";
 import { log } from "../src/core/logger.js";
-import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager, type SettingsStorage } from "../src/core/settings-manager.js";
+import {
+	DEFAULT_BG_PARENT_TURN_LIMIT,
+	FileSettingsStorage,
+	SettingsManager,
+	type SettingsStorage,
+} from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
 	const testDir = join(process.cwd(), "test-settings-tmp");
@@ -230,6 +235,79 @@ describe("SettingsManager", () => {
 			expect(errors.map((e) => e.scope).sort()).toEqual(["global", "project"]);
 			expect(manager.drainErrors()).toEqual([]);
 		});
+	});
+
+	describe("initial settings creation", () => {
+		it.each(["global", "project"] as const)(
+			"recomputes the initial %s write after another writer creates the file",
+			(scope) => {
+				const path =
+					scope === "global" ? join(agentDir, "settings.json") : join(projectDir, ".dreb", "settings.json");
+				const first = new FileSettingsStorage(projectDir, agentDir);
+				const second = new FileSettingsStorage(projectDir, agentDir);
+				const received = JSON.stringify({ future: { preserved: true } });
+				const transform = vi.fn((current: string | undefined) => {
+					if (current === undefined) second.withLock(scope, () => received);
+					return JSON.stringify({ ...(current ? JSON.parse(current) : {}), theme: "dark" });
+				});
+
+				first.withLock(scope, transform);
+
+				expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ future: { preserved: true }, theme: "dark" });
+				expect(transform.mock.calls).toEqual([[undefined], [received]]);
+				expect(existsSync(`${path}.lock`)).toBe(false);
+			},
+		);
+
+		it.each(["global", "project"] as const)(
+			"preserves a newly received %s file when the fresh transformation declines a write",
+			(scope) => {
+				const path =
+					scope === "global" ? join(agentDir, "settings.json") : join(projectDir, ".dreb", "settings.json");
+				const first = new FileSettingsStorage(projectDir, agentDir);
+				const second = new FileSettingsStorage(projectDir, agentDir);
+				const received = '{ "theme": "received", "future": true }\n';
+				first.withLock(scope, (current) => {
+					if (current !== undefined) return undefined;
+					second.withLock(scope, () => received);
+					return JSON.stringify({ theme: "stale" });
+				});
+
+				expect(readFileSync(path, "utf8")).toBe(received);
+				expect(existsSync(`${path}.lock`)).toBe(false);
+			},
+		);
+
+		it.each(["global", "project"] as const)(
+			"preserves malformed concurrent %s state and releases its lock on transformation failure",
+			(scope) => {
+				const path =
+					scope === "global" ? join(agentDir, "settings.json") : join(projectDir, ".dreb", "settings.json");
+				const first = new FileSettingsStorage(projectDir, agentDir);
+				const second = new FileSettingsStorage(projectDir, agentDir);
+				expect(() =>
+					first.withLock(scope, (current) => {
+						if (current === undefined) second.withLock(scope, () => "{");
+						return JSON.stringify({ ...(current ? JSON.parse(current) : {}), theme: "dark" });
+					}),
+				).toThrow(SyntaxError);
+
+				expect(readFileSync(path, "utf8")).toBe("{");
+				expect(existsSync(`${path}.lock`)).toBe(false);
+			},
+		);
+
+		it.each(["global", "project"] as const)(
+			"keeps an absent %s read free of directory and lock creation",
+			(scope) => {
+				const directory = scope === "global" ? agentDir : join(projectDir, ".dreb");
+				rmSync(directory, { recursive: true });
+				const transform = vi.fn(() => undefined);
+				new FileSettingsStorage(projectDir, agentDir).withLock(scope, transform);
+				expect(transform.mock.calls).toEqual([[undefined]]);
+				expect(existsSync(directory)).toBe(false);
+			},
+		);
 	});
 
 	describe("project settings directory creation", () => {

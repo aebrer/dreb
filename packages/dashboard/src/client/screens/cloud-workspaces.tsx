@@ -180,7 +180,8 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 			undefined,
 			(error) => {
 				const body = error && typeof error === "object" && "body" in error ? error.body : undefined;
-				if (body && typeof body === "object" && "code" in body && body.code === "NOT_FOUND") {
+				// Only an untargeted lookup's missing marker permits first-use setup.
+				if (!known && body && typeof body === "object" && "code" in body && body.code === "NOT_FOUND") {
 					if (folderPath() === path) setSetupPath(path);
 					return true;
 				}

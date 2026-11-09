@@ -248,7 +248,7 @@ beforeEach(async () => {
 		const knownProject = projectMatch && overview.projects.some((p) => p.id === projectMatch[1]);
 		if (connect || link || ((method === "PUT" || method === "DELETE") && (knownWorkspace || knownProject))) {
 			await mutationGate?.promise;
-			if (mutationFailure) return json(mutationFailure, 500);
+			if (mutationFailure) return json(mutationFailure, mutationFailure.code === "NOT_FOUND" ? 404 : 500);
 			if (connect) {
 				const path = String(body?.path);
 				overview.workspaces = [{ id: WORKSPACE, path, status: { available: true, path } }];
@@ -553,6 +553,61 @@ for (const width of [1024, 390]) {
 				{ method: "POST", path: "/api/cloud-workspaces/link", body: { path: LONG_PATH, projectId: PROJECT } },
 			]);
 			expect(await page.locator(".cloud-advanced").getAttribute("open")).toBeNull();
+			await expectLayout("body", width <= 700);
+		});
+
+		it("retains a stale grouped identity and shows workspace NOT_FOUND without first-use setup or further writes", async () => {
+			const workspacePath = "/synthetic-host/grouped-workspace";
+			const path = `${workspacePath}/project`;
+			overview = {
+				...emptyOverview(),
+				workspaces: [{ id: WORKSPACE, path: workspacePath, status: { available: true, path: workspacePath } }],
+				projects: [
+					{
+						...project(PROJECT, path),
+						location: { kind: "workspace", workspaceId: WORKSPACE, relativePath: "project" },
+					},
+				],
+			};
+			await open(width, CLOUD_ROUTE);
+			const row = page.getByRole("article", { name: `Project ${PROJECT}`, exact: true });
+			expect(await row.getByRole("heading", { name: path, level: 3, exact: true }).isVisible()).toBe(true);
+			const originalDetails = await row.textContent();
+			// Another client disconnects the workspace after this page's successful snapshot.
+			const message = `Workspace ${WORKSPACE} is not connected on this device`;
+			overview = {
+				...overview,
+				workspaces: [],
+				projects: overview.projects.map((p) => ({
+					...p,
+					status: { available: false, error: { code: "UNAVAILABLE", message } },
+				})),
+			};
+			const disconnected = structuredClone(overview);
+			mutationFailure = { code: "NOT_FOUND", error: message };
+			await page.getByLabel("Folder path on this computer", { exact: true }).fill(path);
+			await page.getByRole("button", { name: "Connect folder", exact: true }).click();
+			await expect.poll(() => writes().length).toBe(1);
+			await page.waitForFunction(() => !document.querySelector(".cloud-workspaces fieldset:disabled"));
+			expect(writes()).toEqual([
+				{
+					method: "POST",
+					path: "/api/cloud-workspaces/link",
+					body: { path, projectId: PROJECT, workspaceId: WORKSPACE },
+				},
+			]);
+			expect((await page.locator("[role=alert]").allTextContents()).join(" ")).toContain(
+				`Mutation failed: NOT_FOUND: ${message}`,
+			);
+			expect(await page.getByRole("alert").isVisible()).toBe(true);
+			expect(await page.getByText("Set up this folder for the first time?", { exact: true }).count()).toBe(0);
+			expect(await page.getByRole("button", { name: "Set up folder", exact: true }).count()).toBe(0);
+			expect(await row.textContent()).toBe(originalDetails);
+			expect(await page.getByRole("article", { name: /^Project / }).count()).toBe(1);
+			expect(await page.getByLabel("Folder path on this computer", { exact: true }).inputValue()).toBe(path);
+			expect(cloudReads()).toHaveLength(1);
+			expect(overview).toEqual(disconnected);
+			expect(creates()).toHaveLength(0);
 			await expectLayout("body", width <= 700);
 		});
 

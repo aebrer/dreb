@@ -211,7 +211,7 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 		expect(text()).not.toContain("Set up this folder for the first time?");
 	});
 
-	it("handles only NOT_FOUND as first-use and requires explicit captured-path confirmation", async () => {
+	it("handles an unknown folder's NOT_FOUND as first-use and requires explicit captured-path confirmation", async () => {
 		vi.mocked(api.linkProject).mockRejectedValueOnce(failure("NOT_FOUND"));
 		mount();
 		await settle();
@@ -222,7 +222,7 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 		expect(text()).toContain("wait for its synced identity to arrive");
 		expect(document.querySelector(".cloud-confirmation")?.textContent).toContain("/host/first ");
 		expect(document.querySelector('[role="alert"]')).toBeNull();
-		expect(api.linkProject).toHaveBeenCalledTimes(1);
+		expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path: "/host/first " });
 		button("Set up folder").click();
 		expect(text()).not.toContain("Set up this folder for the first time?");
 		await settle();
@@ -309,6 +309,59 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 			});
 			expect(api.connectWorkspace).not.toHaveBeenCalled();
 			expect(api.rebindProject).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["/configured/z/apps/a very long project", "/canonical/grouped"])(
+		"surfaces a disconnected known workspace at %s without offering a new identity",
+		async (path) => {
+			vi.mocked(api.cloudWorkspaces).mockResolvedValue({
+				...empty,
+				workspaces: [{ id: workspaceZ, path: "/configured/z", status: { available: true, path: "/canonical/z" } }],
+				projects: [
+					{
+						...populated.projects[0]!,
+						markerRequired: false,
+						status: { available: true, path: "/canonical/grouped" },
+					},
+				],
+			});
+			const write = deferred<{ id: string }>();
+			vi.mocked(api.linkProject).mockReturnValueOnce(write.promise);
+			mount();
+			await settle();
+			const originalRow = row("Project", projectZ);
+			const originalDetails = originalRow.textContent;
+			enter("Folder path on this computer", path);
+			submit("Connect folder");
+			expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({
+				path,
+				projectId: projectZ,
+				workspaceId: workspaceZ,
+			});
+			const message = `Workspace ${workspaceZ} is not connected on this device`;
+			write.reject(Object.assign(new Error(message), { body: { code: "NOT_FOUND", error: message } }));
+			await settle();
+			expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+				`Mutation failed: NOT_FOUND: ${message}`,
+			);
+			expect(text()).not.toContain("Set up this folder for the first time?");
+			expect(Array.from(document.querySelectorAll("button"), (control) => control.textContent)).not.toContain(
+				"Set up folder",
+			);
+			expect(field("Folder path on this computer").value).toBe(path);
+			expect(row("Project", projectZ)).toBe(originalRow);
+			expect(originalRow.textContent).toBe(originalDetails);
+			expect(api.cloudWorkspaces).toHaveBeenCalledTimes(1);
+			expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({
+				path,
+				projectId: projectZ,
+				workspaceId: workspaceZ,
+			});
+			expect(api.connectWorkspace).not.toHaveBeenCalled();
+			expect(api.rebindProject).not.toHaveBeenCalled();
+			expect(api.rebindWorkspace).not.toHaveBeenCalled();
+			expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
 		},
 	);
 

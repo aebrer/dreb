@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_DIR_NAME, ENV_AGENT_DIR, getCloudWorkspaceRegistryPath } from "../src/config.js";
@@ -10,6 +12,7 @@ import {
 	CloudSessionStorage,
 	type CloudSessionStorageStatus,
 } from "../src/core/cloud-workspaces/index.js";
+import { FileSettingsStorage, SettingsManager, type SettingsScope } from "../src/core/settings-manager.js";
 
 vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof fs>()) }));
 
@@ -373,6 +376,64 @@ describe("strict settings and input validation", () => {
 });
 
 describe("cooperating settings lock and atomic persistence", () => {
+	it("preserves an acknowledged log save when the ordinary settings writer initially observed no file", async () => {
+		const target = await folder("logs");
+		await fs.mkdir(agentDir);
+		let saved: CloudSessionStorageStatus | undefined;
+		let interleaved = false;
+		class ScheduledSettingsStorage extends FileSettingsStorage {
+			override withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+				super.withLock(scope, (current) => {
+					const next = fn(current);
+					if (scope === "global" && current === undefined && next !== undefined && !interleaved) {
+						interleaved = true;
+						// Pause after the ordinary writer computes its absent-file save, before its lock.
+						// A separate cooperating process completes the actual log-storage save first.
+						const output = execFileSync(
+							process.execPath,
+							[
+								"--import",
+								"tsx",
+								fileURLToPath(new URL("./fixtures/cloud-session-storage-writer.ts", import.meta.url)),
+								agentDir,
+								target,
+							],
+							{
+								cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+								env: {
+									PATH: process.env.PATH,
+									SystemRoot: process.env.SystemRoot,
+									HOME: root,
+									USERPROFILE: root,
+									DREB_CODING_AGENT_DIR: agentDir,
+									DREB_LIVE_API: "0",
+									DREB_LIVE_API_EXPENSIVE: "0",
+									DREB_NO_LOCAL_LLM: "1",
+								},
+								encoding: "utf8",
+								timeout: 15000,
+								maxBuffer: 1024 * 1024,
+							},
+						);
+						saved = JSON.parse(output) as CloudSessionStorageStatus;
+					}
+					return next;
+				});
+			}
+		}
+		const manager = SettingsManager.fromStorage(new ScheduledSettingsStorage(root, agentDir));
+		manager.setTheme("dark");
+		await manager.flush();
+
+		expect(manager.drainErrors()).toEqual([]);
+		expect(interleaved).toBe(true);
+		expect(saved).toMatchObject({ ...pair(target), restartRequired: true });
+		expect(JSON.parse(await fs.readFile(storage.path, "utf8"))).toEqual({ ...pair(target), theme: "dark" });
+		expect(await storage.read()).toMatchObject(pair(target));
+		expect(await fs.readdir(target)).toEqual([]);
+		await expectClean();
+	}, 20000);
+
 	it.each(["canonical", "alias"])(
 		"honors an existing FileSettingsStorage-style %s lock with bounded waiting",
 		async (shape) => {
