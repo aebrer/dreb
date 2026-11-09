@@ -17,6 +17,8 @@ vi.mock("../src/core/tools/subagent.js", async (importOriginal) => ({
 }));
 
 import { completeSimple } from "@dreb/ai";
+import { AuthStorage } from "../src/core/auth-storage.js";
+import { ModelRegistry } from "../src/core/model-registry.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { resolveModelForSubagentSpawn } from "../src/core/tools/subagent.js";
 import { generateSessionTitleForRpc } from "../src/modes/rpc/rpc-mode.js";
@@ -103,6 +105,8 @@ function makeRuntime(overrides: { model?: typeof RUNTIME_MODEL | undefined; agen
 		getAvailable: () => [RUNTIME_MODEL, EXPLORE_MODEL],
 		find: (provider: string, modelId: string) =>
 			[RUNTIME_MODEL, EXPLORE_MODEL].find((model) => model.provider === provider && model.id === modelId),
+		refresh: vi.fn(),
+		getError: vi.fn((): string | undefined => undefined),
 	};
 	const settingsManager = {
 		getTabTitleSettings: vi.fn(() => ({ enabled: false, maxTitleLength: 40 })),
@@ -290,6 +294,95 @@ describe("generateSessionTitleForRpc", () => {
 
 			expect(result.ok).toBe(false);
 			expect(result.ok === false && result.error).toMatch(/^Failed to reload settings: global: /);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("models.json changes", () => {
+		/** A long-lived utility runtime's real registry, loaded before models.json gains a model. */
+		async function liveRegistry() {
+			const root = await mkdtemp(join(tmpdir(), "dreb-rpc-title-models-"));
+			tempDirs.push(root);
+			const agentDir = join(root, "agent");
+			const projectDir = join(root, "project");
+			mkdirSync(agentDir, { recursive: true });
+			mkdirSync(projectDir, { recursive: true });
+			const modelsJsonPath = join(agentDir, "models.json");
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({}));
+			const registry = new ModelRegistry(AuthStorage.inMemory(), modelsJsonPath);
+			return {
+				modelsJsonPath,
+				registry,
+				utility: SettingsManager.create(projectDir, agentDir),
+				other: SettingsManager.create(root, agentDir),
+			};
+		}
+
+		function customProvider(modelIds: string[]) {
+			return {
+				providers: {
+					custom: {
+						baseUrl: "https://custom.test/v1",
+						apiKey: "CUSTOM_KEY",
+						api: "openai-completions",
+						models: modelIds.map((id) => ({
+							id,
+							name: id,
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 100000,
+							maxTokens: 8000,
+						})),
+					},
+				},
+			};
+		}
+
+		it("uses a model pinned after it was added to models.json while the runtime was running", async () => {
+			const { modelsJsonPath, registry, utility, other } = await liveRegistry();
+			const runtime = { ...makeRuntime(), settingsManager: utility, modelRegistry: registry };
+			const path = await writeSessionFile(savedSession());
+			expect(registry.find("custom", "new-model")).toBeUndefined();
+
+			writeFileSync(modelsJsonPath, JSON.stringify(customProvider(["new-model"])));
+			other.setGlobalTabTitleSettings({ model: "custom/new-model" });
+			await other.flush();
+
+			await expect(generateSessionTitleForRpc(runtime, path)).resolves.toEqual({
+				ok: true,
+				title: "Past session rename",
+			});
+			expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
+			expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({ provider: "custom", id: "new-model" });
+		});
+
+		it("fails loudly instead of titling with stale models when models.json cannot be loaded", async () => {
+			const { modelsJsonPath, registry, utility } = await liveRegistry();
+			const runtime = { ...makeRuntime(), settingsManager: utility, modelRegistry: registry };
+			const path = await writeSessionFile(savedSession());
+			writeFileSync(modelsJsonPath, "{ not json", "utf8");
+
+			const result = await generateSessionTitleForRpc(runtime, path);
+
+			expect(result.ok).toBe(false);
+			expect(result.ok === false && result.error).toMatch(/^Failed to parse models\.json: /);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+		});
+
+		it("rejects a pinned model that is still unknown instead of titling with the runtime model", async () => {
+			const { registry, utility, other } = await liveRegistry();
+			const runtime = { ...makeRuntime(), settingsManager: utility, modelRegistry: registry };
+			const path = await writeSessionFile(savedSession());
+			other.setGlobalTabTitleSettings({ model: "custom/removed-model" });
+			await other.flush();
+
+			await expect(generateSessionTitleForRpc(runtime, path)).resolves.toEqual({
+				ok: false,
+				error:
+					'Tab title generation failed: tabTitle.model "custom/removed-model" is not a known model ' +
+					"(choose another Tab Title model in Settings, or add it to models.json)",
+			});
 			expect(mockCompleteSimple).not.toHaveBeenCalled();
 		});
 	});

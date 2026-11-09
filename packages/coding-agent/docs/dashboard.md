@@ -462,14 +462,17 @@ when that directory still exists (so project-local Explore agent and
 `agentModels` settings apply) and in the home directory otherwise. It follows
 `tabTitle.model` and `tabTitle.maxTitleLength`; `tabTitle.enabled` and
 `triggerAfter` only control automatic titling and do not disable the button.
-Settings are re-read from disk on every request, so changes saved in Dashboard
-Settings, the TUI, or by hand apply to the next suggestion; if they cannot be
-re-read, the request fails rather than using stale settings.
+Settings and `models.json` are re-read from disk on every request, so changes
+saved in Dashboard Settings, the TUI, or by hand (including a model added to
+`models.json` and then pinned) apply to the next suggestion; if they cannot be
+re-read, the request fails rather than using stale settings. A pinned
+`tabTitle.model` that is not a known model is an error here, rather than a
+silent switch to another model.
 The suggestion only fills the input — nothing is saved until you confirm — and
-generating a title never modifies the session file. Failures (no model, a
-provider error, an empty reply, the 60-second timeout, a session with no
-requests or activity to title, or an invalid session file) appear in the modal;
-closing the modal discards a pending suggestion.
+generating a title never modifies the session file. Failures (no model, an
+unknown pinned model, a provider error, an empty reply, the 60-second timeout,
+a session with no requests or activity to title, or an invalid session file)
+appear in the modal; closing the modal discards a pending suggestion.
 
 The server checks the path before touching anything: it must be an existing
 `.jsonl` regular file that starts with a session header. Anything else is

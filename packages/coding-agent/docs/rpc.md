@@ -934,7 +934,7 @@ The path uses the same unrestricted, cross-project addressing as [`switch_sessio
 
 #### generate_session_title
 
-Generate a title for a saved session file on request, using the same tab-title generator that names live sessions (see [Tab Title settings](settings.md#tab-title)). The session is not loaded or switched to, and the file is never modified: it is read once (old formats are migrated in memory only) and its current branch is used as the context. The command uses this process's `tabTitle.model` and `tabTitle.maxTitleLength` settings, Explore-agent `agentModels` routing, and current model as the parent fallback; `tabTitle.enabled` and `triggerAfter` do not apply. Global and project settings are reloaded from disk first (like `get_settings`), so changes saved by another process apply; a failed reload is an error response. The title is returned, not saved — rename the session separately (for example with the dashboard's rename endpoint or `/name` after resuming).
+Generate a title for a saved session file on request, using the same tab-title generator that names live sessions (see [Tab Title settings](settings.md#tab-title)). The session is not loaded or switched to, and the file is never modified: it is read once (old formats are migrated in memory only) and its current branch is used as the context. The command uses this process's `tabTitle.model` and `tabTitle.maxTitleLength` settings, Explore-agent `agentModels` routing, and current model as the parent fallback; `tabTitle.enabled` and `triggerAfter` do not apply. Global and project settings are reloaded from disk first (like `get_settings`), and so is `models.json` (like `get_available_models`), so changes saved by another process — including a newly added model that is then pinned — apply; a failed reload is an error response. Unlike automatic titling, which falls back to the parent model when `tabTitle.model` names an unknown model, this command fails. The title is returned, not saved — rename the session separately (for example with the dashboard's rename endpoint or `/name` after resuming).
 
 ```json
 {"type": "generate_session_title", "sessionPath": "/path/to/session.jsonl"}
@@ -945,7 +945,7 @@ Response:
 {"type": "response", "command": "generate_session_title", "success": true, "data": {"title": "Fix login flow"}}
 ```
 
-Generation is bounded at 60 seconds; `RpcClient.generateSessionTitle()` waits 90 seconds so the generator's own timeout error is returned. Every failure is an error response — an invalid path (not `.jsonl`, missing, not a regular file, or no session header), settings that cannot be reloaded, a session with no user requests or activity to title (its project directory alone is not titled), no available model, a provider error (with the parent-retry detail), or an empty reply:
+Generation is bounded at 60 seconds; `RpcClient.generateSessionTitle()` waits 90 seconds so the generator's own timeout error is returned. Every failure is an error response — an invalid path (not `.jsonl`, missing, not a regular file, or no session header), settings or `models.json` that cannot be reloaded, a session with no user requests or activity to title (its project directory alone is not titled), no available model, a pinned `tabTitle.model` that is not a known model, a provider error (with the parent-retry detail), or an empty reply:
 ```json
 {
   "type": "response",

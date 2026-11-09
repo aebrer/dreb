@@ -1321,6 +1321,22 @@ describe("TabTitleGenerator", () => {
 			expect((mockCompleteSimple.mock.calls[0][1] as any).systemPrompt).toContain("Aim for about 42 characters");
 		});
 
+		it.each([
+			["missing slash", "title-model"],
+			["trailing slash", "dedicated-provider/"],
+			["well-formed but unknown", "dedicated-provider/title-model"],
+		])("throws instead of substituting the parent for a pinned model with %s", async (_label, configuredModel) => {
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ model: configuredModel }, deps);
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				`Tab title generation failed: tabTitle.model "${configuredModel}" is not a known model ` +
+					"(choose another Tab Title model in Settings, or add it to models.json)",
+			);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+			expect(mockResolveModel).not.toHaveBeenCalled();
+		});
+
 		it("forwards the supplied session ID", async () => {
 			const deps = createMockDeps({ getSessionId: () => "saved-session-id" });
 			const gen = new TabTitleGenerator(undefined, deps);

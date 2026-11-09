@@ -3,7 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkSessionFile, readSessionTranscript, SessionManager } from "../src/core/session-manager.js";
+import {
+	checkSessionFile,
+	loadEntriesFromFile,
+	readSessionTranscript,
+	SessionManager,
+} from "../src/core/session-manager.js";
 
 const tempDirs: string[] = [];
 
@@ -230,6 +235,31 @@ describe("SessionManager.renameSession", () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toContain("Session name was not saved");
 		expect(readFileSync(path, "utf8")).toBe(before);
+	});
+
+	it("keeps an unterminated last record intact and readable", async () => {
+		const dir = await createTempDir();
+		const path = join(dir, "unterminated.jsonl");
+		// Written by another JSONL tool or a hand edit: valid records, but no newline after the last.
+		const before = [header(), userEntry("u1", null, "Fix the login bug"), assistantEntry("a1", "u1", "On it")]
+			.map((line) => JSON.stringify(line))
+			.join("\n");
+		writeFileSync(path, before, "utf8");
+
+		const result = SessionManager.renameSession(path, "Login bug fix");
+
+		expect(result).toEqual({ ok: true, name: "Login bug fix" });
+		const after = readFileSync(path, "utf8");
+		expect(after.startsWith(`${before}\n`)).toBe(true);
+		expect(after.endsWith("\n")).toBe(true);
+		expect(loadEntriesFromFile(path).map((entry) => entry.type)).toEqual([
+			"session",
+			"message",
+			"message",
+			"session_info",
+		]);
+		expect(readSessionTranscript(path).messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+		expect(sessionInfoNames(path)).toEqual(["Login bug fix"]);
 	});
 });
 

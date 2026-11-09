@@ -211,7 +211,7 @@ export class TabTitleGenerator {
 		// Single timeout bounds the entire pipeline (model probing + API key + LLM call)
 		const signal = AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS);
 
-		const model = await this.resolveModel(signal);
+		const model = await this.resolveModel(strict, signal);
 		if (!model) {
 			if (strict) {
 				throw new Error(
@@ -295,19 +295,26 @@ export class TabTitleGenerator {
 		return response;
 	}
 
-	private async resolveModel(signal?: AbortSignal): Promise<Model<Api> | undefined> {
+	private async resolveModel(strict: boolean, signal?: AbortSignal): Promise<Model<Api> | undefined> {
 		const parentModel = this.deps.getModel();
 		const parentProvider = this.deps.getProvider();
 		const registry = this.deps.getModelRegistry();
 
-		// A dedicated exact model bypasses Explore-agent routing. Dashboard/RPC writes
-		// validate availability; a stale hand-edited value falls back to the parent.
+		// A dedicated exact model bypasses Explore-agent routing. Dashboard/RPC writes validate
+		// availability; a stale hand-edited value falls back to the parent for automatic titles,
+		// but an explicit request must not silently swap in a model the user did not pick.
 		const configuredModel = this.settings?.model;
 		if (configuredModel) {
 			const slash = configuredModel.indexOf("/");
 			if (slash > 0 && slash < configuredModel.length - 1) {
 				const found = registry.find(configuredModel.slice(0, slash), configuredModel.slice(slash + 1));
 				if (found) return found;
+			}
+			if (strict) {
+				throw new Error(
+					`Tab title generation failed: tabTitle.model "${configuredModel}" is not a known model ` +
+						"(choose another Tab Title model in Settings, or add it to models.json)",
+				);
 			}
 			return parentModel;
 		}

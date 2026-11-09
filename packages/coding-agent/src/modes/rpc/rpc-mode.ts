@@ -383,9 +383,10 @@ export function setSessionNameForRpc(
  * `agentModels` override, and current model (as the parent fallback), while messages, repo, cwd,
  * and the forwarded session ID come from the saved session. Every failure maps to an error.
  *
- * Durable settings are reloaded first: the dashboard runs this in long-lived utility runtimes
- * whose cached settings would otherwise miss later `tabTitle` / `agentModels` changes saved by
- * another runtime, the TUI, or a hand edit. A failed reload is an error, not a stale title.
+ * Durable settings and the model registry are reloaded first: the dashboard runs this in
+ * long-lived utility runtimes whose cached settings and `models.json` models would otherwise miss
+ * later `tabTitle` / `agentModels` changes and newly added models saved by another runtime, the
+ * TUI, or a hand edit. A failed reload is an error, not a title from stale state.
  */
 export async function generateSessionTitleForRpc(
 	session: Pick<AgentSession, "settingsManager" | "modelRegistry" | "model">,
@@ -395,6 +396,11 @@ export async function generateSessionTitleForRpc(
 		const { header, messages } = readSessionTranscript(sessionPath);
 		const refreshed = await settingsWriteLock(() => reloadDurableSettings(session.settingsManager));
 		if (!refreshed.ok) return refreshed;
+		// Like `get_available_models` / `resolve_model`: a pinned `tabTitle.model` or Explore route
+		// may name a model added to models.json after this runtime started.
+		session.modelRegistry.refresh();
+		const modelsError = session.modelRegistry.getError();
+		if (modelsError) return { ok: false, error: modelsError };
 		const sessionCwd = header.cwd || undefined;
 		const generator = new TabTitleGenerator(session.settingsManager.getTabTitleSettings(), {
 			setTitle: () => {},

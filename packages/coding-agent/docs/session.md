@@ -2,6 +2,8 @@
 
 Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with a `type` field. Session entries form a tree structure via `id`/`parentId` fields, enabling in-place branching without creating new files.
 
+dreb ends every record it writes with a newline. When it appends to an existing file whose last record has no trailing newline (for example after a hand edit, another JSONL tool, or an interrupted write), it starts the new record on a new line first, so the earlier record is not joined to it. A partial line left by an interrupted write stays unreadable and is skipped on load.
+
 ## File Locations
 
 The default main-session layout is a nested all-project tree:

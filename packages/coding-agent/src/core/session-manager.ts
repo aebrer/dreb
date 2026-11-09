@@ -8,6 +8,7 @@ import {
 	appendFileSync,
 	closeSync,
 	existsSync,
+	fstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -490,6 +491,31 @@ function readFirstLine(filePath: string, maxBytes: number): string | undefined {
 			position += bytesRead;
 		}
 		return undefined;
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/**
+ * Whether `filePath` is a non-empty file whose last byte is not a newline. dreb ends every record
+ * with "\n", but a session file edited by hand or written by another JSONL tool may leave its last
+ * record unterminated, and an interrupted write leaves a partial line. Appending a record there
+ * without first starting a new line would join it to that line and make both unreadable.
+ */
+function endsWithoutNewline(filePath: string): boolean {
+	let fd: number;
+	try {
+		fd = openSync(filePath, "r");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+	try {
+		const { size } = fstatSync(fd);
+		if (size === 0) return false;
+		const last = Buffer.alloc(1);
+		readSync(fd, last, 0, 1, size - 1);
+		return last[0] !== 0x0a;
 	} finally {
 		closeSync(fd);
 	}
@@ -1140,14 +1166,14 @@ export class SessionManager {
 			return;
 		}
 
-		if (!this.flushed) {
-			for (const e of this.fileEntries) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(e)}\n`);
-			}
-			this.flushed = true;
-		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+		const records = this.flushed ? [entry] : this.fileEntries;
+		// Start on a fresh line if the file's last record is unterminated (see endsWithoutNewline).
+		let prefix = endsWithoutNewline(this.sessionFile) ? "\n" : "";
+		for (const record of records) {
+			appendFileSync(this.sessionFile, `${prefix}${JSON.stringify(record)}\n`);
+			prefix = "";
 		}
+		this.flushed = true;
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
