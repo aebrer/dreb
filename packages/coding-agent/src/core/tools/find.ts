@@ -209,7 +209,25 @@ export function createFindToolDefinition(
 						// Manual --ignore-file collection was removed because fd applies
 						// those patterns globally, causing venv/.gitignore files containing
 						// bare "*" to suppress all results. See issue #17.
-						args.push("--", pattern, searchPath);
+						//
+						// fd --glob matches against the basename unless --full-path is set, so a
+						// path-containing pattern like "src/**/*.spec.ts" silently matched nothing.
+						// In --full-path mode fd matches the absolute candidate path, so the
+						// pattern also needs a leading "**/" to match anything at all.
+						// fd >= 10.5 additionally rejects any pattern containing "/" outright
+						// unless --full-path is given. Ported from upstream pi-mono c5451af749.
+						let effectivePattern = pattern;
+						if (pattern.includes("/")) {
+							args.push("--full-path");
+							if (!pattern.startsWith("/") && !pattern.startsWith("**/") && pattern !== "**") {
+								effectivePattern = `**/${pattern}`;
+							}
+							// fd matches full paths using native separators on Windows.
+							if (process.platform === "win32") {
+								effectivePattern = effectivePattern.replaceAll("/", String.raw`[/\\]`);
+							}
+						}
+						args.push("--", effectivePattern, searchPath);
 
 						// Include tool-visible .dreb/ subdirs when searching from project root.
 						// fd bypasses .gitignore for explicit path arguments.
