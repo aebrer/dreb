@@ -3,6 +3,7 @@
  * Used by auth-storage.ts and model-registry.ts.
  */
 
+import { resolveConfigTemplate } from "@dreb/ai";
 import { execSync, spawnSync } from "child_process";
 import { getShellConfig } from "../utils/shell.js";
 
@@ -15,11 +16,21 @@ export const configValueWarnings: string[] = [];
 /**
  * Resolve a config value (API key, header value, etc.) to an actual value.
  * - If starts with "!", executes the rest as a shell command and uses stdout (cached)
+ * - Otherwise expands {env:VAR} / {file:PATH} templates (never cached)
  * - Otherwise checks environment variable first, then treats as literal (not cached)
  */
 export function resolveConfigValue(config: string): string | undefined {
 	if (config.startsWith("!")) {
 		return executeCommand(config);
+	}
+	try {
+		const templated = resolveConfigTemplate(config);
+		if (templated !== undefined) {
+			return templated;
+		}
+	} catch (error) {
+		configValueWarnings.push(error instanceof Error ? error.message : String(error));
+		return undefined;
 	}
 	const envValue = process.env[config];
 	return envValue || config;
