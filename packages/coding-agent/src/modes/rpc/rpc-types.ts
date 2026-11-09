@@ -84,6 +84,8 @@ export type RpcCommand =
 	| { id?: string; type: "import_jsonl"; inputPath: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
 	| { id?: string; type: "delete_session"; sessionPath: string }
+	/** Generate a title for a saved session file (read-only) with the tab-title generator. */
+	| { id?: string; type: "generate_session_title"; sessionPath: string }
 	| { id?: string; type: "fork"; entryId: string }
 	| { id?: string; type: "get_fork_messages" }
 	| { id?: string; type: "get_tree" }
@@ -97,7 +99,11 @@ export type RpcCommand =
 			label?: string;
 	  }
 	| { id?: string; type: "get_last_assistant_text" }
-	| { id?: string; type: "set_session_name"; name: string }
+	/**
+	 * Rename the current session. With `sessionPath`, the rename applies only while that file is
+	 * this runtime's current session; otherwise it fails without changing anything.
+	 */
+	| { id?: string; type: "set_session_name"; name: string; sessionPath?: string }
 
 	// Messages
 	| { id?: string; type: "get_messages" }
@@ -410,6 +416,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "import_jsonl"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "delete_session"; success: true; data: { method: "trash" | "unlink" } }
+	| { id?: string; type: "response"; command: "generate_session_title"; success: true; data: { title: string } }
 	| { id?: string; type: "response"; command: "fork"; success: true; data: { text: string; cancelled: boolean } }
 	| {
 			id?: string;

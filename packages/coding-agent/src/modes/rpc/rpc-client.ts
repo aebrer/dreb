@@ -47,6 +47,8 @@ import type {
 const INIT_GRACE_MS = 100;
 /** Maximum child-stderr characters attached to exit notifications for diagnostics. */
 const STDERR_TAIL_CHARS = 2000;
+/** Exceeds the runtime's 60 s title-generation bound so its own error reaches the caller. */
+const GENERATE_SESSION_TITLE_TIMEOUT_MS = 90_000;
 
 /** Distributive Omit that works with union types */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -666,6 +668,20 @@ export class RpcClient {
 	}
 
 	/**
+	 * Generate a title for a saved session file without modifying it.
+	 * Throws with the generator's error when no title can be produced.
+	 */
+	async generateSessionTitle(sessionPath: string): Promise<{ title: string }> {
+		// Title generation is bounded at 60 s inside the runtime; wait past that so the caller
+		// receives the generator's own timeout error rather than a client-side RPC timeout.
+		const response = await this.send(
+			{ type: "generate_session_title", sessionPath },
+			GENERATE_SESSION_TITLE_TIMEOUT_MS,
+		);
+		return this.getData(response);
+	}
+
+	/**
 	 * Fork from a specific message.
 	 * @returns Object with `text` (the message text) and `cancelled` (if extension cancelled)
 	 */
@@ -721,10 +737,19 @@ export class RpcClient {
 	}
 
 	/**
-	 * Set the session display name.
+	 * Set the session display name. With `sessionPath`, the runtime renames only while that file is
+	 * its current session and rejects otherwise, so a concurrent session switch cannot redirect it.
 	 */
-	async setSessionName(name: string): Promise<void> {
-		await this.send({ type: "set_session_name", name });
+	async setSessionName(name: string, options?: { sessionPath?: string }): Promise<void> {
+		const sessionPath = options?.sessionPath;
+		const response = await this.send({
+			type: "set_session_name",
+			name,
+			...(sessionPath !== undefined ? { sessionPath } : {}),
+		});
+		// The runtime refuses empty names and, with sessionPath, a session it no longer holds;
+		// those refusals must reach the caller rather than read as a successful rename.
+		this.getData(response);
 	}
 
 	/**

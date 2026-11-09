@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { RpcClient, type RpcDashboardSnapshot, type RpcExitInfo } from "@dreb/coding-agent/rpc";
@@ -142,6 +142,8 @@ export class RuntimePool {
 	private readonly utilities = new Map<string, RuntimeHandle>();
 	private readonly utilityPromises = new Map<string, Promise<RuntimeHandle>>();
 	private readonly starting = new Set<RuntimeHandle>();
+	/** Startups of session runtimes, so a rename can wait for one resuming its target file. */
+	private readonly sessionStartups = new Map<RuntimeHandle, Promise<RuntimeHandle>>();
 	private readonly startupPromises = new Set<Promise<unknown>>();
 	private readonly exitedHandles = new WeakSet<RuntimeHandle>();
 	/** Snapshot ordering records observed synchronously from RpcClient stdout. */
@@ -194,6 +196,50 @@ export class RuntimePool {
 
 	list(): RuntimeHandle[] {
 		return [...this.runtimes.values()];
+	}
+
+	/**
+	 * The live session runtime whose current session file is `sessionPath`, if any. Each runtime
+	 * is asked for its authoritative state, because cached state lags `/new`, imports, and session
+	 * switches. A runtime that cannot answer (e.g. its process exited) is judged by its last known
+	 * state; it cannot write the file in that condition, and routing to it fails loudly if it does
+	 * claim the file. Utility runtimes never own a session file and are not considered. Paths are
+	 * compared after `resolve()`.
+	 *
+	 * A runtime resuming this file has already loaded it but is listed only once its startup
+	 * finishes, so the lookup waits for such a startup and then looks again. It also looks again
+	 * when a runtime was listed during the state round trip. The final checks run synchronously
+	 * before returning, so a caller that acts on an `undefined` result right away does not write
+	 * behind a resume that had already begun.
+	 */
+	async findBySessionFile(sessionPath: string): Promise<RuntimeHandle | undefined> {
+		const target = resolve(sessionPath);
+		const isTarget = (sessionFile: string | undefined) =>
+			sessionFile !== undefined && resolve(sessionFile) === target;
+		for (;;) {
+			const handles = this.list();
+			const owned = await Promise.all(
+				handles.map(async (handle) => ({ handle, sessionFile: await this.currentSessionFile(handle) })),
+			);
+			const resuming = [...this.sessionStartups]
+				.filter(([handle]) => isTarget(handle.sessionFileFallback))
+				.map(([, startup]) => startup);
+			if (resuming.length > 0) {
+				await Promise.allSettled(resuming);
+				continue;
+			}
+			if (this.list().some((handle) => !handles.includes(handle))) continue;
+			return owned.find(({ sessionFile }) => isTarget(sessionFile))?.handle;
+		}
+	}
+
+	private async currentSessionFile(handle: RuntimeHandle): Promise<string | undefined> {
+		try {
+			const state = (await handle.client.getState()) as { sessionFile?: string };
+			return state.sessionFile;
+		} catch {
+			return handle.lastState?.sessionFile ?? handle.sessionFileFallback;
+		}
 	}
 
 	get(key: string): RuntimeHandle | undefined {
@@ -348,10 +394,12 @@ export class RuntimePool {
 
 		const startup = this.startSessionRuntime(handle);
 		this.startupPromises.add(startup);
+		this.sessionStartups.set(handle, startup);
 		try {
 			return await startup;
 		} finally {
 			this.startupPromises.delete(startup);
+			this.sessionStartups.delete(handle);
 		}
 	}
 

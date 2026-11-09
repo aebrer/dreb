@@ -137,6 +137,46 @@ describe("subagent stop transport", () => {
 	});
 });
 
+describe("past-session rename transport", () => {
+	const ok = (body: unknown) =>
+		new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
+	it("POSTs path and name to the rename route and surfaces server errors", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(ok({ name: "New" }))
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ error: "Session file does not exist: /s/x.jsonl" }), {
+					status: 400,
+					headers: { "content-type": "application/json" },
+				}),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(api.renameDiskSession("/s/x.jsonl", "New")).resolves.toEqual({ name: "New" });
+		expect(fetchMock).toHaveBeenCalledWith("/api/sessions/rename", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "/s/x.jsonl", name: "New" }),
+		});
+		await expect(api.renameDiskSession("/s/x.jsonl", "New")).rejects.toThrow("Session file does not exist");
+	});
+
+	it("POSTs the path to the title route with the caller's abort signal", async () => {
+		const fetchMock = vi.fn().mockResolvedValueOnce(ok({ title: "Generated" }));
+		vi.stubGlobal("fetch", fetchMock);
+		const controller = new AbortController();
+
+		await expect(api.generateSessionTitle("/s/x.jsonl", controller.signal)).resolves.toEqual({ title: "Generated" });
+		expect(fetchMock).toHaveBeenCalledWith("/api/sessions/title", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "/s/x.jsonl" }),
+			signal: controller.signal,
+		});
+	});
+});
+
 describe("settings project context transport", () => {
 	it("encodes cwd for settings reads and writes while preserving global URLs", async () => {
 		const fetchMock = vi.fn().mockImplementation(

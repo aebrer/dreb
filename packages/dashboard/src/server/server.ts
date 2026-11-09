@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { checkSessionFile } from "@dreb/coding-agent";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type {
@@ -69,6 +70,8 @@ export interface DashboardServerOptions {
 	/** Session listing (cross-project) — injected so tests can stub it. */
 	listAllSessions: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession: (path: string) => Promise<unknown>;
+	/** Rename a session file that no live runtime holds; rejects with the reason on failure. */
+	renameSession: (path: string, name: string) => Promise<unknown>;
 	logger?: (line: string) => void;
 	/** Build version of the running server process (for the settings footer / stale-server detection). */
 	serverVersion?: string;
@@ -86,6 +89,16 @@ export interface DashboardServerOptions {
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
 export const MAX_SSE_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The dashboard API namespace, decided the same way Express 5 matches routes:
+ * case-insensitively, at a `/api` segment boundary. A case-sensitive check here
+ * would let a case-variant URL (for example `/API/sessions`) past the auth
+ * middleware's SPA-shell exception and straight into a protected handler.
+ */
+const API_PATH_PATTERN = /^\/api(?:\/|$)/i;
+/** The SSE endpoint, matched with the same case-insensitivity as the API boundary. */
+const SSE_EVENTS_PATH_PATTERN = /^\/api\/events$/i;
 export const CLIENT_DIAGNOSTIC_RATE_LIMIT_MS = 30_000;
 const CLIENT_DIAGNOSTIC_CONNECTION_TTL_MS = 10 * 60_000;
 
@@ -221,7 +234,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	// -- auth middleware (every route, fail-closed) ---------------------------
 	app.use((req: AuthedRequest, res: Response, next: NextFunction) => {
-		if (req.path === "/api/events") req.sseConnectionId = randomUUID();
+		if (SSE_EVENTS_PATH_PATTERN.test(req.path)) req.sseConnectionId = randomUUID();
 		auth
 			.authenticate({
 				remoteAddress: req.socket.remoteAddress,
@@ -236,12 +249,19 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 				if (canRenderAuthScreen) {
 					// The auth/pairing endpoints must be reachable by allowed-but-unpaired
 					// identities, and /api/auth must also be reachable by rejected
-					// Tailscale identities so the SPA denial screen can name them.
+					// Tailscale identities so the SPA denial screen can name them. These
+					// exceptions stay exact-match on purpose: the middleware's own denial
+					// response below carries the same fields, so a case variant of either
+					// path still reaches the pairing/denial screen without widening the
+					// unauthenticated surface.
 					if (req.path === "/api/auth" || (decision.needsPairing && req.path === "/api/pair")) return next();
 					// Let the SPA shell + static assets load so the client-side pairing or
 					// denial screen can render. No data exposure: every /api/* data route
 					// below stays fail-closed — only non-API GETs (the app shell) are allowed.
-					if (req.method === "GET" && !req.path.startsWith("/api/")) return next();
+					// The boundary must be matched case-insensitively because Express 5 matches
+					// the API routes case-insensitively: a case-sensitive check here let a URL
+					// like /API/files/download reach a protected handler despite the denial.
+					if (req.method === "GET" && !API_PATH_PATTERN.test(req.path)) return next();
 				}
 				if (req.sseConnectionId) {
 					log(
@@ -1113,6 +1133,67 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
 	});
 
+	app.post("/api/sessions/rename", (req, res) => {
+		const path = typeof req.body?.path === "string" ? req.body.path : "";
+		const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+		if (!path) {
+			res.status(400).json({ error: "path is required" });
+			return;
+		}
+		if (!name) {
+			res.status(400).json({ error: "name is required" });
+			return;
+		}
+		const check = checkSessionFile(path);
+		if (!check.ok) {
+			res.status(400).json({ error: check.error });
+			return;
+		}
+		(async () => {
+			// A runtime holding this session keeps its entries in memory and may rewrite the
+			// file, so rename through it rather than appending behind its back. The runtime
+			// re-checks that it still holds this file when the rename arrives, so a session
+			// switch after the lookup fails loudly instead of renaming the wrong session.
+			const owner = await pool.findBySessionFile(check.path);
+			if (owner) {
+				try {
+					await owner.client.setSessionName(name, { sessionPath: check.path });
+				} catch (err) {
+					res.status(502).json({ error: String((err as Error)?.message ?? err) });
+					return;
+				}
+				log(`session renamed via runtime ${owner.key}: ${check.path}`);
+			} else {
+				await options.renameSession(check.path, name);
+				log(`session renamed: ${check.path}`);
+			}
+			hub.publish("", { type: "disk_sessions_changed" });
+			res.json({ name });
+		})().catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+	});
+
+	/** Generate a title for a saved session with the runtime tab-title generator (read-only). */
+	app.post("/api/sessions/title", (req, res) => {
+		const path = typeof req.body?.path === "string" ? req.body.path : "";
+		if (!path) {
+			res.status(400).json({ error: "path is required" });
+			return;
+		}
+		const check = checkSessionFile(path);
+		if (!check.ok) {
+			res.status(400).json({ error: check.error });
+			return;
+		}
+		// Run in a utility runtime in the session's recorded project when that directory still
+		// exists, so project-local Explore agent and agentModels settings apply as they would for
+		// a live session there; otherwise use the home utility runtime.
+		const recordedCwd = typeof check.header.cwd === "string" ? check.header.cwd : "";
+		const runtimeCwd = recordedCwd
+			? resolveExistingDirectory(recordedCwd).catch(() => undefined)
+			: Promise.resolve(undefined);
+		void runtimeCwd.then((cwd) => withAnyRuntime(res, (h) => h.client.generateSessionTitle(check.path), cwd));
+	});
+
 	// -- settings ------------------------------------------------------------------
 	// Settings are process-global persistent defaults. They route through hidden
 	// utility runtimes instead of whichever user session happened to open first.
@@ -1339,7 +1420,9 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	if (options.staticDir) {
 		app.use(express.static(options.staticDir));
 		// SPA fallback: serve index.html for non-API GETs (client-side routing).
-		app.get(/^\/(?!api\/).*/, (_req, res) => {
+		// Same case-insensitive API boundary as the auth middleware, so a case
+		// variant of an API path can never be answered with the app shell here.
+		app.get(/^\/(?!api(?:\/|$))/i, (_req, res) => {
 			res.sendFile(join(options.staticDir!, "index.html"));
 		});
 	}

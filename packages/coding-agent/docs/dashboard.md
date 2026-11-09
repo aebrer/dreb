@@ -35,7 +35,7 @@ Open `http://127.0.0.1:5343` on the same machine.
 
 ## Session inventory roots
 
-Dashboard snapshots main-session storage at startup. Its host-wide inventory reads only the global `sessionDir` from `<agent-dir>/settings.json`; a project `.dreb/settings.json` in the launch directory cannot redirect Fleet, `/api/sessions`, resync, resume, or delete. A configured root is a flat JSONL store. Without one, Dashboard scans the built-in nested all-project tree.
+Dashboard snapshots main-session storage at startup. Its host-wide inventory reads only the global `sessionDir` from `<agent-dir>/settings.json`; a project `.dreb/settings.json` in the launch directory cannot redirect Fleet, `/api/sessions`, resync, resume, rename, or delete. A configured root is a flat JSONL store. Without one, Dashboard scans the built-in nested all-project tree.
 
 Absolute paths remain absolute, `~` expands from the home directory, and relative paths resolve against Dashboard's startup cwd; an absolute global path is recommended. Restart Dashboard after changing the setting. The separate global-only `subagentSessionDir` controls new child logs in coding-agent runtimes, while restart recovery can also discover matching logs in the legacy root. Neither setting migrates files or relocates credentials or general configuration. See [Session settings](settings.md#sessions).
 
@@ -84,6 +84,14 @@ Layers, in order, all fail-closed (any auth-subsystem error denies):
 
 **There is no LAN mode.** The server never listens on a LAN-reachable
 interface without Tailscale identity enforcement.
+
+Protected API paths use a case-insensitive `/api` segment boundary, matching
+Express routing. Changing `/api` to `/API` or `/Api` cannot bypass a denial:
+non-allowlisted identities receive 403 and allowlisted-but-unpaired devices
+receive 401 for protected GETs, including file downloads and live SSE events.
+Resolved identities may still load the SPA shell and static assets for the
+pairing/denial screens; the intended auth/pairing exceptions do not expose
+protected data handlers. A bare API namespace is not an SPA-shell route.
 
 ### What a paired device can do
 
@@ -138,7 +146,7 @@ networking window above.
 
 | Screen | What it does |
 |---|---|
-| **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Default keeps live cards in stable effective-project-path/runtime-start order; status changes never determine card order. [Fleet sorting](#fleet-sorting) integrates browser-local sorting buttons into the live section header, with live activity reordering only when Last activity is explicitly selected; needs-attention cards still badge the browser tab. [Fleet search and filters](#fleet-search-and-filters) narrows live and past sessions by displayed name or project path, and the live/needs-attention counts double as a live-only attention filter. Below the grid: one native past-session table with global column headings, grouped by historical project, three compact rows per group with an "all N on disk" expander, resume and delete. Sessions remain visible when that historical directory is missing; resume opens an explicit runtime-directory chooser instead of mutating or hiding the session. |
+| **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Default keeps live cards in stable effective-project-path/runtime-start order; status changes never determine card order. [Fleet sorting](#fleet-sorting) integrates browser-local sorting buttons into the live section header, with live activity reordering only when Last activity is explicitly selected; needs-attention cards still badge the browser tab. [Fleet search and filters](#fleet-search-and-filters) narrows live and past sessions by displayed name or project path, and the live/needs-attention counts double as a live-only attention filter. Below the grid: one native past-session table with global column headings, grouped by historical project, three compact rows per group with an "all N on disk" expander, and resume, [rename](#renaming-past-sessions) (with an optional auto-generated title), and delete on every row. Sessions remain visible when that historical directory is missing; resume opens an explicit runtime-directory chooser instead of mutating or hiding the session. |
 | **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, a shared dismissible banner region for model fallback, extension notices, retry/compaction/paused/provider status, and local action results, a controls-only dock line with elapsed time plus ■ stop and explicitly labelled retry/compaction aborts, a persistent session-header live indicator, and an info bar with cwd, original-session provenance when a historical session is resumed in a different runtime directory, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, a TUI-parity latest-100 median TPS indicator (`~31 tok/s [100] · 10% ↑ median [10000]`), and a stats popover. A fleet sidebar lists every other live session beside the transcript with the fleet cards' project, status/reasons, activity/latest-assistant preview, running/done subagent summaries, task progress, model, context, cost, message count, last activity, and any original-session provenance, deterministically ordered by effective project path then runtime start time independently of the Fleet page's selected sort, so needs-attention/error entries are emphasized — a filled attention chip or outlined error chip plus an entry border — without moving position; clicking an entry navigates to that session, desktop collapse and pointer/keyboard-resizable width persist browser-locally (default expanded, 260px), the hidden toggle border reflects the highest-priority other-session status, and neither sidebar nor toggle renders when no other live sessions exist. The subagent drill-in shows the same sidebar with its parent session excluded. Closed-session banners offer direct resume when the captured runtime directory still exists and an explicit directory chooser when the historical directory is missing or should be replaced. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. Registered built-in slash commands are discovered generically, deduplicated ahead of colliding resource commands, and intercepted before prompting: dashboard actions cover settings, model, scoped-models, export/import, name/session stats, fork/tree, new/compact/dream, resume/reload, and quit. `/scoped-models` deep-links to the Settings editor with the session's current cwd as project context; login/logout show an explicit not-yet-implemented notice, while copy/hotkeys/buddy give terminal-only guidance. Future built-ins are intercepted automatically. The RPC prompt boundary rejects any built-in that reaches it during command-loading races or failures, so slash text cannot leak to the model. Attachments are retained and the command is visibly rejected rather than silently discarded. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications for the viewed session render in its banner region; other sessions' and app-global notices use the fixed top-center toast stack. |
 | **Subagent view** | Transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. While the child is running, a composer sends the user's text unchanged to that specific child as steering input, displays its pending steering queue, and reports its effective `one-at-a-time` or `all` delivery mode, and the dock shows a **■ stop** (styled like the session view's) that stops only that child — see [Stopping a subagent](#stopping-a-subagent). Completed, failed, cancelled, rehydrated, and unavailable children remain read-only. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
@@ -155,7 +163,7 @@ names are included; unnamed historical rows use the first-message fallback
 already shown in the list. Full project paths and displayed `~/…` aliases match.
 Live cards use their effective runtime directory, while history uses its recorded
 CWD, not a canonical replacement directory or opaque session-file path. Existing
-`/tmp` grouping and exact-path resume/delete identities remain unchanged. This
+`/tmp` grouping and exact-path resume/rename/delete identities remain unchanged. This
 search covers metadata, **not full conversation text**.
 
 The existing **needs attention** count is a toggle that filters live sessions;
@@ -240,7 +248,7 @@ preview. For non-default keys applicable to history, rank groups by the selected
 primary value of their leading sorted member, with a stable project-key tie.
 Default ranks groups newest-first; Runtime started explicitly leaves both
 historical rows and groups on that default in either direction. Expansion state,
-resume-directory selection, and resume/delete targets are unchanged by sorting.
+resume-directory selection, and resume/rename/delete targets are unchanged by sorting.
 
 Selecting **Last activity** explicitly opts Fleet into live reordering as
 existing updates arrive. Default never moves cards for activity or attention
@@ -446,6 +454,53 @@ retry stays clear. Disabled retry, non-retryable errors, and exhausted retry
 remain terminal, and exhausted retry upserts the same status instead of
 duplicating it.
 
+### Renaming past sessions
+
+Every past-session row has **rename** between resume and delete. The rename
+modal starts with the session's current name (unnamed sessions start empty,
+with the first message as a placeholder). Confirming saves the trimmed name as a
+`session_info` entry, the same record `/name` and the TUI `/resume` picker write.
+Empty names are rejected; renaming does not clear a name. The list refreshes and
+other open dashboards update through the `disk_sessions_changed` event.
+
+**auto-generate** suggests a title from the saved session log using the same
+[tab-title generator](settings.md#tab-title) that names live sessions. It runs
+in a hidden utility runtime, started in the session's recorded project directory
+when that directory still exists (so project-local Explore agent and
+`agentModels` settings apply) and in the home directory otherwise. It follows
+`tabTitle.model` and `tabTitle.maxTitleLength`; `tabTitle.enabled` and
+`triggerAfter` only control automatic titling and do not disable the button.
+Settings and `models.json` are re-read from disk on every request, so changes
+saved in Dashboard Settings, the TUI, or by hand (including a model added to
+`models.json` and then pinned) apply to the next suggestion; if they cannot be
+re-read, the request fails rather than using stale settings. A pinned
+`tabTitle.model` that is not a known model is an error here, rather than a
+silent switch to another model.
+The suggestion only fills the input — nothing is saved until you confirm — and
+generating a title never modifies the session file. Failures (no model, an
+unknown pinned model, a provider error, an empty reply, the 60-second timeout,
+a session with no requests or activity to title, or an invalid session file)
+appear in the modal; closing the modal discards a pending suggestion.
+
+The server checks the path before touching anything: it must be an existing
+`.jsonl` regular file that starts with a session header. Anything else is
+rejected unchanged. If a dashboard runtime currently has the session open, the
+rename is sent to that runtime instead of being appended to the file, so the
+runtime's in-memory session stays consistent and its live card updates. A
+runtime that is still starting up on that session (a resume in progress) is
+waited for and then renamed the same way. The runtime is told which file the
+rename is for, so if it switches to a different session in the meantime the
+rename fails with an error asking you to try again, instead of renaming the
+other session. A dreb
+process outside this dashboard (such as a TUI) that has the same session open is
+not detected, the same as renaming from the TUI `/resume` picker: that process
+does not see the new name and can overwrite it if it later rewrites the file.
+
+Endpoints: `POST /api/sessions/rename` with `{ "path", "name" }` and
+`POST /api/sessions/title` with `{ "path" }` (returns `{ "title" }`); invalid
+paths and empty names return `400`. The title endpoint is backed by the
+[`generate_session_title`](rpc.md#generate_session_title) RPC command.
+
 ## Fleet transport and freshness
 
 A normal dashboard load is live-first: `GET /api/fleet/live` returns the live
@@ -468,7 +523,7 @@ server-validated historical-CWD availability and its canonical candidate, and
 bounds its first-message preview to 256 Unicode characters. Unavailable historical
 paths remain visible but do not enter operational project-root inventories.
 Internal parent paths and complete searchable transcript text never cross this
-browser boundary. After creating, resuming, stopping, or deleting a session, the
+browser boundary. After creating, resuming, stopping, renaming, or deleting a session, the
 client narrowly refreshes the disk list through `GET /api/sessions` rather than
 reloading the whole fleet. Session files are written only with their first
 assistant reply, so the client also re-reads the disk list when a `fleet_snapshot`

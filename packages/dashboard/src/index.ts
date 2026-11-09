@@ -357,6 +357,11 @@ async function main(): Promise<void> {
 			if (!result.ok) throw new Error(result.error ?? "Unknown deletion error");
 			return { method: result.method };
 		},
+		renameSession: async (path: string, name: string) => {
+			const result = SessionManager.renameSession(path, name);
+			if (!result.ok) throw new Error(result.error);
+			return { name: result.name };
+		},
 	});
 	closeDashboard = () => app.closeDashboard();
 

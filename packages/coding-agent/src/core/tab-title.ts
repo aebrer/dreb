@@ -7,12 +7,17 @@
  *
  * Fires at most once per session. Final failures are reported through the
  * optional onError hook while preserving fire-and-forget behavior.
+ *
+ * The same generator also titles saved sessions on request (the dashboard's
+ * rename modal): {@link TabTitleGenerator.primeFromHistory} loads stored messages
+ * into the context buffer and {@link TabTitleGenerator.generateNow} returns a
+ * title or throws.
  */
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Api, Context, Model } from "@dreb/ai";
+import type { Api, AssistantMessage, Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
 import { CONFIG_DIR_NAME, getPackageDir } from "../config.js";
 import { extractUserText, labelMessageEnd, labelToolEnd, RollingContextBuffer } from "./context-buffer.js";
@@ -136,6 +141,41 @@ export class TabTitleGenerator {
 		}
 	}
 
+	/**
+	 * Load stored session messages into the context buffer, labeled exactly like the live
+	 * message_end / tool_execution_end events. Never counts toward triggerAfter and never
+	 * starts automatic generation.
+	 */
+	primeFromHistory(
+		messages: ReadonlyArray<{ role: string; content?: unknown; toolName?: unknown; isError?: unknown }>,
+	): void {
+		for (const message of messages) {
+			if (message.role === "assistant") {
+				for (const entry of labelMessageEnd(message)) {
+					this.contextBuffer.append(entry);
+				}
+			} else if (message.role === "toolResult" && typeof message.toolName === "string") {
+				this.contextBuffer.append(
+					labelToolEnd({
+						toolName: message.toolName,
+						isError: message.isError === true,
+						result: { content: message.content },
+					}),
+				);
+			}
+		}
+	}
+
+	/**
+	 * Generate a title on explicit request and return it. Unlike the automatic path, this
+	 * ignores `enabled`, `triggerAfter`, and an existing session name, never sets the terminal
+	 * title or session name, and throws for every failure — including no model, no context,
+	 * and an unusable reply.
+	 */
+	async generateNow(): Promise<string> {
+		return this.produceTitle(true);
+	}
+
 	/** Exposed for testing — the current tool call count. */
 	get currentCount(): number {
 		return this.toolCallCount;
@@ -151,22 +191,7 @@ export class TabTitleGenerator {
 		// This guards the race where a name is set between generator construction and firing.
 		if (this.deps.getSessionName?.()) return;
 
-		// Single timeout bounds the entire pipeline (model probing + API key + LLM call)
-		const signal = AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS);
-
-		const model = await this.resolveModel(signal);
-		if (!model) return;
-
-		const userContext = this.buildContext();
-		if (!userContext) return;
-
-		const context: Context = {
-			systemPrompt: buildTitlePrompt(this.softTarget),
-			messages: [{ role: "user", content: userContext, timestamp: Date.now() }],
-		};
-
-		const response = await this.completeWithParentFallback(model, context, signal);
-		const title = this.sanitizeTitle(response);
+		const title = await this.produceTitle(false);
 		if (title) {
 			// Re-check: a name may have landed during the async LLM call.
 			if (this.deps.getSessionName?.()) return;
@@ -175,14 +200,58 @@ export class TabTitleGenerator {
 		}
 	}
 
+	/**
+	 * The single title pipeline shared by automatic and on-demand generation. With `strict`
+	 * false (automatic), a missing model, missing context, or unusable reply yields undefined;
+	 * with `strict` true (on demand), each of those throws a specific error.
+	 */
+	private produceTitle(strict: true): Promise<string>;
+	private produceTitle(strict: false): Promise<string | undefined>;
+	private async produceTitle(strict: boolean): Promise<string | undefined> {
+		// Single timeout bounds the entire pipeline (model probing + API key + LLM call)
+		const signal = AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS);
+
+		const model = await this.resolveModel(strict, signal);
+		if (!model) {
+			if (strict) {
+				throw new Error(
+					"Tab title generation failed: no model is available (set a default model or tabTitle.model)",
+				);
+			}
+			return undefined;
+		}
+
+		const builtContext = this.buildContext();
+		// Branch/repo/cwd metadata alone is not something to title: on demand, that would invent a
+		// title from the folder name. The automatic path keeps its long-standing behavior.
+		if (!builtContext || (strict && !builtContext.hasSessionContent)) {
+			if (strict) throw new Error("Tab title generation failed: the session has no requests or activity to title");
+			return undefined;
+		}
+
+		const context: Context = {
+			systemPrompt: buildTitlePrompt(this.softTarget),
+			messages: [{ role: "user", content: builtContext.text, timestamp: Date.now() }],
+		};
+
+		const { response, model: usedModel } = await this.completeWithParentFallback(model, context, signal);
+		const title = this.sanitizeTitle(response);
+		if (!title && strict) {
+			throw new Error(
+				`Tab title generation failed with model ${this.formatModel(usedModel)}: the model returned no usable title`,
+			);
+		}
+		return title;
+	}
+
 	private async completeWithParentFallback(
 		model: Model<Api>,
 		context: Context,
 		signal: AbortSignal,
-	): Promise<unknown> {
+	): Promise<{ response: AssistantMessage; model: Model<Api> }> {
 		const primaryErrorPrefix = `Tab title generation failed with model ${this.formatModel(model)}`;
 		try {
-			return await this.completeWithModel(model, context, signal);
+			return { response: await this.completeWithModel(model, context, signal), model };
 		} catch (primaryErr) {
 			const parentModel = this.deps.getModel();
 			if (!parentModel || this.isSameModel(model, parentModel)) {
@@ -190,7 +259,7 @@ export class TabTitleGenerator {
 			}
 
 			try {
-				return await this.completeWithModel(parentModel, context, signal);
+				return { response: await this.completeWithModel(parentModel, context, signal), model: parentModel };
 			} catch (parentErr) {
 				throw new Error(
 					`${primaryErrorPrefix}: ${this.formatError(primaryErr)}. ` +
@@ -201,31 +270,51 @@ export class TabTitleGenerator {
 		}
 	}
 
-	private async completeWithModel(model: Model<Api>, context: Context, signal: AbortSignal): Promise<unknown> {
+	private async completeWithModel(
+		model: Model<Api>,
+		context: Context,
+		signal: AbortSignal,
+	): Promise<AssistantMessage> {
 		const registry = this.deps.getModelRegistry();
 		const apiKey = await registry.getApiKey(model);
 		const sessionId = this.deps.getSessionId?.();
-		return completeSimple(model, context, {
+		const response = await completeSimple(model, context, {
 			apiKey,
 			maxRetryDelayMs: 0,
 			signal,
 			...(sessionId ? { sessionId } : {}),
 		});
+		// Providers report request failures as an error/aborted stop reason rather than
+		// rejecting. Treat them as failures so the parent fallback and error reporting run.
+		if (response?.stopReason === "error" || response?.stopReason === "aborted") {
+			if (signal.aborted) {
+				throw new Error(`timed out after ${TITLE_GENERATION_TIMEOUT_MS / 1000}s`);
+			}
+			throw new Error(response.errorMessage || `request ended with stop reason "${response.stopReason}"`);
+		}
+		return response;
 	}
 
-	private async resolveModel(signal?: AbortSignal): Promise<Model<Api> | undefined> {
+	private async resolveModel(strict: boolean, signal?: AbortSignal): Promise<Model<Api> | undefined> {
 		const parentModel = this.deps.getModel();
 		const parentProvider = this.deps.getProvider();
 		const registry = this.deps.getModelRegistry();
 
-		// A dedicated exact model bypasses Explore-agent routing. Dashboard/RPC writes
-		// validate availability; a stale hand-edited value falls back to the parent.
+		// A dedicated exact model bypasses Explore-agent routing. Dashboard/RPC writes validate
+		// availability; a stale hand-edited value falls back to the parent for automatic titles,
+		// but an explicit request must not silently swap in a model the user did not pick.
 		const configuredModel = this.settings?.model;
 		if (configuredModel) {
 			const slash = configuredModel.indexOf("/");
 			if (slash > 0 && slash < configuredModel.length - 1) {
 				const found = registry.find(configuredModel.slice(0, slash), configuredModel.slice(slash + 1));
 				if (found) return found;
+			}
+			if (strict) {
+				throw new Error(
+					`Tab title generation failed: tabTitle.model "${configuredModel}" is not a known model ` +
+						"(choose another Tab Title model in Settings, or add it to models.json)",
+				);
 			}
 			return parentModel;
 		}
@@ -304,7 +393,11 @@ export class TabTitleGenerator {
 		return undefined;
 	}
 
-	private buildContext(): string | undefined {
+	/**
+	 * Build the title request. `hasSessionContent` is true when it carries the user's requests or
+	 * session activity, as opposed to only branch/repo/cwd metadata.
+	 */
+	private buildContext(): { text: string; hasSessionContent: boolean } | undefined {
 		const lines: string[] = [];
 
 		// Primary signal: the user's actual request(s) from the current session.
@@ -343,7 +436,7 @@ export class TabTitleGenerator {
 		}
 
 		if (lines.length === 0) return undefined;
-		return lines.join("\n");
+		return { text: lines.join("\n"), hasSessionContent: userIntent.length > 0 || Boolean(bufferContent) };
 	}
 
 	/**

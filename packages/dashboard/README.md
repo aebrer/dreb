@@ -7,7 +7,9 @@ devices that are not sitting at the host terminal.
 
 Live agent control goes through RPC: the dashboard spawns `dreb --mode rpc`
 child processes (one per live session). The server also uses dreb's public
-session APIs for on-disk inventory/delete and serves its own host file API.
+session APIs for on-disk inventory, rename, and delete, and serves its own host
+file API. Auto-generated titles for past sessions come from the tab-title
+generator in a hidden utility runtime (`generate_session_title` RPC).
 
 ## Install & launch
 
@@ -30,7 +32,7 @@ Open `http://127.0.0.1:5343`.
 
 ## Session inventory roots
 
-Dashboard snapshots main-session storage when the server starts. It reads only the global `sessionDir` from `<agent-dir>/settings.json` (normally `~/.dreb/agent/settings.json`, or the directory selected by `DREB_CODING_AGENT_DIR`); a project `.dreb/settings.json` in the launch directory cannot redirect host-wide inventory. When configured, that directory is treated as a flat JSONL store for Fleet, `/api/sessions`, resync, resume, and delete. Without it, Dashboard scans the built-in nested all-project tree.
+Dashboard snapshots main-session storage when the server starts. It reads only the global `sessionDir` from `<agent-dir>/settings.json` (normally `~/.dreb/agent/settings.json`, or the directory selected by `DREB_CODING_AGENT_DIR`); a project `.dreb/settings.json` in the launch directory cannot redirect host-wide inventory. When configured, that directory is treated as a flat JSONL store for Fleet, `/api/sessions`, resync, resume, rename, and delete. Without it, Dashboard scans the built-in nested all-project tree.
 
 Absolute paths remain absolute, `~` expands from the home directory, and a relative global `sessionDir` resolves against Dashboard's startup cwd (an absolute global path is recommended). Restart Dashboard after changing the setting. The separate global-only `subagentSessionDir` controls new child logs in coding-agent runtimes; RPC recovery can also discover matching logs in the legacy root. Neither setting migrates files or changes credential/general configuration paths.
 
@@ -45,7 +47,8 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   activity, live subagents, task progress, ctx%, model, cost, last-assistant
   preview, and terminal provider-error reason). Below, one native past-session
   table with global column headings is grouped by project — three compact rows
-  each with an "all N on disk" expander — with resume/delete.
+  each with an "all N on disk" expander — with resume/rename/delete (rename can
+  auto-generate a title from the saved session log).
   Sessions remain listed when their historical project path is missing; resume
   then asks for an existing runtime directory and shows both paths without
   changing the persisted session header. At <=700px, cards and past-session
@@ -201,7 +204,7 @@ three. For a non-default key applicable to history, groups rank by the selected
 primary value of their leading sorted member, with a project-key tiebreak.
 **Runtime started is live-only**: past rows and groups remain default newest-first
 regardless of its direction. Expansion state, resume-directory handling, and
-resume/delete targets are preserved.
+resume/rename/delete targets are preserved.
 
 Choosing **Last activity** explicitly opts Fleet into reordering on existing
 live updates. Default never reorders for activity or attention changes; other
@@ -349,7 +352,7 @@ when it does), and bounds its first-message preview to 256 Unicode characters.
 Missing historical paths remain display metadata but are not used as memory/project
 roots or recent runtime choices. Internal parent paths and complete searchable
 transcript text never cross this boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
-create, resume, stop, or delete, rather than reloading the whole fleet. Because a
+create, resume, stop, rename, or delete, rather than reloading the whole fleet. Because a
 session file is written only with its first assistant reply, it also re-reads
 inventory once a `fleet_snapshot` shows an idle live runtime with messages newer
 than the last read and its file still unindexed (at most once per newer message
@@ -473,6 +476,13 @@ Enforcement layers, all fail-closed:
    expiries. Devices in the final 10% of their recorded lifetime receive an
    advance warning at most once per UTC day. Devices and expiry dates are listed
    in settings and can be unpaired.
+
+The protected `/api` namespace is checked case-insensitively, just like Express
+routes. Uppercase or mixed-case URLs cannot turn a denial into access to session
+data, host-file downloads, or the live SSE stream: non-allowlisted identities
+stay at 403, and allowlisted-but-unpaired devices stay at 401. Resolved identities
+can still load the public shell/assets and intended auth/pairing flow for their
+pairing or denial screen; protected data handlers remain inaccessible.
 
 **There is no LAN mode.** Access from another device — even on the same LAN —
 goes through Tailscale.

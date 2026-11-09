@@ -152,6 +152,7 @@ beforeAll(async () => {
 		staticDir: clientBuildDir,
 		listAllSessions: () => diskSessions,
 		deleteSession: async () => ({ method: "trash" }),
+		renameSession: async (_path: string, name: string) => ({ name }),
 		logger: () => {},
 	});
 	httpServer = await new Promise<Server>((resolve) => {
