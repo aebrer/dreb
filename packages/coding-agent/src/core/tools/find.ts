@@ -8,6 +8,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.js"
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { getDrebToolVisibleDirs } from "./dreb-paths.js";
+import { findWindowsPathGlob } from "./find-windows-glob.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -197,14 +198,11 @@ export function createFindToolDefinition(
 							return;
 						}
 
-						// Build fd arguments.
-						const args: string[] = [
-							"--glob",
-							"--color=never",
-							"--hidden",
-							"--max-results",
-							String(effectiveLimit),
-						];
+						// Windows path globs are matched after fd's ignore-aware traversal.
+						// Only matching candidates may consume the result limit.
+						const windowsPathGlob = process.platform === "win32" && pattern.includes("/");
+						const args: string[] = ["--glob", "--color=never", "--hidden"];
+						if (!windowsPathGlob) args.push("--max-results", String(effectiveLimit));
 						// fd respects .gitignore natively with proper directory scoping.
 						// Manual --ignore-file collection was removed because fd applies
 						// those patterns globally, causing venv/.gitignore files containing
@@ -212,22 +210,18 @@ export function createFindToolDefinition(
 						//
 						// fd --glob matches against the basename unless --full-path is set, so a
 						// path-containing pattern like "src/**/*.spec.ts" silently matched nothing.
-						// In --full-path mode fd matches the absolute candidate path, so the
-						// pattern also needs a leading "**/" to match anything at all.
+						// POSIX fd matching and the Windows matcher both test absolute paths,
+						// so relative path patterns need a leading "**/".
 						// fd >= 10.5 additionally rejects any pattern containing "/" outright
 						// unless --full-path is given. Ported from upstream pi-mono c5451af749.
 						let effectivePattern = pattern;
 						if (pattern.includes("/")) {
-							args.push("--full-path");
+							if (!windowsPathGlob) args.push("--full-path");
 							if (!pattern.startsWith("/") && !pattern.startsWith("**/") && pattern !== "**") {
 								effectivePattern = `**/${pattern}`;
 							}
-							// fd matches full paths using native separators on Windows.
-							if (process.platform === "win32") {
-								effectivePattern = effectivePattern.replaceAll("/", String.raw`[/\\]`);
-							}
 						}
-						args.push("--", effectivePattern, searchPath);
+						args.push("--", windowsPathGlob ? "*" : effectivePattern, searchPath);
 
 						// Include tool-visible .dreb/ subdirs when searching from project root.
 						// fd bypasses .gitignore for explicit path arguments.
@@ -237,7 +231,9 @@ export function createFindToolDefinition(
 							}
 						}
 
-						const result = spawnSync(fdPath, args, { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+						const result = windowsPathGlob
+							? await findWindowsPathGlob(fdPath, args, effectivePattern, effectiveLimit, signal)
+							: spawnSync(fdPath, args, { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
 						signal?.removeEventListener("abort", onAbort);
 						if (result.error) {
 							reject(new Error(`Failed to run fd: ${result.error.message}`));
