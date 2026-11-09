@@ -477,6 +477,13 @@ Enforcement layers, all fail-closed:
    advance warning at most once per UTC day. Devices and expiry dates are listed
    in settings and can be unpaired.
 
+The protected `/api` namespace is checked case-insensitively, just like Express
+routes. Uppercase or mixed-case URLs cannot turn a denial into access to session
+data, host-file downloads, or the live SSE stream: non-allowlisted identities
+stay at 403, and allowlisted-but-unpaired devices stay at 401. Resolved identities
+can still load the public shell/assets and intended auth/pairing flow for their
+pairing or denial screen; protected data handlers remain inaccessible.
+
 **There is no LAN mode.** Access from another device — even on the same LAN —
 goes through Tailscale.
 

@@ -221,6 +221,162 @@ describe("dashboard server — auth middleware", () => {
 	});
 });
 
+describe("dashboard server — case-variant API paths stay denied", () => {
+	const denials = [
+		{
+			label: "non-allowlisted identity",
+			status: 403,
+			needsPairing: false,
+			reason: 'Tailscale identity "mallory@example.com" is not on the dashboard allowlist',
+			identity: { loginName: "mallory@example.com", device: "phone" },
+		},
+		{
+			label: "allowlisted unpaired device",
+			status: 401,
+			needsPairing: true,
+			reason: "Device is not paired — pairing code required",
+			identity: { loginName: "alice@example.com", device: "phone" },
+		},
+	] as const;
+
+	function denied(decision: (typeof denials)[number]) {
+		const auth = new DashboardAuth();
+		vi.spyOn(auth, "authenticate").mockResolvedValue({
+			allowed: false,
+			status: decision.status,
+			reason: decision.reason,
+			needsPairing: decision.needsPairing,
+			identity: decision.identity,
+		});
+		return auth;
+	}
+
+	const caseVariantPaths = [
+		"/API/sessions",
+		"/Api/sessions/",
+		"/aPi/sessions",
+		"/API/fleet",
+		"/API/fleet/live",
+		"/API/settings",
+		"/API/memories/scopes",
+		"/API/files/places",
+		"/API",
+		"/api/",
+	];
+
+	it.each(denials.flatMap((decision) => caseVariantPaths.map((path) => ({ decision, path }))))(
+		"denies $path for a $label before any data source runs",
+		async ({ decision, path }) => {
+			const listAllSessions = vi.fn(async () => [] as DashboardSessionInfoSource[]);
+			const logger = vi.fn();
+			const { base } = await startServer({ auth: denied(decision), listAllSessions, logger });
+
+			const res = await fetch(`${base}${path}`);
+			expect(res.status).toBe(decision.status);
+			await expect(res.json()).resolves.toMatchObject({
+				error: decision.reason,
+				needsPairing: decision.needsPairing,
+				identity: decision.identity.loginName,
+			});
+			expect(listAllSessions).not.toHaveBeenCalled();
+			expect(logger).toHaveBeenCalledWith(expect.stringContaining(`denied GET ${path}:`));
+		},
+	);
+
+	it.each(denials)("keeps a case-variant download from returning host file bytes for a $label", async (decision) => {
+		const dir = await createTempProject();
+		const target = join(dir, "secret.txt");
+		await writeFile(target, "UNREAD host bytes");
+		const { base } = await startServer({ auth: denied(decision) });
+
+		const res = await fetch(`${base}/API/files/download?path=${encodeURIComponent(target)}`);
+		expect(res.status).toBe(decision.status);
+		const body = await res.text();
+		expect(body).not.toContain("UNREAD host bytes");
+	});
+
+	it.each(denials)("refuses a case-variant SSE handshake for a $label", async (decision) => {
+		const { base } = await startServer({ auth: denied(decision) });
+		const url = new URL(base);
+
+		for (const path of ["/API/events", "/Api/events"]) {
+			const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+				let body = "";
+				const req = request({ host: url.hostname, port: url.port, path, method: "GET" }, (res) => {
+					res.setEncoding("utf8");
+					res.on("data", (chunk) => {
+						body += chunk;
+					});
+					res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+				});
+				req.on("error", reject);
+				req.end();
+			});
+			expect(result.status).toBe(decision.status);
+			expect(result.body).not.toContain(":ok");
+			expect(result.body).not.toContain("event: ");
+			expect(JSON.parse(result.body)).toMatchObject({
+				error: decision.reason,
+				needsPairing: decision.needsPairing,
+			});
+		}
+	});
+
+	it("keeps the pairing and denial screens loadable for a denied identity", async () => {
+		const staticDir = await mkdtemp(join(tmpdir(), "dreb-dash-static-"));
+		tempDirs.push(staticDir);
+		await writeFile(join(staticDir, "index.html"), "<main>dashboard shell</main>");
+		await mkdir(join(staticDir, "styles"), { recursive: true });
+		await writeFile(join(staticDir, "styles", "app.css"), ":root{--ok:#000}");
+		const decision = denials[1];
+		const { base } = await startServer({ auth: denied(decision), staticDir });
+
+		const shell = await fetch(`${base}/`);
+		expect(shell.status).toBe(200);
+		expect(await shell.text()).toContain("dashboard shell");
+
+		const deepRoute = await fetch(`${base}/pairing`);
+		expect(deepRoute.status).toBe(200);
+		expect(await deepRoute.text()).toContain("dashboard shell");
+
+		const asset = await fetch(`${base}/styles/app.css`);
+		expect(asset.status).toBe(200);
+
+		// The exact-match auth/pair carve-outs are unchanged; a case variant falls
+		// through to the middleware denial response, which carries the same fields.
+		const variantStatus = await fetch(`${base}/API/auth`);
+		expect(variantStatus.status).toBe(decision.status);
+		await expect(variantStatus.json()).resolves.toMatchObject({
+			error: decision.reason,
+			needsPairing: decision.needsPairing,
+			identity: decision.identity.loginName,
+		});
+		const variantPair = await fetch(`${base}/API/pair`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ pin: "123456" }),
+		});
+		expect(variantPair.status).toBe(decision.status);
+	});
+
+	it("still serves authorized requests at case-variant API paths", async () => {
+		const cwd = await createTempProject();
+		const listAllSessions = async (): Promise<DashboardSessionInfoSource[]> => [diskSession(cwd)];
+		const { base } = await startServer({ listAllSessions });
+
+		for (const path of ["/API/sessions", "/Api/sessions/"]) {
+			const res = await fetch(`${base}${path}`);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { sessions: Array<{ id: string }> };
+			expect(body.sessions.map((session) => session.id)).toEqual(["one"]);
+		}
+
+		// The API namespace is no longer answered by the SPA shell fallback.
+		const bareApi = await fetch(`${base}/API`);
+		expect(bareApi.status).toBe(404);
+	});
+});
+
 describe("dashboard server — memories routes", () => {
 	it("lists scopes, reads, saves, conflicts, and deletes through authenticated routes", async () => {
 		const home = await createTempProject();

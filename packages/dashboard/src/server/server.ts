@@ -89,6 +89,16 @@ export interface DashboardServerOptions {
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
 export const MAX_SSE_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The dashboard API namespace, decided the same way Express 5 matches routes:
+ * case-insensitively, at a `/api` segment boundary. A case-sensitive check here
+ * would let a case-variant URL (for example `/API/sessions`) past the auth
+ * middleware's SPA-shell exception and straight into a protected handler.
+ */
+const API_PATH_PATTERN = /^\/api(?:\/|$)/i;
+/** The SSE endpoint, matched with the same case-insensitivity as the API boundary. */
+const SSE_EVENTS_PATH_PATTERN = /^\/api\/events$/i;
 export const CLIENT_DIAGNOSTIC_RATE_LIMIT_MS = 30_000;
 const CLIENT_DIAGNOSTIC_CONNECTION_TTL_MS = 10 * 60_000;
 
@@ -224,7 +234,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	// -- auth middleware (every route, fail-closed) ---------------------------
 	app.use((req: AuthedRequest, res: Response, next: NextFunction) => {
-		if (req.path === "/api/events") req.sseConnectionId = randomUUID();
+		if (SSE_EVENTS_PATH_PATTERN.test(req.path)) req.sseConnectionId = randomUUID();
 		auth
 			.authenticate({
 				remoteAddress: req.socket.remoteAddress,
@@ -239,12 +249,19 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 				if (canRenderAuthScreen) {
 					// The auth/pairing endpoints must be reachable by allowed-but-unpaired
 					// identities, and /api/auth must also be reachable by rejected
-					// Tailscale identities so the SPA denial screen can name them.
+					// Tailscale identities so the SPA denial screen can name them. These
+					// exceptions stay exact-match on purpose: the middleware's own denial
+					// response below carries the same fields, so a case variant of either
+					// path still reaches the pairing/denial screen without widening the
+					// unauthenticated surface.
 					if (req.path === "/api/auth" || (decision.needsPairing && req.path === "/api/pair")) return next();
 					// Let the SPA shell + static assets load so the client-side pairing or
 					// denial screen can render. No data exposure: every /api/* data route
 					// below stays fail-closed — only non-API GETs (the app shell) are allowed.
-					if (req.method === "GET" && !req.path.startsWith("/api/")) return next();
+					// The boundary must be matched case-insensitively because Express 5 matches
+					// the API routes case-insensitively: a case-sensitive check here let a URL
+					// like /API/files/download reach a protected handler despite the denial.
+					if (req.method === "GET" && !API_PATH_PATTERN.test(req.path)) return next();
 				}
 				if (req.sseConnectionId) {
 					log(
@@ -1403,7 +1420,9 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	if (options.staticDir) {
 		app.use(express.static(options.staticDir));
 		// SPA fallback: serve index.html for non-API GETs (client-side routing).
-		app.get(/^\/(?!api\/).*/, (_req, res) => {
+		// Same case-insensitive API boundary as the auth middleware, so a case
+		// variant of an API path can never be answered with the app shell here.
+		app.get(/^\/(?!api(?:\/|$))/i, (_req, res) => {
 			res.sendFile(join(options.staticDir!, "index.html"));
 		});
 	}
