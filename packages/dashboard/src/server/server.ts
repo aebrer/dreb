@@ -255,7 +255,8 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 					// Let the SPA shell + static assets load so the client-side pairing or
 					// denial screen can render. No data exposure: every /api/* data route
 					// below stays fail-closed — only non-API GETs (the app shell) are allowed.
-					if (req.method === "GET" && !req.path.startsWith("/api/")) return next();
+					// Match Express's case-insensitive API routing, including the /api boundary.
+					if (req.method === "GET" && !/^\/api(?:\/|$)/i.test(req.path)) return next();
 				}
 				if (req.sseConnectionId) {
 					log(
