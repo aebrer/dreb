@@ -85,6 +85,14 @@ Layers, in order, all fail-closed (any auth-subsystem error denies):
 **There is no LAN mode.** The server never listens on a LAN-reachable
 interface without Tailscale identity enforcement.
 
+Protected API paths use a case-insensitive `/api` segment boundary, matching
+Express routing. Changing `/api` to `/API` or `/Api` cannot bypass a denial:
+non-allowlisted identities receive 403 and allowlisted-but-unpaired devices
+receive 401 for protected GETs, including file downloads and live SSE events.
+Resolved identities may still load the SPA shell and static assets for the
+pairing/denial screens; the intended auth/pairing exceptions do not expose
+protected data handlers. A bare API namespace is not an SPA-shell route.
+
 ### What a paired device can do
 
 Pairing grants the same power as sitting at the terminal: chatting with

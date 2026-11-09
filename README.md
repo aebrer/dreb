@@ -76,6 +76,8 @@ bunx --force dreb
 
 dreb ships with 13 standard built-in tools enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `watch_github_ci` (blocks until pull-request checks pass or fail), and `ask_user` (pause and ask the user one or more structured multiple-choice or free-text clarifying questions in a single batch wizard, with Markdown-formatted question text and an in-card Stop agent action, rendered natively in the TUI and Dashboard). Setting `backgroundAgents.maxConcurrentSubagents` to `0` removes `subagent` from new parent sessions. Three additional tools are always active: `search` for semantic codebase search, `skill` for loading workflows, and `tasks_update` for visible task tracking. `suggest_next` (ghost text command suggestions, Tab to accept) is active by default but excluded when `--tools` is specified.
 
+`find` supports basename globs such as `*.ts` and path globs such as `src/**/*.spec.ts`. Use forward slashes in patterns on every platform, including Windows. In path globs, `*` stays within one directory and `**/` can match zero or more directories; traversal still respects `.gitignore`.
+
 Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `/tree`, `/fork`, `/compact`, `/dream`, `/buddy`, `/export`, `/reload`, and `/hotkeys`. The message queue lets you steer a running agent or queue follow-up work without waiting for the current turn to finish.
 
 ### Provider and model routing
@@ -173,6 +175,8 @@ dreb-dashboard --remote --allow you@example.com
 ```
 
 Every remote request passes fail-closed layers: peer-specific tailnet identity resolution (concurrent requests for one peer share the in-flight lookup), identity allowlist (empty list denies everyone), first-login pairing with a rotating 6-digit code shown only on the host, then a signed device cookie. New pairings last 180 days by default; Settings can choose 1–3650 days for future pairings without changing existing expiry dates. A remote device in the final 10% of its recorded lifetime gets an advance warning at most once per UTC day. Paired devices and their expiry dates are listed in settings and can be unpaired at any time. Pairing grants terminal-equivalent power — the pairing screen says so before the code is entered.
+
+Protected API data, file downloads, and live event streams remain denied to rejected or unpaired remote identities even when URL capitalization changes. The pairing and denial screens remain loadable for resolved identities that need them.
 
 **Installable PWA + mobile notifications.** The dashboard is an installable web app — add it to the home screen on Android Chrome or iOS Safari 16.4+ for a standalone, no-URL-bar experience. Needs-attention notifications go through the service worker (`registration.showNotification`) — the only path that works on Android (which removed the page Notification constructor) and on iOS (installed PWA only). For remote access from a phone, notifications and the service worker require a **secure context** (HTTPS), so the dashboard can terminate TLS itself using `tailscale cert` files — no reverse proxy, and the auth model is unchanged (the peer address stays the real tailnet IP):
 
