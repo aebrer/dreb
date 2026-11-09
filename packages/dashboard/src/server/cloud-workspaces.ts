@@ -8,6 +8,7 @@ import {
 } from "@dreb/coding-agent/cloud-workspaces";
 import type { Express, Response } from "express";
 import type { CloudAvailabilityDto, CloudWorkspacesDto } from "../shared/protocol.js";
+import { browseCloudFolders } from "./cloud-folders.js";
 
 export class CloudRequestError extends Error {}
 
@@ -73,6 +74,7 @@ export function registerCloudWorkspaceRoutes(
 	registry: () => CloudWorkspaceRegistry,
 	log: (line: string) => void,
 	sessionStorage: () => CloudSessionStorage,
+	folderHomeDir: string,
 ): void {
 	// Installed after DashboardAuth and JSON parsing, never on a public/auth-bypass router.
 	app.use("/api/cloud-workspaces", (req, res, next) => {
@@ -83,6 +85,13 @@ export function registerCloudWorkspaceRoutes(
 		} catch (error) {
 			sendCloudError(res, error);
 		}
+	});
+	app.post("/api/cloud-workspaces/folders", (req, res) => {
+		(async () => {
+			const body = object(req.body, ["path"]);
+			const path = Object.hasOwn(body, "path") ? hostPath(body.path) : undefined;
+			res.json(await browseCloudFolders(path, folderHomeDir));
+		})().catch((error) => sendCloudError(res, error));
 	});
 	app.get("/api/cloud-workspaces/session-storage", (_req, res) => {
 		(async () => res.json(await sessionStorage().read()))().catch((error) => sendCloudError(res, error));

@@ -266,6 +266,36 @@ describe("Cloud Workspaces transport", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([undefined, "/host/folder with space ", "C:\\Users\\you\\cloud"])(
+		"reads host folders with exact optional path %s and an abort signal",
+		async (path) => {
+			const listing = { path: "/canonical", parent: "/", entries: [], truncated: false };
+			const fetchMock = mockJson(listing);
+			const signal = new AbortController().signal;
+			expect(await api.cloudFolders(path, signal)).toEqual(listing);
+			expect(fetchMock.mock.calls).toEqual([
+				[
+					"/api/cloud-workspaces/folders",
+					{
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(path === undefined ? {} : { path }),
+						signal,
+					},
+				],
+			]);
+		},
+	);
+
+	it("retains a folder-browse failure without retrying or selecting a default", async () => {
+		const fetchMock = mockJson({ code: "UNAVAILABLE", error: "Host folder unavailable" }, 409);
+		await expect(api.cloudFolders("/missing")).rejects.toMatchObject({
+			status: 409,
+			body: { code: "UNAVAILABLE", error: "Host folder unavailable" },
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it.each([undefined, false, true])(
 		"POSTs connect with initialize=%s without changing the path",
 		async (initialize) => {

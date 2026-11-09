@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../src/client/api.js", () => ({
 	api: {
 		cloudWorkspaces: vi.fn(),
+		cloudFolders: vi.fn(),
 		cloudSessionStorage: vi.fn(),
 		saveCloudSessionStorage: vi.fn(),
 		connectWorkspace: vi.fn(),
@@ -149,6 +150,12 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	vi.spyOn(console, "warn");
 	vi.mocked(api.cloudWorkspaces).mockResolvedValue(empty);
+	vi.mocked(api.cloudFolders).mockResolvedValue({
+		path: "/chosen folder ",
+		parent: "/",
+		entries: [],
+		truncated: false,
+	});
 	vi.mocked(api.cloudSessionStorage).mockResolvedValue(localStorage);
 	vi.mocked(api.saveCloudSessionStorage).mockResolvedValue({
 		...localStorage,
@@ -180,6 +187,77 @@ function storeLogs(root = "/logs") {
 	enter("Folder path on this computer", root);
 	button("Store session logs here").click();
 }
+
+describe("CloudWorkspacesScreen host-folder picker", () => {
+	it("keeps paste/focus freely editable and does not browse until explicitly opened", async () => {
+		mount();
+		await settle();
+		enter("Folder path on this computer", "/pasted path ");
+		field("Folder path on this computer").focus();
+		field("Folder path on this computer").click();
+		expect(api.cloudFolders).not.toHaveBeenCalled();
+		button("Browse folders…").click();
+		await settle();
+		expect(api.cloudFolders).toHaveBeenCalledExactlyOnceWith("/pasted path ", expect.any(AbortSignal));
+		button("Choose folder").click();
+		expect(field("Folder path on this computer").value).toBe("/chosen folder ");
+		expect(document.querySelector("[role=dialog]")).toBeNull();
+		expect(api.linkProject).not.toHaveBeenCalled();
+		expect(api.connectWorkspace).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+	});
+
+	it("cancels without altering the pasted path or pending consent", async () => {
+		mount();
+		await settle();
+		storeLogs("/keep this path ");
+		button("Browse folders…").click();
+		await settle();
+		button("Cancel folder selection").click();
+		expect(field("Folder path on this computer").value).toBe("/keep this path ");
+		expect(document.querySelector(".cloud-confirmation")).not.toBeNull();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+	});
+
+	it.each(["setup", "logs"] as const)(
+		"a chosen folder invalidates pending %s confirmation without writing",
+		async (consent) => {
+			mount();
+			await settle();
+			if (consent === "setup") {
+				vi.mocked(api.linkProject).mockRejectedValueOnce(failure("NOT_FOUND"));
+				enter("Folder path on this computer", "/original");
+				submit("Connect folder");
+				await settle();
+			} else storeLogs("/original");
+			expect(document.querySelector(".cloud-confirmation")).not.toBeNull();
+			button("Browse folders…").click();
+			await settle();
+			button("Choose folder").click();
+			expect(document.querySelector(".cloud-confirmation")).toBeNull();
+			expect(field("Folder path on this computer").value).toBe("/chosen folder ");
+			expect(api.linkProject).toHaveBeenCalledTimes(consent === "setup" ? 1 : 0);
+			expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+		},
+	);
+
+	it("closes and aborts read-only browsing if a guarded metadata mutation begins", async () => {
+		const listing = deferred<Awaited<ReturnType<typeof api.cloudFolders>>>();
+		vi.mocked(api.cloudFolders).mockReturnValueOnce(listing.promise);
+		mount();
+		await settle();
+		enter("Folder path on this computer", "/project");
+		button("Browse folders…").click();
+		const signal = vi.mocked(api.cloudFolders).mock.calls[0][1]!;
+		submit("Connect folder");
+		await settle();
+		expect(document.querySelector("[role=dialog]")).toBeNull();
+		expect(signal.aborted).toBe(true);
+		listing.resolve({ path: "/late", parent: "/", entries: [], truncated: false });
+		await settle();
+		expect(field("Folder path on this computer").value).toBe("/project");
+	});
+});
 
 describe("CloudWorkspacesScreen one-folder setup", () => {
 	it("defaults to one path input and closed native advanced forms without writing settings", async () => {

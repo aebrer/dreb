@@ -7,6 +7,7 @@ import type {
 } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Topbar } from "../components/common.js";
+import { HostFolderPicker } from "../components/host-folder-picker.js";
 import type { AppStore } from "../state/store.js";
 import "../styles/cloud-workspaces.css";
 
@@ -55,6 +56,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 	const [notice, setNotice] = createSignal("");
 	const [pending, setPending] = createSignal(false);
 	const [folderPath, setFolderPath] = createSignal("");
+	const [folderPicker, setFolderPicker] = createSignal(false);
 	const [setupPath, setSetupPath] = createSignal<string>();
 	const [storage, setStorage] = createSignal<CloudSessionStorageDto>();
 	const [storageLoading, setStorageLoading] = createSignal(true);
@@ -129,6 +131,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 	) {
 		// This guard is set synchronously, before invoking the API or awaiting anything.
 		if (disposed || pending()) return;
+		setFolderPicker(false);
 		setPending(true);
 		const generation = ++mutationGeneration;
 		loadGeneration += 1;
@@ -159,6 +162,12 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 		return workspace
 			? joinedPath(workspace.path, location.relativePath, snapshot()?.pathStyle === "windows")
 			: undefined;
+	}
+
+	function changeFolderPath(path: string) {
+		setFolderPath(path);
+		setSetupPath(undefined);
+		setStorageConfirmation(undefined);
 	}
 
 	function connectFolder() {
@@ -204,6 +213,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 		const confirmation = storageConfirmation();
 		if (disposed || pending() || !storageReady() || !confirmation) return;
 		// Share the synchronous single-flight guard with all metadata forms/actions.
+		setFolderPicker(false);
 		setPending(true);
 		const generation = ++mutationGeneration;
 		setWriteError("");
@@ -427,19 +437,27 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 				>
 					<fieldset disabled={pending()}>
 						<legend>Connect a folder</legend>
-						<label>
-							Folder path on this computer
-							<input
-								required
-								value={folderPath()}
-								placeholder={placeholder()}
-								onInput={(event) => {
-									setFolderPath(event.currentTarget.value);
-									setSetupPath(undefined);
-									setStorageConfirmation(undefined);
+						<div class="cloud-folder-input">
+							<label>
+								Folder path on this computer
+								<input
+									required
+									value={folderPath()}
+									placeholder={placeholder()}
+									onInput={(event) => changeFolderPath(event.currentTarget.value)}
+								/>
+							</label>
+							<button
+								class="btn"
+								type="button"
+								aria-haspopup="dialog"
+								onClick={() => {
+									if (!pending()) setFolderPicker(true);
 								}}
-							/>
-						</label>
+							>
+								Browse folders…
+							</button>
+						</div>
 						<p>
 							The same path can be used independently for a project connection and optional session logs.
 							Projects may remain elsewhere. Connecting a folder does not change log locations.
@@ -449,6 +467,17 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 						</button>
 					</fieldset>
 				</form>
+				<Show when={folderPicker()}>
+					<HostFolderPicker
+						initialPath={folderPath()}
+						onDismiss={() => setFolderPicker(false)}
+						onSelect={(path) => {
+							if (disposed || pending()) return;
+							changeFolderPath(path);
+							setFolderPicker(false);
+						}}
+					/>
+				</Show>
 				<Show when={setupPath()}>
 					{(path) => (
 						<fieldset class="cloud-confirmation" disabled={pending()}>

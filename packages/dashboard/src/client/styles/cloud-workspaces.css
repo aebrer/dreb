@@ -54,6 +54,20 @@
 	min-height: 2.75rem;
 }
 
+.cloud-workspaces .cloud-folder-input {
+	display: flex;
+	align-items: end;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+	margin-block: var(--space-4);
+}
+
+.cloud-workspaces .cloud-folder-input label {
+	flex: 1 1 18rem;
+	min-width: 0;
+	margin: 0;
+}
+
 .cloud-workspaces .cloud-actions {
 	display: flex;
 	flex-wrap: wrap;

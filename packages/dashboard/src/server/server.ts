@@ -93,6 +93,8 @@ export interface DashboardServerOptions {
 	cloudWorkspaceRegistry?: CloudWorkspaceRegistry;
 	/** Global-only session storage; isolated profile injected by tests. */
 	cloudSessionStorage?: CloudSessionStorage;
+	/** Test-only synthetic home for folder browsing; production uses the host home. */
+	cloudFolderHome?: string;
 	/** Resolved main inventory root captured at server startup (undefined = built-in). */
 	sessionInventoryRoot?: string;
 	/** Base used for legacy relative global storage settings, matching startup inventory. */
@@ -737,7 +739,13 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	// -- metadata-only workspaces (same authentication, no utility runtime) -------
-	registerCloudWorkspaceRoutes(app, getCloudRegistry, log, getCloudSessionStorage);
+	registerCloudWorkspaceRoutes(
+		app,
+		getCloudRegistry,
+		log,
+		getCloudSessionStorage,
+		options.cloudFolderHome ?? homedir(),
+	);
 
 	// -- runtimes ---------------------------------------------------------------
 	app.post("/api/runtimes", (req, res) => {
