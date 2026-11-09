@@ -182,6 +182,34 @@ describe("RPC session commands", () => {
 
 		await expect(client.listAllSessions()).rejects.toThrow("Unable to list sessions");
 	});
+
+	it("RpcClient.generateSessionTitle waits past the runtime's 60 s bound and unwraps the title", async () => {
+		const client = new RpcClient() as any;
+		client.send = vi.fn().mockResolvedValue({
+			type: "response",
+			command: "generate_session_title",
+			success: true,
+			data: { title: "Fix login bug" },
+		});
+
+		await expect(client.generateSessionTitle("/sessions/one.jsonl")).resolves.toEqual({ title: "Fix login bug" });
+		expect(client.send).toHaveBeenCalledWith(
+			{ type: "generate_session_title", sessionPath: "/sessions/one.jsonl" },
+			90_000,
+		);
+	});
+
+	it("RpcClient.generateSessionTitle rejects with the RPC error message on failure", async () => {
+		const client = new RpcClient() as any;
+		client.send = vi.fn().mockResolvedValue({
+			type: "response",
+			command: "generate_session_title",
+			success: false,
+			error: "Tab title generation failed: no model is available (set a default model or tabTitle.model)",
+		});
+
+		await expect(client.generateSessionTitle("/sessions/one.jsonl")).rejects.toThrow("no model is available");
+	});
 });
 
 describe("deleteSessionForRpc (server-side handler wiring)", () => {

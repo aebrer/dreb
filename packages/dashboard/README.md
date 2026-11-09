@@ -7,7 +7,9 @@ devices that are not sitting at the host terminal.
 
 Live agent control goes through RPC: the dashboard spawns `dreb --mode rpc`
 child processes (one per live session). The server also uses dreb's public
-session APIs for on-disk inventory/delete and serves its own host file API.
+session APIs for on-disk inventory, rename, and delete, and serves its own host
+file API. Auto-generated titles for past sessions come from the tab-title
+generator in a hidden utility runtime (`generate_session_title` RPC).
 
 ## Install & launch
 
@@ -45,7 +47,8 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   activity, live subagents, task progress, ctx%, model, cost, last-assistant
   preview, and terminal provider-error reason). Below, one native past-session
   table with global column headings is grouped by project — three compact rows
-  each with an "all N on disk" expander — with resume/delete.
+  each with an "all N on disk" expander — with resume/rename/delete (rename can
+  auto-generate a title from the saved session log).
   Sessions remain listed when their historical project path is missing; resume
   then asks for an existing runtime directory and shows both paths without
   changing the persisted session header. At <=700px, cards and past-session
@@ -201,7 +204,7 @@ three. For a non-default key applicable to history, groups rank by the selected
 primary value of their leading sorted member, with a project-key tiebreak.
 **Runtime started is live-only**: past rows and groups remain default newest-first
 regardless of its direction. Expansion state, resume-directory handling, and
-resume/delete targets are preserved.
+resume/rename/delete targets are preserved.
 
 Choosing **Last activity** explicitly opts Fleet into reordering on existing
 live updates. Default never reorders for activity or attention changes; other
@@ -349,7 +352,7 @@ when it does), and bounds its first-message preview to 256 Unicode characters.
 Missing historical paths remain display metadata but are not used as memory/project
 roots or recent runtime choices. Internal parent paths and complete searchable
 transcript text never cross this boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
-create, resume, stop, or delete, rather than reloading the whole fleet. Because a
+create, resume, stop, rename, or delete, rather than reloading the whole fleet. Because a
 session file is written only with its first assistant reply, it also re-reads
 inventory once a `fleet_snapshot` shows an idle live runtime with messages newer
 than the last read and its file still unindexed (at most once per newer message

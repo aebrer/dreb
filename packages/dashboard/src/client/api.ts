@@ -201,6 +201,12 @@ export const api = {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ path }),
 		}),
+	/** Rename a past session by file path (routed to its runtime when one holds it). */
+	renameDiskSession: (path: string, name: string) =>
+		request<{ name: string }>("/api/sessions/rename", json({ path, name })),
+	/** Ask the tab-title generator for a title for a saved session; the file is not modified. */
+	generateSessionTitle: (path: string, signal?: AbortSignal) =>
+		request<{ title: string }>("/api/sessions/title", { ...json({ path }), signal }),
 
 	settings: (cwd?: string) => request<SettingsDto>(withCwd("/api/settings", cwd)),
 	saveSettings: (settings: SettingsUpdateDto, cwd?: string) =>

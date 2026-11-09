@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { RpcClient, type RpcDashboardSnapshot, type RpcExitInfo } from "@dreb/coding-agent/rpc";
@@ -194,6 +194,33 @@ export class RuntimePool {
 
 	list(): RuntimeHandle[] {
 		return [...this.runtimes.values()];
+	}
+
+	/**
+	 * The live session runtime whose current session file is `sessionPath`, if any. Each runtime
+	 * is asked for its authoritative state, because cached state lags `/new`, imports, and session
+	 * switches. A runtime that cannot answer (e.g. its process exited) is judged by its last known
+	 * state; it cannot write the file in that condition, and routing to it fails loudly if it does
+	 * claim the file. Utility runtimes never own a session file and are not considered. Paths are
+	 * compared after `resolve()`.
+	 */
+	async findBySessionFile(sessionPath: string): Promise<RuntimeHandle | undefined> {
+		const target = resolve(sessionPath);
+		const handles = this.list();
+		const sessionFiles = await Promise.all(
+			handles.map(async (handle) => {
+				try {
+					const state = (await handle.client.getState()) as { sessionFile?: string };
+					return state.sessionFile;
+				} catch {
+					return handle.lastState?.sessionFile ?? handle.sessionFileFallback;
+				}
+			}),
+		);
+		return handles.find((_handle, index) => {
+			const sessionFile = sessionFiles[index];
+			return sessionFile !== undefined && resolve(sessionFile) === target;
+		});
 	}
 
 	get(key: string): RuntimeHandle | undefined {

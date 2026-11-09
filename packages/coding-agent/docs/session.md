@@ -306,7 +306,7 @@ Set `label` to `undefined` to clear a label.
 
 ### SessionInfoEntry
 
-Session metadata (e.g., user-defined display name). Set via `/name` command or `dreb.setSessionName()` in extensions.
+Session metadata (e.g., user-defined display name). Set via `/name` command, the TUI `/resume` picker's rename, the dashboard's [past-session rename](dashboard.md#renaming-past-sessions), automatic tab titles, or `dreb.setSessionName()` in extensions. The latest `session_info` entry wins.
 
 ```json
 {"type":"session_info","id":"k1l2m3n4","parentId":"j0k1l2m3","timestamp":"2024-12-03T14:35:00.000Z","name":"Refactor auth module"}

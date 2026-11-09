@@ -129,6 +129,7 @@ async function startHttpRuntime() {
 		pool,
 		listAllSessions: async () => [],
 		deleteSession: async () => ({ method: "trash" }),
+		renameSession: async (_path: string, name: string) => ({ name }),
 		logger: () => {},
 	});
 	const server = await new Promise<Server>((resolve) => {

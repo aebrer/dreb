@@ -193,6 +193,8 @@ export function makeFakeClient() {
 		fork: vi.fn(async () => ({ text: "", cancelled: false })),
 		listSessions: vi.fn(async () => []),
 		switchSession: vi.fn(async () => ({ cancelled: false })),
+		setSessionName: vi.fn(async (_name: string) => {}),
+		generateSessionTitle: vi.fn(async (_sessionPath: string) => ({ title: "Generated title" })),
 		prompt: vi.fn(async () => {}),
 		steer: vi.fn(async () => {}),
 		followUp: vi.fn(async () => {}),
@@ -444,6 +446,40 @@ describe("RuntimePool", () => {
 		expect(clients[0].stop).toHaveBeenCalled();
 		expect(pool.list()).toHaveLength(0);
 		expect(await pool.stop(handle.key)).toBe(false);
+	});
+
+	it("findBySessionFile() matches each runtime's authoritative session file after resolve()", async () => {
+		const { pool, clients } = makePool();
+		await pool.create("/tmp/a");
+		const owner = await pool.create("/tmp/b", "/sessions/resumed.jsonl");
+		const baseState = await clients[1].getState();
+		// The runtime moved on from its resume path; only its current file is owned.
+		vi.mocked(clients[1].getState).mockResolvedValue({
+			...baseState,
+			sessionFile: "/sessions/sub/../current.jsonl",
+		} as any);
+
+		await expect(pool.findBySessionFile("/sessions/current.jsonl")).resolves.toBe(owner);
+		await expect(pool.findBySessionFile("/sessions/resumed.jsonl")).resolves.toBeUndefined();
+		await expect(pool.findBySessionFile("/sessions/other.jsonl")).resolves.toBeUndefined();
+	});
+
+	it("findBySessionFile() uses the last known session file when a runtime cannot answer", async () => {
+		const { pool, clients } = makePool();
+		const owner = await pool.create("/tmp/a", "/sessions/resumed.jsonl");
+		vi.mocked(clients[0].getState).mockRejectedValue(new Error("RPC process not running"));
+
+		await expect(pool.findBySessionFile("/sessions/resumed.jsonl")).resolves.toBe(owner);
+	});
+
+	it("findBySessionFile() never returns a utility runtime", async () => {
+		const { pool, clients } = makePool();
+		await pool.ensureUtilityRuntime("/tmp/utility");
+		const baseState = await clients[0].getState();
+		vi.mocked(clients[0].getState).mockResolvedValue({ ...baseState, sessionFile: "/sessions/one.jsonl" } as any);
+
+		await expect(pool.findBySessionFile("/sessions/one.jsonl")).resolves.toBeUndefined();
+		expect(clients[0].getState).toHaveBeenCalledTimes(1);
 	});
 
 	it("stopAll() stops session runtimes and utility runtimes", async () => {

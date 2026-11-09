@@ -932,6 +932,31 @@ The path uses the same unrestricted, cross-project addressing as [`switch_sessio
 }
 ```
 
+#### generate_session_title
+
+Generate a title for a saved session file on request, using the same tab-title generator that names live sessions (see [Tab Title settings](settings.md#tab-title)). The session is not loaded or switched to, and the file is never modified: it is read once (old formats are migrated in memory only) and its current branch is used as the context. The command uses this process's `tabTitle.model` and `tabTitle.maxTitleLength` settings, Explore-agent `agentModels` routing, and current model as the parent fallback; `tabTitle.enabled` and `triggerAfter` do not apply. The title is returned, not saved — rename the session separately (for example with the dashboard's rename endpoint or `/name` after resuming).
+
+```json
+{"type": "generate_session_title", "sessionPath": "/path/to/session.jsonl"}
+```
+
+Response:
+```json
+{"type": "response", "command": "generate_session_title", "success": true, "data": {"title": "Fix login flow"}}
+```
+
+Generation is bounded at 60 seconds; `RpcClient.generateSessionTitle()` waits 90 seconds so the generator's own timeout error is returned. Every failure is an error response — an invalid path (not `.jsonl`, missing, not a regular file, or no session header), no available model, a provider error (with the parent-retry detail), or an empty reply:
+```json
+{
+  "type": "response",
+  "command": "generate_session_title",
+  "success": false,
+  "error": "Tab title generation failed with model anthropic/claude-haiku-4-5: 429 rate limited"
+}
+```
+
+Like [`delete_session`](#delete_session), the path is resolved without a sessions-directory containment guard.
+
 #### fork
 
 Create a new fork from any user or assistant message in the transcript. Can be cancelled by a `session_before_fork` extension event handler. For a **user** message the response `text` is that message's text (offered as editor pre-fill for re-asking) and the branch rewinds to before it; for an **assistant** message the branch *includes* that response (continue from that answer) and `text` is empty. Assistant turns that were interrupted (`error`/`aborted`) or are still waiting on tool results are not valid fork points and are rejected.

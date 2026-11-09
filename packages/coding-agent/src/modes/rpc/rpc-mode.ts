@@ -48,7 +48,7 @@ import type { ModelRegistry } from "../../core/model-registry.js";
 import { parseModelPattern, resolveModelScopePatterns } from "../../core/model-resolver.js";
 import { isFatalExitPending, takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
-import { SessionManager } from "../../core/session-manager.js";
+import { readSessionTranscript, SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
 import { BUILTIN_SLASH_COMMANDS, parseBuiltinSlashCommand } from "../../core/slash-commands.js";
 import { SubagentSessionCostTracker } from "../../core/subagent-session-cost-tracker.js";
@@ -344,6 +344,38 @@ export async function deleteSessionForRpc(
 		return { ok: false, error: result.error ?? "Unknown deletion error" };
 	}
 	return { ok: true, method: result.method };
+}
+
+/**
+ * Handle the `generate_session_title` RPC command: title a saved session file on request with the
+ * same {@link TabTitleGenerator} that auto-titles live sessions. The transcript is read without
+ * modifying the file; the generator uses this runtime's tab-title settings, model registry,
+ * `agentModels` override, and current model (as the parent fallback), while messages, repo, cwd,
+ * and the forwarded session ID come from the saved session. Every failure maps to an error.
+ */
+export async function generateSessionTitleForRpc(
+	session: Pick<AgentSession, "settingsManager" | "modelRegistry" | "model">,
+	sessionPath: string,
+): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
+	try {
+		const { header, messages } = readSessionTranscript(sessionPath);
+		const sessionCwd = header.cwd || undefined;
+		const generator = new TabTitleGenerator(session.settingsManager.getTabTitleSettings(), {
+			setTitle: () => {},
+			getMessages: () => messages,
+			getModel: () => session.model,
+			getModelRegistry: () => session.modelRegistry,
+			getProvider: () => session.model?.provider,
+			getSessionId: () => header.id,
+			getAgentModelsOverride: (name) => session.settingsManager.getAgentModelsForAgent(name),
+			getRepo: () => (sessionCwd ? basename(sessionCwd) : undefined),
+			getCwd: () => sessionCwd,
+		});
+		generator.primeFromHistory(messages);
+		return { ok: true, title: await generator.generateNow() };
+	} catch (err) {
+		return { ok: false, error: err instanceof Error ? err.message : String(err) };
+	}
 }
 
 /** Handle `list_all_sessions` using a custom flat store when one is active. */
@@ -2292,6 +2324,14 @@ export async function runRpcMode(
 					return error(id, "delete_session", result.error);
 				}
 				return success(id, "delete_session", { method: result.method });
+			}
+
+			case "generate_session_title": {
+				const result = await generateSessionTitleForRpc(session, command.sessionPath);
+				if (!result.ok) {
+					return error(id, "generate_session_title", result.error);
+				}
+				return success(id, "generate_session_title", { title: result.title });
 			}
 
 			case "fork": {

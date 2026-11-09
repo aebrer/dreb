@@ -38,6 +38,7 @@ async function startStaticServer(staticDir: string): Promise<string> {
 		pool,
 		listAllSessions: async () => [],
 		deleteSession: async () => ({ method: "trash" }),
+		renameSession: async (_path: string, name: string) => ({ name }),
 		staticDir,
 	});
 	const server = await new Promise<Server>((resolve) => {
