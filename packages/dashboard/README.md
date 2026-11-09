@@ -32,7 +32,7 @@ Open `http://127.0.0.1:5343`.
 
 ## Session inventory roots
 
-Dashboard snapshots main-session storage when the server starts. It reads only the global `sessionDir` from `<agent-dir>/settings.json` (normally `~/.dreb/agent/settings.json`, or the directory selected by `DREB_CODING_AGENT_DIR`); a project `.dreb/settings.json` in the launch directory cannot redirect host-wide inventory. When configured, that directory is treated as a flat JSONL store for Fleet, `/api/sessions`, resync, resume, and delete. Without it, Dashboard scans the built-in nested all-project tree.
+Dashboard snapshots main-session storage when the server starts. It reads only the global `sessionDir` from `<agent-dir>/settings.json` (normally `~/.dreb/agent/settings.json`, or the directory selected by `DREB_CODING_AGENT_DIR`); a project `.dreb/settings.json` in the launch directory cannot redirect host-wide inventory. When configured, that directory is treated as a flat JSONL store for Fleet, `/api/sessions`, resync, resume, rename, and delete. Without it, Dashboard scans the built-in nested all-project tree.
 
 Absolute paths remain absolute, `~` expands from the home directory, and a relative global `sessionDir` resolves against Dashboard's startup cwd (an absolute global path is recommended). Restart Dashboard after changing the setting. The separate global-only `subagentSessionDir` controls new child logs in coding-agent runtimes; RPC recovery can also discover matching logs in the legacy root. Neither setting migrates files or changes credential/general configuration paths.
 
