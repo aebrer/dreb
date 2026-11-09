@@ -8,7 +8,6 @@ import type {
 	AuthStatusDto,
 	BackgroundAgentDto,
 	ClientConnectionDiagnosticDto,
-	CloudFolderListingDto,
 	CloudSessionDirectoriesDto,
 	CloudSessionStorageDto,
 	CloudWorkspacesDto,
@@ -131,11 +130,6 @@ export const api = {
 		return request<DashboardResyncDto>(`/api/resync${suffix}`, { signal });
 	},
 	cloudWorkspaces: () => request<CloudWorkspacesDto>("/api/cloud-workspaces"),
-	cloudFolders: (path?: string, signal?: AbortSignal) =>
-		request<CloudFolderListingDto>("/api/cloud-workspaces/folders", {
-			...json(path === undefined ? {} : { path }),
-			signal,
-		}),
 	cloudSessionStorage: () => request<CloudSessionStorageDto>("/api/cloud-workspaces/session-storage"),
 	saveCloudSessionStorage: (root: string | null, expected: CloudSessionDirectoriesDto) =>
 		request<CloudSessionStorageDto>(

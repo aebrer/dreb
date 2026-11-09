@@ -118,42 +118,22 @@ Absolute paths remain absolute, `~` expands from the home directory, and a relat
   paired-device expiry/unpair management.
 - **Cloud Workspaces** — independent `#/settings/cloud-workspaces`, linked as
   lowercase **cloud workspaces** from Settings → Devices, separately from pairing/access controls.
-  Type/paste a folder path or explicitly **Browse folders…**, then separately
-  connect a project; manual forms/workspace management stay under closed
-  **advanced setup**. Separately opt into global session-log storage.
+  Connect a project with one folder path; manual forms/workspace management stay
+  under closed **advanced setup**. Separately opt into global session-log storage.
   Refresh local availability, rebind the same ID and confirm local-only
   unlink/disconnect without terminal or model setup. See [Cloud Workspaces](#cloud-workspaces).
 - **Pairing** — remote first-login rotating-code flow.
 
 ### Cloud Workspaces
 
-Open **Settings → Devices → cloud workspaces** (`#/settings/cloud-workspaces`) and
-enter or browse native absolute paths on the **backend host**, not your phone/browser.
-This independent page does not load ordinary Settings/model/version resources and
+Open **Settings → Devices → cloud workspaces** (`#/settings/cloud-workspaces`) and enter
+native absolute paths on the **backend host**, not your phone/browser. This
+independent page does not load ordinary Settings/model/version resources and
 needs no model credentials or terminal commands. Ordinary local workflows need
 no registration; projects can remain outside synced roots.
 
-The default form has one freely editable/pasteable input, **Folder path on this
-computer**, with an adjacent **Browse folders…** button. Added later at the user's
-request, explicit Browse opens the managed **Choose a folder on this computer**
-modal; page mount and input click/focus never open it. Use **Home folder**, **Up
-one folder**, or edit **Browse location on this computer** and choose **Go to
-folder**. Its folder-only list shows loading, error/retry, empty and truncation
-states. **Choose folder** only fills the input and invalidates previous path-bound
-setup/log confirmations; it never connects, initializes, saves or restarts.
-**Cancel folder selection**, Escape or backdrop dismissal leaves the input alone.
-No native OS folder picker, `showDirectoryPicker` or directory upload is used.
-
-The dedicated authenticated `POST /api/cloud-workspaces/folders` reads immediate
-filesystem metadata only, without file contents, logs, markers, settings, registry,
-context, trust, runtime or provider access. It inspects at most 10,000 entries and
-returns at most 500 folders with returned names sorted; truncation means some
-names were omitted, so enter the full path if needed. Existing directory symlinks
-can open through canonical validation; broken/unreadable entries are omitted.
-This does not reuse the ordinary Files listing endpoint, which evaluates trust
-through a utility runtime. See [browsing details](../coding-agent/docs/cloud-workspaces.md#browsing-an-existing-host-folder).
-
-**Connect folder** reuses an existing project marker or known already-registered mapping;
+The default form has one input, **Folder path on this computer**. **Connect
+folder** reuses an existing project marker or known already-registered mapping;
 no workspace setup or typed UUID is needed. Only an exact missing-project-marker
 result offers explicit first-device **Set up folder** confirmation. Initialization
 is never automatic. On other hosts, wait for marker delivery and connect/link the
@@ -165,7 +145,7 @@ first-marker initialization and known-full-ID markerless modes, with direct-loca
 or explicit workspace-relative binding. Any present project marker must agree
 with the supplied UUID. Workspace and project UUID strings may match across their
 separate namespaces; different projects still need distinct project IDs.
-No folders are moved or projects automatically discovered.
+No folders are moved or discovered.
 
 Project paths appear first; full IDs, binding/root relationships and marker
 information are under **technical details**. **Refresh metadata** reports canonical
@@ -184,9 +164,9 @@ locations**. A logs-only folder need not be connected; projects can remain elsew
 The selected existing root is canonicalized; defaults for **all projects** become
 `<root>/.dreb/sessions` and `<root>/.dreb/subagent-sessions` (`CONFIG_DIR_NAME` aware).
 Only the existing global `sessionDir` and `subagentSessionDir` fields in host-local
-`settings.json` change, preserving all others. Reading the page, browsing/choosing
-a folder, connecting or editing paths never changes log settings. Confirmed
-**Use local log defaults** removes only those two fields. Mapping and log saves are separate operations,
+`settings.json` change, preserving all others. Reading the page, connecting or
+editing paths never changes log settings. Confirmed **Use local log defaults**
+removes only those two fields. Mapping and log saves are separate operations,
 not a combined transaction.
 
 Saving/resetting creates no target log directories, markers, registry or logs,
@@ -213,8 +193,7 @@ registry and separate global log configuration honor `DREB_CODING_AGENT_DIR`,
 separately from Dashboard pairing storage. Never sync the registry or entire agent
 directory; keep machine configuration, authentication and trust local. There are
 no new preference keys: only explicit log saves modify the two existing global
-fields. Folder browsing adds no browser persistence, polling, recursive scan or
-folder creation; there is no native OS folder picker.
+fields. There is no polling or folder browser/native picker.
 
 This does not persist main/subagent project associations, automatically remap
 resume, or deliver portable parent/child/full-history continuation or safe

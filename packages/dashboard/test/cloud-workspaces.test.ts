@@ -9,19 +9,11 @@ import {
 	CloudWorkspaceRegistry,
 } from "@dreb/coding-agent/cloud-workspaces";
 import type { RpcClient } from "@dreb/coding-agent/rpc";
-import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthRequestInfo, DashboardAuth, MemoryPairingStorage } from "../src/server/auth.js";
-import { registerCloudWorkspaceRoutes } from "../src/server/cloud-workspaces.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
 import { createDashboardServer } from "../src/server/server.js";
-import type {
-	CloudFolderListingDto,
-	CloudProjectDto,
-	CloudWorkspaceDto,
-	CloudWorkspacesDto,
-	RuntimeInfoDto,
-} from "../src/shared/protocol.js";
+import type { CloudProjectDto, CloudWorkspaceDto, CloudWorkspacesDto, RuntimeInfoDto } from "../src/shared/protocol.js";
 
 // Keep real filesystem operations, but permit narrowly targeted failure injection.
 vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof fs>()) }));
@@ -149,7 +141,6 @@ async function start(
 		defaultRegistry?: boolean;
 		sessionStorage?: CloudSessionStorage;
 		activeInventoryRoot?: string;
-		cloudFolderHome?: string;
 	} = {},
 ) {
 	const shared = options.registry ?? registry;
@@ -176,7 +167,6 @@ async function start(
 		pool,
 		cloudWorkspaceRegistry: options.defaultRegistry ? undefined : shared,
 		cloudSessionStorage: options.sessionStorage,
-		cloudFolderHome: options.cloudFolderHome ?? root,
 		sessionInventoryRoot: options.activeInventoryRoot,
 		sessionStorageBaseCwd: root,
 		memoryHomeDir: join(root, "synthetic-home"),
@@ -229,203 +219,6 @@ function noSpawn(server: Awaited<ReturnType<typeof start>>): void {
 	expect(server.clientFactory).not.toHaveBeenCalled();
 	expect(server.pool.list()).toEqual([]);
 }
-
-describe("read-only host folder browsing (no registry, settings or runtime access)", () => {
-	const route = `${API}/folders`;
-
-	it("never invokes lazy service factories during route installation or folder access", async () => {
-		// Adapter-level factory spies supplement the full authenticated-server tests below.
-		const app = express();
-		app.use(express.json({ limit: 16 * 1024, strict: false }));
-		const registryFactory = vi.fn(() => {
-			throw new Error("Registry factory must remain cold");
-		});
-		const storageFactory = vi.fn(() => {
-			throw new Error("Session-storage factory must remain cold");
-		});
-		const log = vi.fn();
-		registerCloudWorkspaceRoutes(app, registryFactory, log, storageFactory, root);
-		expect(registryFactory).not.toHaveBeenCalled();
-		expect(storageFactory).not.toHaveBeenCalled();
-		const listener = await new Promise<Server>((resolve) => {
-			const server = app.listen(0, "127.0.0.1", () => resolve(server));
-		});
-		cleanups.push(
-			() => new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve()))),
-		);
-		const address = listener.address();
-		if (!address || typeof address === "string") throw new Error("Missing test server address");
-		const result = await http<CloudFolderListingDto>(`http://127.0.0.1:${address.port}`, "POST", route, {});
-		expect(result.status).toBe(200);
-		expect(result.body.path).toBe(root);
-		expect(registryFactory).not.toHaveBeenCalled();
-		expect(storageFactory).not.toHaveBeenCalled();
-		expect(log).not.toHaveBeenCalled();
-	});
-
-	it("defaults POST {} to the isolated home and returns only native immediate folder paths", async () => {
-		const names = ["Zulu", "alpha", "Résumé notes"];
-		if (process.platform !== "win32") names.push(" trailing space ");
-		for (const name of names) await folder(name);
-		await folder(join("alpha", "not-immediate"));
-		await fs.writeFile(join(root, "file.txt"), "never return file contents");
-		const server = await start();
-		const result = await http<CloudFolderListingDto>(server.base, "POST", route, {});
-		expect(result).toEqual({
-			status: 200,
-			body: {
-				path: root,
-				parent: dirname(root),
-				entries: names.sort((a, b) => a.localeCompare(b)).map((name) => ({ name, path: join(root, name) })),
-				truncated: false,
-			},
-		});
-		await absent(dirname(registry.path));
-		noRegistryCalls(server.registryCalls);
-		noSpawn(server);
-	});
-
-	it("uses an explicit path rather than home and canonicalizes directory aliases and native parents", async () => {
-		const home = await folder("synthetic-home");
-		const selected = await folder("selected folder");
-		const child = await folder(join("selected folder", "child folder"));
-		const alias = join(root, "alias");
-		await fs.symlink(selected, alias, "dir");
-		const server = await start({ cloudFolderHome: home });
-		expect((await http<CloudFolderListingDto>(server.base, "POST", route, {})).body).toEqual({
-			path: home,
-			parent: root,
-			entries: [],
-			truncated: false,
-		});
-		expect((await http<CloudFolderListingDto>(server.base, "POST", route, { path: alias })).body).toEqual({
-			path: selected,
-			parent: root,
-			entries: [{ name: "child folder", path: child }],
-			truncated: false,
-		});
-		noRegistryCalls(server.registryCalls);
-		noSpawn(server);
-	});
-
-	it("ignores corrupt project/global metadata, settings, context and logs without reading or changing bytes", async () => {
-		const selected = await folder("selected");
-		await fs.mkdir(join(selected, ".dreb"));
-		await fs.mkdir(dirname(registry.path));
-		const files = [
-			markerPath(selected, "project"),
-			markerPath(selected, "workspace"),
-			join(selected, ".dreb", "settings.json"),
-			join(selected, "AGENTS.md"),
-			join(selected, "CLAUDE.md"),
-			join(selected, "history.jsonl"),
-			join(dirname(registry.path), "settings.json"),
-			registry.path,
-		];
-		const bytes = Buffer.from("{corrupt synthetic private metadata\n\0");
-		for (const path of files) await fs.writeFile(path, bytes);
-		const reads = vi.spyOn(fs, "readFile");
-		const opens = vi.spyOn(fs, "open");
-		const writes = vi.spyOn(fs, "writeFile");
-		const mkdir = vi.spyOn(fs, "mkdir");
-		const rename = vi.spyOn(fs, "rename");
-		const listFiles = vi.spyOn(fs, "readdir");
-		const server = await start();
-		const result = await http<CloudFolderListingDto>(server.base, "POST", route, { path: selected });
-		expect(result.status).toBe(200);
-		expect(result.body.entries).toEqual([{ name: ".dreb", path: join(selected, ".dreb") }]);
-		for (const call of [reads, opens, writes, mkdir, rename, listFiles]) expect(call).not.toHaveBeenCalled();
-		expect(JSON.stringify(result.body)).not.toContain("corrupt synthetic private metadata");
-		expect(server.log).not.toHaveBeenCalled();
-		noRegistryCalls(server.registryCalls);
-		noSpawn(server);
-		reads.mockRestore();
-		expect(await Promise.all(files.map((path) => fs.readFile(path)))).toEqual(files.map(() => bytes));
-	});
-
-	it("leaves the default registry and session-storage factories cold, even across repeated browsing", async () => {
-		const agentDir = join(root, "default-agent");
-		vi.stubEnv("DREB_CODING_AGENT_DIR", agentDir);
-		const methods = REGISTRY_METHODS.map((name) => vi.spyOn(CloudWorkspaceRegistry.prototype, name));
-		const readSettings = vi.spyOn(CloudSessionStorage.prototype, "read");
-		const setSettings = vi.spyOn(CloudSessionStorage.prototype, "setRoot");
-		const read = vi.spyOn(fs, "readFile");
-		const open = vi.spyOn(fs, "open");
-		const server = await start({ defaultRegistry: true });
-		for (const body of [{}, { path: root }, {}])
-			expect((await http(server.base, "POST", route, body)).status).toBe(200);
-		for (const method of [...methods, readSettings, setSettings, read, open]) expect(method).not.toHaveBeenCalled();
-		await absent(agentDir);
-		noRegistryCalls(server.registryCalls);
-		noSpawn(server);
-	});
-
-	it.each([
-		undefined,
-		null,
-		[],
-		"folder",
-		true,
-		42,
-		{ path: null },
-		{ path: 42 },
-		{ path: false },
-		{ path: [] },
-		{ path: {} },
-		{ path: "" },
-		{ path: "relative" },
-		{ path: "~/folder" },
-		{ path: "bad\0path" },
-		{ unexpected: true },
-		{ path: "/unused", initialize: true },
-		{ homeDir: "/override" },
-		{ agentDir: "/override" },
-	])("rejects strict invalid browse request %j before filesystem/registry/runtime access", async (body) => {
-		const server = await start();
-		const open = vi.spyOn(fs, "opendir");
-		errorResult(await http(server.base, "POST", route, body), 400, "INVALID_REQUEST");
-		expect(open).not.toHaveBeenCalled();
-		noRegistryCalls(server.registryCalls);
-		noSpawn(server);
-		await absent(dirname(registry.path));
-	});
-
-	it("retains query rejection, malformed JSON errors and the exact 16 KiB parser boundary", async () => {
-		const server = await start();
-		const open = vi.spyOn(fs, "opendir");
-		errorResult(await http(server.base, "POST", `${route}?path=ignored`, {}), 400, "INVALID_REQUEST");
-		errorResult(await http(server.base, "POST", route, undefined, {}, '{"path":'), 400, "INVALID_REQUEST");
-		expect(open).not.toHaveBeenCalled();
-		const exact = `{}${" ".repeat(16 * 1024 - 2)}`;
-		for (const variant of [route, `${route.toUpperCase()}/`]) {
-			expect((await http(server.base, "POST", variant, undefined, {}, exact)).status).toBe(200);
-			open.mockClear();
-			errorResult(await http(server.base, "POST", variant, undefined, {}, `${exact} `), 413, "INVALID_REQUEST");
-			expect(open).not.toHaveBeenCalled();
-		}
-		noRegistryCalls(server.registryCalls);
-		noSpawn(server);
-	});
-
-	it("projects filesystem failures without silently returning home or an empty success", async () => {
-		const file = join(root, "not-directory");
-		await fs.writeFile(file, "synthetic");
-		const server = await start();
-		errorResult(await http(server.base, "POST", route, { path: join(root, "missing") }), 409, "UNAVAILABLE");
-		errorResult(await http(server.base, "POST", route, { path: file }), 400, "INVALID_PATH");
-		const access = vi
-			.spyOn(fs, "access")
-			.mockRejectedValueOnce(Object.assign(new Error("synthetic private denial"), { code: "EACCES" }));
-		errorResult(await http(server.base, "POST", route, { path: root }), 409, "UNAVAILABLE");
-		access.mockRestore();
-		vi.spyOn(fs, "opendir").mockRejectedValueOnce(new Error("private unexpected error detail"));
-		const result = await http(server.base, "POST", route, { path: root });
-		errorResult(result, 500, "IO_ERROR");
-		expect(JSON.stringify(result.body)).not.toMatch(/private|stack|cause/);
-		noRegistryCalls(server.registryCalls);
-		noSpawn(server);
-	});
-});
 
 describe("optional global session-log settings (no runtime or transcript access)", () => {
 	const route = `${API}/session-storage`;
@@ -1194,7 +987,6 @@ const endpoints = [
 	["GET", API],
 	["GET", `${API}/session-storage`],
 	["PUT", `${API}/session-storage`],
-	["POST", `${API}/folders`],
 	["POST", `${API}/connect`],
 	["POST", `${API}/link`],
 	["PUT", `${API}/workspaces/${WORKSPACE}`],
@@ -1241,7 +1033,6 @@ describe("cloud endpoints stay behind fail-closed Dashboard authentication", () 
 				status = mode === "unpaired" ? 401 : mode === "resolver-error" ? 500 : 403;
 			}
 			const server = await start({ auth });
-			const browse = vi.spyOn(fs, "opendir");
 			for (const [method, path] of endpoints) {
 				const result = await http(
 					server.base,
@@ -1255,7 +1046,6 @@ describe("cloud endpoints stay behind fail-closed Dashboard authentication", () 
 				expect(result.body.error).toEqual(expect.any(String));
 				if (mode === "unpaired") expect(result.body).toMatchObject({ needsPairing: true });
 			}
-			expect(browse).not.toHaveBeenCalled();
 			noRegistryCalls(server.registryCalls);
 			noSpawn(server);
 			await absent(dirname(registry.path));
@@ -1276,7 +1066,6 @@ describe("cloud endpoints stay behind fail-closed Dashboard authentication", () 
 		const path = await folder("paired-workspace");
 		const project = await folder("paired-project");
 		expect((await http(base, "GET", API, undefined, headers)).status).toBe(200);
-		expect((await http<CloudFolderListingDto>(base, "POST", `${API}/folders`, {}, headers)).body.path).toBe(root);
 		const workspace = await http<CloudWorkspaceDto>(
 			base,
 			"POST",

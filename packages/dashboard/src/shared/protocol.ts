@@ -43,14 +43,6 @@ export interface CloudWorkspacesDto {
 	projects: CloudProjectDto[];
 }
 
-/** Read-only, nonrecursive folder selection on the backend computer. */
-export interface CloudFolderListingDto {
-	path: string;
-	parent: string | null;
-	entries: Array<{ name: string; path: string }>;
-	truncated: boolean;
-}
-
 /** Only the global session-log locations, never other host settings. */
 export interface CloudSessionDirectoriesDto {
 	sessionDir: string | null;

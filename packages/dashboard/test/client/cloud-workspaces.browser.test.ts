@@ -27,7 +27,6 @@ const LONG_PATH = `/synthetic-host/${"unbroken-project-path-".repeat(22)}/projec
 const LONG_ERROR = `Host directory unavailable: ${"synthetic-storage-error-".repeat(24)}`;
 const CLOUD_ROUTE = "#/settings/cloud-workspaces";
 const STORAGE_PATH = "/api/cloud-workspaces/session-storage";
-const FOLDERS_PATH = "/api/cloud-workspaces/folders";
 const defaultStorage = (): CloudSessionStorageDto => ({
 	sessionDir: null,
 	subagentSessionDir: null,
@@ -119,8 +118,6 @@ let pageErrors: string[];
 let overviewFailure: Failure | undefined;
 let sessionStorage: CloudSessionStorageDto;
 let storageReadFailure: Failure | undefined;
-let folderReadFailure: Failure | undefined;
-let folderGate: ReturnType<typeof gate> | undefined;
 let storageWriteFailure: Failure | undefined;
 let mutationFailure: Failure | undefined;
 let createFailure: Failure | undefined;
@@ -163,8 +160,6 @@ beforeEach(async () => {
 	overviewFailure = undefined;
 	sessionStorage = defaultStorage();
 	storageReadFailure = undefined;
-	folderReadFailure = undefined;
-	folderGate = undefined;
 	storageWriteFailure = undefined;
 	mutationFailure = undefined;
 	createFailure = undefined;
@@ -214,17 +209,6 @@ beforeEach(async () => {
 							};
 				return json(sessionStorage);
 			}
-		}
-		if (path === FOLDERS_PATH && method === "POST" && page.url().endsWith(CLOUD_ROUTE)) {
-			await folderGate?.promise;
-			if (folderReadFailure) return json(folderReadFailure, 409);
-			const path = typeof body?.path === "string" ? body.path : "/synthetic-host/home";
-			return json({
-				path,
-				parent: path === "/synthetic-host/home" ? null : "/synthetic-host/home",
-				entries: path === "/synthetic-host/home" ? [{ name: "Cloud folder", path: LONG_PATH }] : [],
-				truncated: false,
-			});
 		}
 		// Only explicit Settings discovery tests permit its existing resource loaders.
 		// The cold Cloud route allows only registry and narrow session-storage metadata.
@@ -351,7 +335,6 @@ beforeEach(async () => {
 	});
 });
 afterEach(async () => {
-	folderGate?.release();
 	mutationGate?.release();
 	createGate?.release();
 	await page?.close();
@@ -359,9 +342,7 @@ afterEach(async () => {
 	expect(unexpected, "strict API allowlist").toEqual([]);
 });
 
-// Folder POSTs are explicit read-only enumeration, not mapping/settings mutations.
-const writes = () =>
-	calls.filter((c) => c.path.startsWith("/api/cloud-workspaces") && c.method !== "GET" && c.path !== FOLDERS_PATH);
+const writes = () => calls.filter((c) => c.path.startsWith("/api/cloud-workspaces") && c.method !== "GET");
 const creates = () => calls.filter((c) => c.path === "/api/runtimes" && c.method === "POST");
 const cloudReads = () => calls.filter((c) => c.path === "/api/cloud-workspaces");
 function compactProjects(): void {
@@ -522,83 +503,6 @@ describe("Cloud Workspaces discovery within Settings Devices", () => {
 		);
 	}
 });
-
-for (const width of [360, 390, 701, 1024]) {
-	describe(`host-folder selection at ${width}px`, () => {
-		it("keeps paste intact, opens lazily by keyboard, traps focus, navigates and selects without writes", async () => {
-			await open(width, CLOUD_ROUTE);
-			const input = page.getByLabel("Folder path on this computer", { exact: true });
-			await input.fill("/synthetic-host/pasted path ");
-			await input.focus();
-			expect(calls.filter((c) => c.path === FOLDERS_PATH)).toEqual([]);
-			const browse = page.getByRole("button", { name: "Browse folders…", exact: true });
-			await browse.focus();
-			await page.keyboard.press("Enter");
-			const dialog = page.getByRole("dialog", { name: "Choose a folder on this computer", exact: true });
-			await dialog.getByText("No subfolders in this folder.", { exact: true }).waitFor();
-			expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
-			expect(calls.filter((c) => c.path === FOLDERS_PATH).map((c) => c.body)).toEqual([
-				{ path: "/synthetic-host/pasted path " },
-			]);
-			await dialog.getByRole("button", { name: "Cancel folder selection", exact: true }).focus();
-			await page.keyboard.press("Tab");
-			expect(
-				await dialog
-					.getByRole("button", { name: "Home folder", exact: true })
-					.evaluate((el) => el === document.activeElement),
-			).toBe(true);
-			await page.keyboard.press("Shift+Tab");
-			expect(
-				await dialog
-					.getByRole("button", { name: "Cancel folder selection", exact: true })
-					.evaluate((el) => el === document.activeElement),
-			).toBe(true);
-			await page.keyboard.press("Escape");
-			await dialog.waitFor({ state: "detached" });
-			expect(await browse.evaluate((el) => el === document.activeElement)).toBe(true);
-			expect(await input.inputValue()).toBe("/synthetic-host/pasted path ");
-			await browse.click();
-			await dialog.getByRole("button", { name: "Home folder", exact: true }).click();
-			await dialog.getByRole("button", { name: "Cloud folder", exact: true }).waitFor();
-			await dialog.getByRole("button", { name: "Cloud folder", exact: true }).click();
-			await dialog.getByText(`Current folder: ${LONG_PATH}`, { exact: true }).waitFor();
-			await expectLayout(".modal-backdrop", width <= 700);
-			await dialog.getByRole("button", { name: "Choose folder", exact: true }).click();
-			await dialog.waitFor({ state: "detached" });
-			expect(await input.inputValue()).toBe(LONG_PATH);
-			expect(await browse.evaluate((el) => el === document.activeElement)).toBe(true);
-			expect(writes()).toEqual([]);
-			expect(creates()).toEqual([]);
-			expect(calls.some((c) => c.path.startsWith("/api/files") || c.path.startsWith("/api/settings"))).toBe(false);
-			await expectLayout("body", width <= 700);
-		});
-
-		it("surfaces browse errors and permits explicit retry or cancellation while a read is pending", async () => {
-			folderReadFailure = { code: "UNAVAILABLE", error: LONG_ERROR };
-			await open(width, CLOUD_ROUTE);
-			const browse = page.getByRole("button", { name: "Browse folders…", exact: true });
-			await browse.click();
-			const dialog = page.getByRole("dialog", { name: "Choose a folder on this computer", exact: true });
-			await dialog.getByRole("alert").waitFor();
-			expect(await dialog.getByRole("button", { name: "Choose folder", exact: true }).isDisabled()).toBe(true);
-			await expectLayout(".modal-backdrop", width <= 700);
-			folderReadFailure = undefined;
-			await dialog.getByRole("button", { name: "Retry folders", exact: true }).click();
-			await dialog.getByRole("button", { name: "Cloud folder", exact: true }).waitFor();
-			folderGate = gate();
-			await dialog.getByRole("button", { name: "Cloud folder", exact: true }).click();
-			await dialog.getByText("Loading folders…", { exact: true }).waitFor();
-			expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
-			await page.keyboard.press("Escape");
-			await dialog.waitFor({ state: "detached" });
-			folderGate.release();
-			expect(await browse.evaluate((el) => el === document.activeElement)).toBe(true);
-			expect(await page.getByLabel("Folder path on this computer", { exact: true }).inputValue()).toBe("");
-			expect(writes()).toEqual([]);
-			expect(creates()).toEqual([]);
-		});
-	});
-}
 
 for (const width of [1024, 390]) {
 	describe(`real App Cloud Workspaces at ${width}px`, () => {
