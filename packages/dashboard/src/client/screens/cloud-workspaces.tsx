@@ -11,6 +11,22 @@ import type { AppStore } from "../state/store.js";
 import "../styles/cloud-workspaces.css";
 
 type Target = { kind: "workspace" | "project"; id: string };
+type FolderSetup = { path: string; canonicalPath: string };
+
+function missingProjectDirectory(error: unknown): string | undefined {
+	if (!error || typeof error !== "object" || !("status" in error) || error.status !== 404) return;
+	const body = "body" in error ? error.body : undefined;
+	if (
+		body &&
+		typeof body === "object" &&
+		"code" in body &&
+		body.code === "NOT_FOUND" &&
+		"canonicalPath" in body &&
+		typeof body.canonicalPath === "string" &&
+		body.canonicalPath.length > 0
+	)
+		return body.canonicalPath;
+}
 type StorageConfirmation = {
 	root: string | null;
 	expected: { sessionDir: string | null; subagentSessionDir: string | null };
@@ -55,7 +71,8 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 	const [notice, setNotice] = createSignal("");
 	const [pending, setPending] = createSignal(false);
 	const [folderPath, setFolderPath] = createSignal("");
-	const [setupPath, setSetupPath] = createSignal<string>();
+	const [setupFolder, setSetupFolder] = createSignal<FolderSetup>();
+	const setupPath = () => setupFolder()?.path;
 	const [storage, setStorage] = createSignal<CloudSessionStorageDto>();
 	const [storageLoading, setStorageLoading] = createSignal(true);
 	const [storageError, setStorageError] = createSignal("");
@@ -152,37 +169,55 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 		if (!disposed && generation === mutationGeneration) setPending(false);
 	}
 
-	function configuredProjectPath(project: CloudProjectDto): string | undefined {
+	function configuredProjectPath(project: CloudProjectDto, data = snapshot()): string | undefined {
 		if (project.location.kind === "local") return project.location.path;
 		const location = project.location;
-		const workspace = workspaces().find((candidate) => candidate.id === location.workspaceId);
-		return workspace
-			? joinedPath(workspace.path, location.relativePath, snapshot()?.pathStyle === "windows")
-			: undefined;
+		const workspace = data?.workspaces.find((candidate) => candidate.id === location.workspaceId);
+		return workspace ? joinedPath(workspace.path, location.relativePath, data?.pathStyle === "windows") : undefined;
 	}
 
 	function connectFolder() {
-		if (disposed || pending() || !snapshot() || !folderPath()) return;
+		const data = snapshot();
+		if (disposed || pending() || !data || !folderPath()) return;
 		const path = folderPath();
-		setSetupPath(undefined);
-		const known = projects().find(
-			(project) =>
-				configuredProjectPath(project) === path || (project.status.available && project.status.path === path),
-		);
+		setSetupFolder(undefined);
+		const matches = (candidate: string | undefined, selected: string) =>
+			candidate !== undefined &&
+			(data.pathStyle === "windows" ? candidate.toLowerCase() === selected.toLowerCase() : candidate === selected);
+		const findKnown = (selected: string) =>
+			data.projects.find(
+				(project) =>
+					matches(configuredProjectPath(project, data), selected) ||
+					(project.status.available && matches(project.status.path, selected)),
+			);
+		let known = findKnown(path);
+		const link = () =>
+			api.linkProject({
+				path,
+				...(known ? { projectId: known.id } : {}),
+				...(known?.location.kind === "workspace" ? { workspaceId: known.location.workspaceId } : {}),
+			});
 		void mutate(
-			() =>
-				api.linkProject({
-					path,
-					...(known ? { projectId: known.id } : {}),
-					...(known?.location.kind === "workspace" ? { workspaceId: known.location.workspaceId } : {}),
-				}),
+			async () => {
+				try {
+					return await link();
+				} catch (error) {
+					const canonicalPath = missingProjectDirectory(error);
+					// The host, not the browser, resolves trailing separators and native/symlink aliases.
+					// Recover authority from the captured snapshot before considering first-use consent.
+					if (!known && canonicalPath && !disposed && folderPath() === path) {
+						known = findKnown(canonicalPath);
+						if (known) return link();
+					}
+					throw error;
+				}
+			},
 			`Folder connected successfully: ${path}`,
 			undefined,
 			(error) => {
-				const body = error && typeof error === "object" && "body" in error ? error.body : undefined;
-				// Only an untargeted lookup's missing marker permits first-use setup.
-				if (!known && body && typeof body === "object" && "code" in body && body.code === "NOT_FOUND") {
-					if (folderPath() === path) setSetupPath(path);
+				const canonicalPath = missingProjectDirectory(error);
+				if (!known && canonicalPath) {
+					if (folderPath() === path) setSetupFolder({ path, canonicalPath });
 					return true;
 				}
 				return false;
@@ -436,7 +471,7 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 								placeholder={placeholder()}
 								onInput={(event) => {
 									setFolderPath(event.currentTarget.value);
-									setSetupPath(undefined);
+									setSetupFolder(undefined);
 									setStorageConfirmation(undefined);
 								}}
 							/>
@@ -455,6 +490,9 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 						<fieldset class="cloud-confirmation" disabled={pending()}>
 							<legend>Set up this folder for the first time?</legend>
 							<p>{path()}</p>
+							<Show when={setupFolder()?.canonicalPath !== path()}>
+								<p>Canonical host folder: {setupFolder()?.canonicalPath}</p>
+							</Show>
 							<p>
 								If this folder was already set up on another computer, wait for its synced identity to arrive.
 								Do not set it up again or initialize a replacement identity.
@@ -464,19 +502,20 @@ export function CloudWorkspacesScreen(props: { store: AppStore }) {
 									class="btn"
 									type="button"
 									onClick={() => {
-										if (disposed || pending() || setupPath() !== folderPath()) return;
-										const capturedPath = path();
+										const target = setupFolder();
+										if (disposed || pending() || !target || target.path !== folderPath()) return;
+										// Consent belongs to this host-resolved directory, not a retargetable alias.
 										// Dismiss before writing: a partial initialization must retry through Connect.
-										setSetupPath(undefined);
+										setSetupFolder(undefined);
 										void mutate(
-											() => api.linkProject({ path: capturedPath, initialize: true }),
-											`Folder connected successfully: ${capturedPath}`,
+											() => api.linkProject({ path: target.canonicalPath, initialize: true }),
+											`Folder connected successfully: ${target.path}`,
 										);
 									}}
 								>
 									Set up folder
 								</button>
-								<button class="btn" type="button" onClick={() => setSetupPath(undefined)}>
+								<button class="btn" type="button" onClick={() => setSetupFolder(undefined)}>
 									Cancel setup
 								</button>
 							</div>

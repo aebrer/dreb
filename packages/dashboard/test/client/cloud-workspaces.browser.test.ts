@@ -96,6 +96,7 @@ interface Call {
 interface Failure {
 	code: string;
 	error: string;
+	canonicalPath?: string;
 }
 function gate() {
 	let release!: () => void;
@@ -120,6 +121,7 @@ let sessionStorage: CloudSessionStorageDto;
 let storageReadFailure: Failure | undefined;
 let storageWriteFailure: Failure | undefined;
 let mutationFailure: Failure | undefined;
+let linkMissingCanonicalPath: string | undefined;
 let createFailure: Failure | undefined;
 let inventoryFails: boolean;
 let mutationGate: ReturnType<typeof gate> | undefined;
@@ -162,6 +164,7 @@ beforeEach(async () => {
 	storageReadFailure = undefined;
 	storageWriteFailure = undefined;
 	mutationFailure = undefined;
+	linkMissingCanonicalPath = undefined;
 	createFailure = undefined;
 	inventoryFails = false;
 	mutationGate = undefined;
@@ -248,6 +251,13 @@ beforeEach(async () => {
 		const knownProject = projectMatch && overview.projects.some((p) => p.id === projectMatch[1]);
 		if (connect || link || ((method === "PUT" || method === "DELETE") && (knownWorkspace || knownProject))) {
 			await mutationGate?.promise;
+			// Only this explicit untargeted missing-marker fixture carries canonical context.
+			// Known-ID retries must reach the independent workspace/mutation failure below.
+			if (link && !body?.initialize && !body?.projectId && linkMissingCanonicalPath !== undefined)
+				return json(
+					{ code: "NOT_FOUND", error: "No project marker yet", canonicalPath: linkMissingCanonicalPath },
+					404,
+				);
 			if (mutationFailure) return json(mutationFailure, mutationFailure.code === "NOT_FOUND" ? 404 : 500);
 			if (connect) {
 				const path = String(body?.path);
@@ -611,9 +621,116 @@ for (const width of [1024, 390]) {
 			await expectLayout("body", width <= 700);
 		});
 
+		it.each(["trailing separator", "synthetic alias"] as const)(
+			"retains a stale markerless grouped identity after canonical lookup through a %s",
+			async (variant) => {
+				const workspacePath = "/synthetic-host/grouped-workspace";
+				const canonicalPath = `${workspacePath}/project`;
+				const path = variant === "trailing separator" ? `${canonicalPath}/` : "/synthetic/symlink-to-grouped";
+				overview = {
+					...emptyOverview(),
+					workspaces: [{ id: WORKSPACE, path: workspacePath, status: { available: true, path: workspacePath } }],
+					projects: [
+						{
+							...project(PROJECT, canonicalPath),
+							location: { kind: "workspace", workspaceId: WORKSPACE, relativePath: "project" },
+						},
+					],
+				};
+				await open(width, CLOUD_ROUTE);
+				const row = page.getByRole("article", { name: `Project ${PROJECT}`, exact: true });
+				expect(await row.getByRole("heading", { name: canonicalPath, level: 3, exact: true }).isVisible()).toBe(
+					true,
+				);
+				const originalRow = await row.elementHandle();
+				const originalDetails = await row.textContent();
+				const originalRows = await page.locator(".cloud-row").allTextContents();
+				// Synthetic HTTP state changes only after the App has captured an available binding.
+				const message = `Workspace ${WORKSPACE} is not connected on this device`;
+				overview = {
+					...overview,
+					workspaces: [],
+					projects: overview.projects.map((p) => ({
+						...p,
+						status: { available: false, error: { code: "UNAVAILABLE", message } },
+					})),
+				};
+				const disconnected = structuredClone(overview);
+				linkMissingCanonicalPath = canonicalPath;
+				mutationFailure = { code: "NOT_FOUND", error: message };
+				await page.getByLabel("Folder path on this computer", { exact: true }).fill(path);
+				await page.getByRole("button", { name: "Connect folder", exact: true }).click();
+				await expect.poll(() => writes().length).toBe(2);
+				await waitText("[role=alert]", `Mutation failed: NOT_FOUND: ${message}`);
+				await page.waitForFunction(() => !document.querySelector(".cloud-workspaces fieldset:disabled"));
+				expect(writes()).toEqual([
+					{ method: "POST", path: "/api/cloud-workspaces/link", body: { path } },
+					{
+						method: "POST",
+						path: "/api/cloud-workspaces/link",
+						body: { path, projectId: PROJECT, workspaceId: WORKSPACE },
+					},
+				]);
+				expect(await page.getByRole("alert").isVisible()).toBe(true);
+				expect(await page.getByText("Set up this folder for the first time?", { exact: true }).count()).toBe(0);
+				expect(await page.getByRole("button", { name: "Set up folder", exact: true }).count()).toBe(0);
+				expect(await page.locator(".cloud-confirmation").count()).toBe(0);
+				expect(await row.evaluate((element, original) => element === original, originalRow)).toBe(true);
+				expect(await row.textContent()).toBe(originalDetails);
+				expect(await page.locator(".cloud-row").allTextContents()).toEqual(originalRows);
+				expect(await page.getByRole("article", { name: /^Project / }).count()).toBe(1);
+				expect(await page.getByLabel("Folder path on this computer", { exact: true }).inputValue()).toBe(path);
+				expect(cloudReads()).toHaveLength(1);
+				expect(calls.filter((c) => c.path === STORAGE_PATH)).toEqual([
+					{ method: "GET", path: STORAGE_PATH, body: undefined },
+				]);
+				expect(overview).toEqual(disconnected);
+				expect(creates()).toHaveLength(0);
+				await expectLayout("body", width <= 700);
+				expect(writes()).toHaveLength(2);
+			},
+		);
+
+		it("captures a canonical first-use target distinct from the entered alias and preserves its literal whitespace", async () => {
+			overview = emptyOverview();
+			const path = "/synthetic/alias ";
+			const canonicalPath = "/synthetic/captured folder ";
+			mutationFailure = { code: "NOT_FOUND", error: "No marker yet", canonicalPath };
+			await open(width, CLOUD_ROUTE);
+			const input = page.getByLabel("Folder path on this computer", { exact: true });
+			await input.fill(path);
+			await page.getByRole("button", { name: "Connect folder", exact: true }).click();
+			await page.getByText("Set up this folder for the first time?", { exact: true }).waitFor();
+			expect(await page.locator(".cloud-confirmation").textContent()).toContain(path);
+			expect(await page.locator(".cloud-confirmation").textContent()).toContain(canonicalPath);
+			expect(await page.locator("[role=alert]").count()).toBe(0);
+			expect(writes()).toEqual([{ method: "POST", path: "/api/cloud-workspaces/link", body: { path } }]);
+			await expectLayout("body", width <= 700);
+			mutationFailure = undefined;
+			await page.getByRole("button", { name: "Set up folder", exact: true }).click();
+			await waitText(".cloud-workspaces output", "Folder connected successfully:");
+			expect(writes()).toEqual([
+				{ method: "POST", path: "/api/cloud-workspaces/link", body: { path } },
+				{
+					method: "POST",
+					path: "/api/cloud-workspaces/link",
+					body: { path: canonicalPath, initialize: true },
+				},
+			]);
+			expect(await page.locator(".cloud-confirmation").count()).toBe(0);
+			expect(await input.inputValue()).toBe(path);
+			expect(overview.projects).toEqual([project(SECOND_PROJECT, canonicalPath)]);
+			expect(calls.filter((c) => c.path === STORAGE_PATH)).toEqual([
+				{ method: "GET", path: STORAGE_PATH, body: undefined },
+			]);
+			expect(sessionStorage).toEqual(defaultStorage());
+			expect(creates()).toHaveLength(0);
+			await expectLayout("body", width <= 700);
+		});
+
 		it("requires first-use confirmation, cancels or invalidates it on path edit, and clears it before partial-init retry", async () => {
 			overview = emptyOverview();
-			mutationFailure = { code: "NOT_FOUND", error: "No marker yet" };
+			mutationFailure = { code: "NOT_FOUND", error: "No marker yet", canonicalPath: "/synthetic/first " };
 			await open(width, CLOUD_ROUTE);
 			const input = page.getByLabel("Folder path on this computer", { exact: true });
 			const connect = page.getByRole("button", { name: "Connect folder", exact: true });
@@ -629,6 +746,7 @@ for (const width of [1024, 390]) {
 			await page.getByText("Set up this folder for the first time?", { exact: true }).waitFor();
 			await input.fill("/synthetic/other");
 			expect(await page.locator(".cloud-confirmation").count()).toBe(0);
+			mutationFailure = { code: "NOT_FOUND", error: "No marker yet", canonicalPath: "/synthetic/other" };
 			await connect.click();
 			await page.getByText("Set up this folder for the first time?", { exact: true }).waitFor();
 			mutationFailure = { code: "PARTIAL_INITIALIZATION", error: "Synthetic persistence failed after marker write" };
@@ -644,17 +762,17 @@ for (const width of [1024, 390]) {
 			await expectLayout("body", width <= 700);
 		});
 
-		it("never offers first-use setup for corrupt, conflicting or IO metadata failures", async () => {
+		it("never offers first-use setup for corrupt, conflicting, IO or context-free NOT_FOUND failures", async () => {
 			await open(width, CLOUD_ROUTE);
 			await page.getByLabel("Folder path on this computer", { exact: true }).fill("/synthetic/existing");
-			for (const code of ["INVALID_METADATA", "CONFLICT", "IO_ERROR"]) {
+			for (const code of ["INVALID_METADATA", "CONFLICT", "IO_ERROR", "NOT_FOUND"]) {
 				mutationFailure = { code, error: LONG_ERROR };
 				await page.getByRole("button", { name: "Connect folder", exact: true }).click();
 				await waitText("[role=alert]", `Mutation failed: ${code}:`);
 				expect(await page.getByRole("button", { name: "Set up folder", exact: true }).count()).toBe(0);
 			}
 			expect(writes().map((c) => c.body)).toEqual(
-				Array.from({ length: 3 }, () => ({ path: "/synthetic/existing" })),
+				Array.from({ length: 4 }, () => ({ path: "/synthetic/existing" })),
 			);
 			await expectLayout("body", width <= 700);
 		});

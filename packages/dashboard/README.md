@@ -135,8 +135,12 @@ no registration; projects can remain outside synced roots.
 The default form has one input, **Folder path on this computer**. **Connect
 folder** reuses an existing project marker or known already-registered mapping;
 no workspace setup or typed UUID is needed. Only an exact missing-project-marker
-result offers explicit first-device **Set up folder** confirmation. Initialization
-is never automatic. On other hosts, wait for marker delivery and connect/link the
+result offers explicit first-device **Set up folder** confirmation. Markerless
+lookups compare the host's canonical directory with captured registered paths,
+retaining known project/workspace IDs across equivalent spellings. Known-ID
+failures never authorize a replacement identity. Consent binds the input and
+canonical host directory (shown when different); setup uses that captured
+directory rather than following a retargeted alias. Initialization is never automatic. On other hosts, wait for marker delivery and connect/link the
 existing identity; never initialize a replacement because a required marker is missing.
 
 Manual **Connect workspace**/**Link project** forms and workspace management stay

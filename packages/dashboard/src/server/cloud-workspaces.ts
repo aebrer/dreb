@@ -59,7 +59,11 @@ export function sendCloudError(res: Response, error: unknown): void {
 			IO_ERROR: 500,
 			PARTIAL_INITIALIZATION: 500,
 		}[error.code];
-		res.status(status).json({ code: error.code, error: error.message });
+		res.status(status).json({
+			code: error.code,
+			error: error.message,
+			...(error.canonicalPath === undefined ? {} : { canonicalPath: error.canonicalPath }),
+		});
 		return;
 	}
 	res.status(500).json({

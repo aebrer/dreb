@@ -54,6 +54,17 @@ const populated: CloudWorkspacesDto = {
 		},
 	],
 };
+const grouped: CloudWorkspacesDto = {
+	...empty,
+	workspaces: [{ id: workspaceZ, path: "/configured/z", status: { available: true, path: "/canonical/z" } }],
+	projects: [
+		{
+			...populated.projects[0]!,
+			markerRequired: false,
+			status: { available: true, path: "/canonical/grouped" },
+		},
+	],
+};
 const localStorage: CloudSessionStorageDto = {
 	sessionDir: null,
 	subagentSessionDir: null,
@@ -176,6 +187,13 @@ function failure(code: string) {
 	return Object.assign(new Error("Synthetic failure"), { body: { code } });
 }
 
+function missingMarker(canonicalPath: string) {
+	return Object.assign(new Error("Synthetic missing project marker"), {
+		status: 404,
+		body: { code: "NOT_FOUND", canonicalPath },
+	});
+}
+
 function storeLogs(root = "/logs") {
 	enter("Folder path on this computer", root);
 	button("Store session logs here").click();
@@ -212,7 +230,7 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 	});
 
 	it("handles an unknown folder's NOT_FOUND as first-use and requires explicit captured-path confirmation", async () => {
-		vi.mocked(api.linkProject).mockRejectedValueOnce(failure("NOT_FOUND"));
+		vi.mocked(api.linkProject).mockRejectedValueOnce(missingMarker("/host/first "));
 		mount();
 		await settle();
 		enter("Folder path on this computer", "/host/first ");
@@ -230,8 +248,35 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 		expect(api.connectWorkspace).not.toHaveBeenCalled();
 	});
 
+	it("binds first-use consent to the captured canonical target rather than a potentially retargeted alias", async () => {
+		const path = "/synthetic/alias ";
+		const canonicalPath = "/synthetic/captured folder ";
+		vi.mocked(api.linkProject).mockRejectedValueOnce(missingMarker(canonicalPath));
+		mount();
+		await settle();
+		enter("Folder path on this computer", path);
+		submit("Connect folder");
+		await settle();
+		const confirmation = document.querySelector(".cloud-confirmation")?.textContent;
+		expect(confirmation).toContain(path);
+		expect(confirmation).toContain(canonicalPath);
+		expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path });
+		button("Set up folder").click();
+		await settle();
+		expect(vi.mocked(api.linkProject).mock.calls.map(([body]) => body)).toEqual([
+			{ path },
+			{ path: canonicalPath, initialize: true },
+		]);
+		expect(field("Folder path on this computer").value).toBe(path);
+		expect(text()).not.toContain("Set up this folder for the first time?");
+		expect(api.connectWorkspace).not.toHaveBeenCalled();
+		expect(api.rebindProject).not.toHaveBeenCalled();
+		expect(api.rebindWorkspace).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+	});
+
 	it.each(["cancel", "edit"] as const)("invalidates first-use consent on %s without initializing", async (action) => {
-		vi.mocked(api.linkProject).mockRejectedValue(failure("NOT_FOUND"));
+		vi.mocked(api.linkProject).mockRejectedValue(missingMarker("/first"));
 		mount();
 		await settle();
 		enter("Folder path on this computer", "/first");
@@ -243,7 +288,7 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 		expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path: "/first" });
 	});
 
-	it.each(["INVALID_METADATA", "CONFLICT", "IO_ERROR", "UNAVAILABLE", "NOT_FOUND_OTHER"])(
+	it.each(["INVALID_METADATA", "CONFLICT", "IO_ERROR", "UNAVAILABLE", "NOT_FOUND", "NOT_FOUND_OTHER"])(
 		"never offers initialization for %s",
 		async (code) => {
 			vi.mocked(api.linkProject).mockRejectedValueOnce(failure(code));
@@ -270,9 +315,41 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 		expect(text()).not.toContain("Set up this folder for the first time?");
 	});
 
+	it.each([
+		{ label: "undefined canonical path", canonicalPath: undefined, status: 404 },
+		{ label: "null canonical path", canonicalPath: null, status: 404 },
+		{ label: "empty canonical path", canonicalPath: "", status: 404 },
+		{ label: "numeric canonical path", canonicalPath: 42, status: 404 },
+		{ label: "object canonical path", canonicalPath: {}, status: 404 },
+		{ label: "wrong HTTP status", canonicalPath: "/canonical/new", status: 500 },
+	])("fails closed for missing-marker context with $label", async ({ canonicalPath, status }) => {
+		vi.mocked(api.linkProject).mockRejectedValueOnce(
+			Object.assign(new Error("Untrusted missing-marker context"), {
+				status,
+				body: { code: "NOT_FOUND", canonicalPath },
+			}),
+		);
+		mount();
+		await settle();
+		enter("Folder path on this computer", "/synthetic/alias");
+		submit("Connect folder");
+		await settle();
+		expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+			"Mutation failed: NOT_FOUND: Untrusted missing-marker context",
+		);
+		expect(document.querySelector(".cloud-confirmation")).toBeNull();
+		expect(text()).not.toContain("Set up this folder for the first time?");
+		expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path: "/synthetic/alias" });
+		expect(api.cloudWorkspaces).toHaveBeenCalledTimes(1);
+		expect(api.connectWorkspace).not.toHaveBeenCalled();
+		expect(api.rebindProject).not.toHaveBeenCalled();
+		expect(api.rebindWorkspace).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+	});
+
 	it("dismisses initialization before a partial failure and retries only via normal Connect", async () => {
 		vi.mocked(api.linkProject)
-			.mockRejectedValueOnce(failure("NOT_FOUND"))
+			.mockRejectedValueOnce(missingMarker("/first"))
 			.mockRejectedValueOnce(failure("PARTIAL_INITIALIZATION"));
 		mount();
 		await settle();
@@ -365,6 +442,97 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 		},
 	);
 
+	it.each([
+		"/canonical/grouped/",
+		"/canonical/./grouped",
+		"/synthetic/symlink-to-grouped",
+		"/configured/z/apps/a very long project/",
+	])("preserves a known markerless grouped identity after canonical lookup for %s", async (path) => {
+		vi.mocked(api.cloudWorkspaces).mockResolvedValue(grouped);
+		const originalSnapshot = structuredClone(grouped);
+		const message = `Workspace ${workspaceZ} is not connected on this device`;
+		vi.mocked(api.linkProject)
+			.mockRejectedValueOnce(missingMarker("/canonical/grouped"))
+			.mockRejectedValueOnce(
+				Object.assign(new Error(message), { status: 404, body: { code: "NOT_FOUND", error: message } }),
+			);
+		mount();
+		await settle();
+		const originalRow = row("Project", projectZ);
+		const originalDetails = originalRow.textContent;
+		const originalRows = Array.from(document.querySelectorAll("article"), (element) => element.textContent);
+		enter("Folder path on this computer", path);
+		submit("Connect folder");
+		await settle();
+		expect(vi.mocked(api.linkProject).mock.calls.map(([body]) => body)).toEqual([
+			{ path },
+			{ path, projectId: projectZ, workspaceId: workspaceZ },
+		]);
+		expect(document.querySelector('[role="alert"]')?.textContent).toContain(`Mutation failed: NOT_FOUND: ${message}`);
+		expect(text()).not.toContain("Set up this folder for the first time?");
+		expect(Array.from(document.querySelectorAll("button"), (control) => control.textContent)).not.toContain(
+			"Set up folder",
+		);
+		expect(field("Folder path on this computer").value).toBe(path);
+		expect(row("Project", projectZ)).toBe(originalRow);
+		expect(originalRow.textContent).toBe(originalDetails);
+		expect(Array.from(document.querySelectorAll("article"), (element) => element.textContent)).toEqual(originalRows);
+		expect(grouped).toEqual(originalSnapshot);
+		expect(api.cloudWorkspaces).toHaveBeenCalledTimes(1);
+		expect(api.cloudSessionStorage).toHaveBeenCalledTimes(1);
+		expect(api.connectWorkspace).not.toHaveBeenCalled();
+		expect(api.rebindProject).not.toHaveBeenCalled();
+		expect(api.rebindWorkspace).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+	});
+
+	it("connects a canonical alias with the existing grouped identity and no rebind or log write", async () => {
+		const path = "/synthetic/symlink-to-grouped";
+		vi.mocked(api.cloudWorkspaces).mockResolvedValue(grouped);
+		vi.mocked(api.linkProject)
+			.mockRejectedValueOnce(missingMarker("/canonical/grouped"))
+			.mockResolvedValueOnce({ id: projectZ });
+		mount();
+		await settle();
+		enter("Folder path on this computer", path);
+		submit("Connect folder");
+		await settle();
+		expect(vi.mocked(api.linkProject).mock.calls.map(([body]) => body)).toEqual([
+			{ path },
+			{ path, projectId: projectZ, workspaceId: workspaceZ },
+		]);
+		expect(text()).toContain(`Folder connected successfully: ${path}`);
+		expect(document.querySelector('[role="alert"]')).toBeNull();
+		expect(text()).not.toContain("Set up this folder for the first time?");
+		expect(api.cloudWorkspaces).toHaveBeenCalledTimes(2);
+		expect(api.connectWorkspace).not.toHaveBeenCalled();
+		expect(api.rebindProject).not.toHaveBeenCalled();
+		expect(api.rebindWorkspace).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+	});
+
+	it.each(["/canonical/grouped ", "/canonical/Grouped"])(
+		"does not conflate the distinct POSIX canonical target %s with a known identity",
+		async (canonicalPath) => {
+			const path = "/synthetic/distinct-alias";
+			vi.mocked(api.cloudWorkspaces).mockResolvedValue(grouped);
+			vi.mocked(api.linkProject).mockRejectedValueOnce(missingMarker(canonicalPath));
+			mount();
+			await settle();
+			enter("Folder path on this computer", path);
+			submit("Connect folder");
+			await settle();
+			expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path });
+			expect(text()).toContain("Set up this folder for the first time?");
+			expect(document.querySelector(".cloud-confirmation")?.textContent).toContain(canonicalPath);
+			expect(api.cloudWorkspaces).toHaveBeenCalledTimes(1);
+			expect(api.connectWorkspace).not.toHaveBeenCalled();
+			expect(api.rebindProject).not.toHaveBeenCalled();
+			expect(api.rebindWorkspace).not.toHaveBeenCalled();
+			expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+		},
+	);
+
 	it("preserves an available canonical grouped binding and does not match merely similar paths", async () => {
 		vi.mocked(api.cloudWorkspaces).mockResolvedValue({
 			...populated,
@@ -400,6 +568,86 @@ describe("CloudWorkspacesScreen one-folder setup", () => {
 		expect(view.host.textContent).toBe("");
 		expect(api.cloudWorkspaces).toHaveBeenCalledTimes(1);
 		expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path: "/first" });
+	});
+
+	it.each([
+		["dispose", "/canonical/grouped"],
+		["edit", "/canonical/grouped"],
+		["dispose", "/canonical/unknown"],
+		["edit", "/canonical/unknown"],
+	] as const)("ignores deferred canonical lookup after %s for %s", async (action, canonicalPath) => {
+		vi.mocked(api.cloudWorkspaces).mockResolvedValue(grouped);
+		const lookup = deferred<{ id: string }>();
+		vi.mocked(api.linkProject).mockReturnValueOnce(lookup.promise);
+		const view = mount();
+		await settle();
+		const path = "/synthetic/pending-alias";
+		enter("Folder path on this computer", path);
+		submit("Connect folder");
+		expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path });
+		if (action === "dispose") view.dispose();
+		// Deliberately dispatch input even though native controls are disabled during the lookup.
+		else enter("Folder path on this computer", "/synthetic/edited");
+		lookup.reject(missingMarker(canonicalPath));
+		await settle();
+		expect(api.linkProject).toHaveBeenCalledExactlyOnceWith({ path });
+		expect(api.cloudWorkspaces).toHaveBeenCalledTimes(1);
+		expect(api.cloudSessionStorage).toHaveBeenCalledTimes(1);
+		expect(text()).not.toContain("Set up this folder for the first time?");
+		expect(document.querySelector(".cloud-confirmation")).toBeNull();
+		if (action === "dispose") expect(view.host.textContent).toBe("");
+		else expect(field("Folder path on this computer").value).toBe("/synthetic/edited");
+		expect(api.connectWorkspace).not.toHaveBeenCalled();
+		expect(api.rebindProject).not.toHaveBeenCalled();
+		expect(api.rebindWorkspace).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
+	});
+
+	it("matches native Windows canonical case without trimming whitespace or changing the raw retry path", async () => {
+		const path = "C:/cloud/apps/project /";
+		const canonicalPath = "C:\\cloud\\apps\\project ";
+		const knownPath = "C:\\Cloud\\Apps\\Project ";
+		vi.mocked(api.cloudWorkspaces).mockResolvedValue({
+			...empty,
+			pathStyle: "windows",
+			workspaces: [{ id: workspaceZ, path: "C:\\Cloud", status: { available: true, path: "C:\\Cloud" } }],
+			projects: [
+				{
+					id: projectZ,
+					markerRequired: false,
+					location: { kind: "workspace", workspaceId: workspaceZ, relativePath: "Apps/Project " },
+					status: { available: true, path: knownPath },
+				},
+			],
+		});
+		const message = `Workspace ${workspaceZ} is not connected on this device`;
+		vi.mocked(api.linkProject)
+			.mockRejectedValueOnce(missingMarker(canonicalPath))
+			.mockRejectedValueOnce(
+				Object.assign(new Error(message), { status: 404, body: { code: "NOT_FOUND", error: message } }),
+			);
+		mount();
+		await settle();
+		const originalRow = row("Project", projectZ);
+		const originalDetails = originalRow.textContent;
+		enter("Folder path on this computer", path);
+		submit("Connect folder");
+		await settle();
+		expect(vi.mocked(api.linkProject).mock.calls.map(([body]) => body)).toEqual([
+			{ path },
+			{ path, projectId: projectZ, workspaceId: workspaceZ },
+		]);
+		expect(document.querySelector('[role="alert"]')?.textContent).toContain(`Mutation failed: NOT_FOUND: ${message}`);
+		expect(field("Folder path on this computer").value).toBe(path);
+		expect(row("Project", projectZ)).toBe(originalRow);
+		expect(originalRow.textContent).toBe(originalDetails);
+		expect(document.querySelector(".cloud-confirmation")).toBeNull();
+		expect(text()).not.toContain("Set up this folder for the first time?");
+		expect(api.cloudWorkspaces).toHaveBeenCalledTimes(1);
+		expect(api.connectWorkspace).not.toHaveBeenCalled();
+		expect(api.rebindProject).not.toHaveBeenCalled();
+		expect(api.rebindWorkspace).not.toHaveBeenCalled();
+		expect(api.saveCloudSessionStorage).not.toHaveBeenCalled();
 	});
 
 	it("joins straightforward native Windows workspace paths without trimming", async () => {

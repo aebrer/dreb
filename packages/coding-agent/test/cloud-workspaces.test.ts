@@ -42,6 +42,29 @@ afterEach(async () => {
 });
 
 describe("portable identities and device-local mappings", () => {
+	it.each(["plain", "trailing", "symlink"])(
+		"identifies the canonical missing-project-marker directory without writing for %s input",
+		async (spelling) => {
+			const path = await folder(" markerless project ");
+			const canonicalPath = await fs.realpath(path);
+			const alias = join(root, "project-alias");
+			if (spelling === "symlink") await fs.symlink(path, alias, process.platform === "win32" ? "junction" : "dir");
+			const selected = spelling === "symlink" ? alias : spelling === "trailing" ? `${path}/` : path;
+			await expect(registry.link(selected)).rejects.toMatchObject({ code: "NOT_FOUND", canonicalPath });
+			expect(await fs.readdir(canonicalPath)).toEqual([]);
+			await expect(fs.stat(registry.path)).rejects.toMatchObject({ code: "ENOENT" });
+		},
+	);
+
+	it("does not identify other NOT_FOUND failures as a missing project marker", async () => {
+		const path = await folder("project");
+		const error = await registry.link(path, { workspaceId: OTHER }).catch((failure: unknown) => failure);
+		expect(error).toMatchObject({ code: "NOT_FOUND" });
+		expect(error).not.toHaveProperty("canonicalPath");
+		expect(await fs.readdir(path)).toEqual([]);
+		await expect(fs.stat(registry.path)).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
 	it("connects two simulated devices through different roots and resolves shared and local projects", async () => {
 		const driveA = await folder("Mac OneDrive");
 		const driveB = await folder("PC Google Drive");

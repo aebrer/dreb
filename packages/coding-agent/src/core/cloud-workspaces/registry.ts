@@ -208,6 +208,7 @@ export class CloudWorkspaceRegistry {
 			throw new CloudWorkspaceError(
 				"NOT_FOUND",
 				"Project has no marker; explicitly initialize one or supply its known ID.",
+				{ canonicalPath: path },
 			);
 		}
 		if ((expectedId && id !== expectedId) || (result.marker && result.marker.id !== id)) {

@@ -24,7 +24,7 @@ const OTHER = "22222222-2222-4222-8222-222222222bbb";
 const THIRD = "33333333-3333-4333-8333-333333333ccc";
 const WORKSPACE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const REGISTRY_METHODS = ["list", "status", "connect", "link", "resolve", "unlink", "disconnect"] as const;
-type ErrorBody = { code: string; error: string };
+type ErrorBody = { code: string; error: string; canonicalPath?: string };
 
 let root: string;
 let registry: CloudWorkspaceRegistry;
@@ -204,9 +204,14 @@ async function list(base: string): Promise<CloudWorkspacesDto> {
 	return result.body;
 }
 
-function errorResult(result: { status: number; body: ErrorBody }, status: number, code: string): void {
+function errorResult(
+	result: { status: number; body: ErrorBody },
+	status: number,
+	code: string,
+	canonicalPath?: string,
+): void {
 	expect(result.status).toBe(status);
-	expect(result.body).toEqual({ code, error: expect.any(String) });
+	expect(result.body).toEqual({ code, error: expect.any(String), ...(canonicalPath ? { canonicalPath } : {}) });
 	expect(result.body.error.length).toBeGreaterThan(0);
 }
 
@@ -354,6 +359,39 @@ describe("optional global session-log settings (no runtime or transcript access)
 });
 
 describe("cloud metadata HTTP workflow (real isolated registry)", () => {
+	it.each(["trailing", "symlink"])(
+		"returns canonical missing-marker authority for %s input without replacing a disconnected identity",
+		async (spelling) => {
+			const workspacePath = await folder("workspace");
+			const projectPath = await folder("workspace/project ");
+			const canonicalPath = await fs.realpath(projectPath);
+			const workspace = await registry.connect(workspacePath, { initialize: true });
+			await registry.link(projectPath, { projectId: PROJECT, workspaceId: workspace.id });
+			const alias = join(root, "project-alias");
+			if (spelling === "symlink")
+				await fs.symlink(projectPath, alias, process.platform === "win32" ? "junction" : "dir");
+			const path = spelling === "symlink" ? alias : `${projectPath}/`;
+			const server = await start();
+			expect((await list(server.base)).projects[0]?.status).toMatchObject({ available: true, path: canonicalPath });
+			await registry.disconnect(workspace.id);
+			const before = await fs.readFile(registry.path);
+
+			errorResult(await http(server.base, "POST", `${API}/link`, { path }), 404, "NOT_FOUND", canonicalPath);
+			// The captured identity is retried explicitly, never initialized or rebound.
+			errorResult(
+				await http(server.base, "POST", `${API}/link`, { path, projectId: PROJECT, workspaceId: workspace.id }),
+				404,
+				"NOT_FOUND",
+			);
+			expect(await fs.readFile(registry.path)).toEqual(before);
+			await absent(markerPath(projectPath, "project"));
+			expect((await registry.list()).projects).toHaveLength(1);
+			await registry.connect(workspacePath);
+			expect(await registry.resolve(PROJECT)).toBe(canonicalPath);
+			noSpawn(server);
+		},
+	);
+
 	it("lists absent state without creating the agent directory or any project metadata", async () => {
 		const { base } = await start();
 		expect(await list(base)).toEqual({
@@ -630,7 +668,12 @@ describe("identity-targeted rebinds and filesystem failures", () => {
 	it.each(["connect", "link"])("does not silently initialize a missing marker via %s", async (operation) => {
 		const path = await folder("blank");
 		const { base } = await start();
-		errorResult(await http(base, "POST", `${API}/${operation}`, { path }), 404, "NOT_FOUND");
+		errorResult(
+			await http(base, "POST", `${API}/${operation}`, { path }),
+			404,
+			"NOT_FOUND",
+			operation === "link" ? await fs.realpath(path) : undefined,
+		);
 		await absent(registry.path);
 		await absent(join(path, ".dreb"));
 	});

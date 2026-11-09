@@ -12,13 +12,17 @@ export type CloudWorkspaceErrorCode =
 	| "PARTIAL_INITIALIZATION";
 
 export class CloudWorkspaceError extends Error {
+	/** Only link's missing-project-marker error carries its validated canonical directory. */
+	declare readonly canonicalPath?: string;
+
 	constructor(
 		readonly code: CloudWorkspaceErrorCode,
 		message: string,
-		options?: ErrorOptions,
+		options?: ErrorOptions & { canonicalPath?: string },
 	) {
 		super(message, options);
 		this.name = "CloudWorkspaceError";
+		if (options?.canonicalPath !== undefined) this.canonicalPath = options.canonicalPath;
 	}
 }
 
