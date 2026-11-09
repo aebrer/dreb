@@ -737,10 +737,19 @@ export class RpcClient {
 	}
 
 	/**
-	 * Set the session display name.
+	 * Set the session display name. With `sessionPath`, the runtime renames only while that file is
+	 * its current session and rejects otherwise, so a concurrent session switch cannot redirect it.
 	 */
-	async setSessionName(name: string): Promise<void> {
-		await this.send({ type: "set_session_name", name });
+	async setSessionName(name: string, options?: { sessionPath?: string }): Promise<void> {
+		const sessionPath = options?.sessionPath;
+		const response = await this.send({
+			type: "set_session_name",
+			name,
+			...(sessionPath !== undefined ? { sessionPath } : {}),
+		});
+		// The runtime refuses empty names and, with sessionPath, a session it no longer holds;
+		// those refusals must reach the caller rather than read as a successful rename.
+		this.getData(response);
 	}
 
 	/**

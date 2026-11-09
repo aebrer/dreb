@@ -99,7 +99,11 @@ export type RpcCommand =
 			label?: string;
 	  }
 	| { id?: string; type: "get_last_assistant_text" }
-	| { id?: string; type: "set_session_name"; name: string }
+	/**
+	 * Rename the current session. With `sessionPath`, the rename applies only while that file is
+	 * this runtime's current session; otherwise it fails without changing anything.
+	 */
+	| { id?: string; type: "set_session_name"; name: string; sessionPath?: string }
 
 	// Messages
 	| { id?: string; type: "get_messages" }

@@ -221,15 +221,17 @@ export class TabTitleGenerator {
 			return undefined;
 		}
 
-		const userContext = this.buildContext();
-		if (!userContext) {
+		const builtContext = this.buildContext();
+		// Branch/repo/cwd metadata alone is not something to title: on demand, that would invent a
+		// title from the folder name. The automatic path keeps its long-standing behavior.
+		if (!builtContext || (strict && !builtContext.hasSessionContent)) {
 			if (strict) throw new Error("Tab title generation failed: the session has no requests or activity to title");
 			return undefined;
 		}
 
 		const context: Context = {
 			systemPrompt: buildTitlePrompt(this.softTarget),
-			messages: [{ role: "user", content: userContext, timestamp: Date.now() }],
+			messages: [{ role: "user", content: builtContext.text, timestamp: Date.now() }],
 		};
 
 		const { response, model: usedModel } = await this.completeWithParentFallback(model, context, signal);
@@ -384,7 +386,11 @@ export class TabTitleGenerator {
 		return undefined;
 	}
 
-	private buildContext(): string | undefined {
+	/**
+	 * Build the title request. `hasSessionContent` is true when it carries the user's requests or
+	 * session activity, as opposed to only branch/repo/cwd metadata.
+	 */
+	private buildContext(): { text: string; hasSessionContent: boolean } | undefined {
 		const lines: string[] = [];
 
 		// Primary signal: the user's actual request(s) from the current session.
@@ -423,7 +429,7 @@ export class TabTitleGenerator {
 		}
 
 		if (lines.length === 0) return undefined;
-		return lines.join("\n");
+		return { text: lines.join("\n"), hasSessionContent: userIntent.length > 0 || Boolean(bufferContent) };
 	}
 
 	/**

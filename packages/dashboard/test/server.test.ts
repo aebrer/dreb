@@ -2499,7 +2499,8 @@ describe("dashboard server — past-session rename and titles", () => {
 
 		expect(res.status).toBe(200);
 		await expect(res.json()).resolves.toEqual({ name: "Live rename" });
-		expect(clients[0].setSessionName).toHaveBeenCalledWith("Live rename");
+		// The runtime is told which file the rename is for, so it refuses if it has switched since.
+		expect(clients[0].setSessionName).toHaveBeenCalledWith("Live rename", { sessionPath: path });
 		expect(renameSession).not.toHaveBeenCalled();
 		expect(diskChanges()).toBe(1);
 	});
@@ -2519,6 +2520,26 @@ describe("dashboard server — past-session rename and titles", () => {
 		expect(res.status).toBe(200);
 		expect(clients[0].setSessionName).not.toHaveBeenCalled();
 		expect(renameSession).toHaveBeenCalledWith(path, "Disk rename");
+	});
+
+	it("POST /api/sessions/rename reports a runtime that switched away from the session before renaming", async () => {
+		const project = await createTempProject();
+		const path = await writeSessionFile(project);
+		const renameSession = vi.fn(async () => ({}));
+		const { hub, diskChanges } = captureHub();
+		const { base, clients } = await startServer({ renameSession, eventHub: hub });
+		await postJson(base, "/api/runtimes", { cwd: project, sessionPath: path });
+		const state = await clients[0].getState();
+		vi.mocked(clients[0].getState).mockResolvedValue({ ...state, sessionFile: path } as any);
+		const refusal = `Session name not set: this runtime no longer holds ${path} (its current session is /other.jsonl); try again`;
+		vi.mocked(clients[0].setSessionName).mockRejectedValue(new Error(refusal));
+
+		const res = await postJson(base, "/api/sessions/rename", { path, name: "Meant for this file" });
+
+		expect(res.status).toBe(502);
+		await expect(res.json()).resolves.toEqual({ error: refusal });
+		expect(renameSession).not.toHaveBeenCalled();
+		expect(diskChanges()).toBe(0);
 	});
 
 	it("POST /api/sessions/rename reports a failure from the owning runtime", async () => {

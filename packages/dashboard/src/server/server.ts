@@ -1134,11 +1134,13 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		}
 		(async () => {
 			// A runtime holding this session keeps its entries in memory and may rewrite the
-			// file, so rename through it rather than appending behind its back.
+			// file, so rename through it rather than appending behind its back. The runtime
+			// re-checks that it still holds this file when the rename arrives, so a session
+			// switch after the lookup fails loudly instead of renaming the wrong session.
 			const owner = await pool.findBySessionFile(check.path);
 			if (owner) {
 				try {
-					await owner.client.setSessionName(name);
+					await owner.client.setSessionName(name, { sessionPath: check.path });
 				} catch (err) {
 					res.status(502).json({ error: String((err as Error)?.message ?? err) });
 					return;

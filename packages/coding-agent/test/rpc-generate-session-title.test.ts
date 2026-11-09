@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ vi.mock("../src/core/tools/subagent.js", async (importOriginal) => ({
 }));
 
 import { completeSimple } from "@dreb/ai";
+import { SettingsManager } from "../src/core/settings-manager.js";
 import { resolveModelForSubagentSpawn } from "../src/core/tools/subagent.js";
 import { generateSessionTitleForRpc } from "../src/modes/rpc/rpc-mode.js";
 
@@ -106,6 +107,11 @@ function makeRuntime(overrides: { model?: typeof RUNTIME_MODEL | undefined; agen
 	const settingsManager = {
 		getTabTitleSettings: vi.fn(() => ({ enabled: false, maxTitleLength: 40 })),
 		getAgentModelsForAgent: vi.fn((_name: string) => overrides.agentModels),
+		flush: vi.fn(async () => {}),
+		drainErrors: vi.fn(() => []),
+		reload: vi.fn(),
+		hasGlobalSettingsLoadError: vi.fn(() => false),
+		hasProjectSettingsLoadError: vi.fn(() => false),
 	};
 	return {
 		model: "model" in overrides ? overrides.model : RUNTIME_MODEL,
@@ -217,5 +223,87 @@ describe("generateSessionTitleForRpc", () => {
 			ok: false,
 			error: "Tab title generation failed with model runtime-provider/runtime-model: 429 rate limited",
 		});
+	});
+
+	describe("durable settings", () => {
+		/** A long-lived utility runtime's settings plus a second runtime (or the TUI) sharing the same agent dir. */
+		async function sharedSettings() {
+			const root = await mkdtemp(join(tmpdir(), "dreb-rpc-title-settings-"));
+			tempDirs.push(root);
+			const agentDir = join(root, "agent");
+			const projectDir = join(root, "project");
+			mkdirSync(agentDir, { recursive: true });
+			mkdirSync(projectDir, { recursive: true });
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ tabTitle: { maxTitleLength: 40 } }));
+			return {
+				agentDir,
+				utility: SettingsManager.create(projectDir, agentDir),
+				other: SettingsManager.create(root, agentDir),
+			};
+		}
+
+		it("applies tabTitle model and length changes saved elsewhere after the runtime started", async () => {
+			const { utility, other } = await sharedSettings();
+			const runtime = { ...makeRuntime(), settingsManager: utility };
+			const path = await writeSessionFile(savedSession());
+
+			await generateSessionTitleForRpc(runtime, path);
+			expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({
+				provider: "runtime-provider",
+				id: "runtime-model",
+			});
+			expect(mockCompleteSimple.mock.calls[0][1].systemPrompt).toContain("Aim for about 40 characters");
+
+			other.setGlobalTabTitleSettings({ model: "explore-provider/explore-model", maxTitleLength: 77 });
+			await other.flush();
+
+			await expect(generateSessionTitleForRpc(runtime, path)).resolves.toEqual({
+				ok: true,
+				title: "Past session rename",
+			});
+			expect(mockCompleteSimple.mock.calls[1][0]).toMatchObject({
+				provider: "explore-provider",
+				id: "explore-model",
+			});
+			expect(mockCompleteSimple.mock.calls[1][1].systemPrompt).toContain("Aim for about 77 characters");
+		});
+
+		it("applies an Explore agentModels override saved elsewhere after the runtime started", async () => {
+			const { utility, other } = await sharedSettings();
+			const runtime = { ...makeRuntime(), settingsManager: utility };
+			const path = await writeSessionFile(savedSession());
+
+			other.setAgentModelsForAgent("Explore", ["explore-provider/explore-model"]);
+			await other.flush();
+			await generateSessionTitleForRpc(runtime, path);
+
+			expect(mockResolveModel.mock.calls[0][0]).toEqual(["explore-provider/explore-model"]);
+		});
+
+		it("fails loudly instead of titling with stale settings when the reload fails", async () => {
+			const { agentDir, utility } = await sharedSettings();
+			const runtime = { ...makeRuntime(), settingsManager: utility };
+			const path = await writeSessionFile(savedSession());
+			writeFileSync(join(agentDir, "settings.json"), "{ not json", "utf8");
+
+			const result = await generateSessionTitleForRpc(runtime, path);
+
+			expect(result.ok).toBe(false);
+			expect(result.ok === false && result.error).toMatch(/^Failed to reload settings: global: /);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+		});
+	});
+
+	it("rejects a session with no requests or activity instead of titling its folder name", async () => {
+		const [header] = savedSession();
+		const path = await writeSessionFile([header]);
+
+		const result = await generateSessionTitleForRpc(makeRuntime(), path);
+
+		expect(result).toEqual({
+			ok: false,
+			error: "Tab title generation failed: the session has no requests or activity to title",
+		});
+		expect(mockCompleteSimple).not.toHaveBeenCalled();
 	});
 });

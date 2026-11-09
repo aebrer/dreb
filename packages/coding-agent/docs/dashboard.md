@@ -462,16 +462,25 @@ when that directory still exists (so project-local Explore agent and
 `agentModels` settings apply) and in the home directory otherwise. It follows
 `tabTitle.model` and `tabTitle.maxTitleLength`; `tabTitle.enabled` and
 `triggerAfter` only control automatic titling and do not disable the button.
+Settings are re-read from disk on every request, so changes saved in Dashboard
+Settings, the TUI, or by hand apply to the next suggestion; if they cannot be
+re-read, the request fails rather than using stale settings.
 The suggestion only fills the input — nothing is saved until you confirm — and
 generating a title never modifies the session file. Failures (no model, a
-provider error, an empty reply, the 60-second timeout, or an invalid session
-file) appear in the modal; closing the modal discards a pending suggestion.
+provider error, an empty reply, the 60-second timeout, a session with no
+requests or activity to title, or an invalid session file) appear in the modal;
+closing the modal discards a pending suggestion.
 
 The server checks the path before touching anything: it must be an existing
 `.jsonl` regular file that starts with a session header. Anything else is
 rejected unchanged. If a dashboard runtime currently has the session open, the
 rename is sent to that runtime instead of being appended to the file, so the
-runtime's in-memory session stays consistent and its live card updates. A dreb
+runtime's in-memory session stays consistent and its live card updates. A
+runtime that is still starting up on that session (a resume in progress) is
+waited for and then renamed the same way. The runtime is told which file the
+rename is for, so if it switches to a different session in the meantime the
+rename fails with an error asking you to try again, instead of renaming the
+other session. A dreb
 process outside this dashboard (such as a TUI) that has the same session open is
 not detected, the same as renaming from the TUI `/resume` picker: that process
 does not see the new name and can overwrite it if it later rewrites the file.

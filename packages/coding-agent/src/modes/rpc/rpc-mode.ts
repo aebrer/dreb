@@ -12,7 +12,7 @@
  */
 
 import * as crypto from "node:crypto";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../../cli/args.js";
 import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
@@ -347,11 +347,45 @@ export async function deleteSessionForRpc(
 }
 
 /**
+ * Handle the `set_session_name` RPC command. Without `sessionPath`, the current session is renamed.
+ * With it, the name is set only when this runtime's current session file is that path. The check
+ * runs synchronously right before the write, so a concurrent session switch (`/new`, resume,
+ * import) cannot redirect a rename aimed at one session file onto another.
+ */
+export function setSessionNameForRpc(
+	session: Pick<AgentSession, "sessionFile" | "setSessionName">,
+	name: string,
+	sessionPath?: string,
+): { ok: true } | { ok: false; error: string } {
+	const nextName = name.trim();
+	if (!nextName) {
+		return { ok: false, error: "Session name cannot be empty" };
+	}
+	if (sessionPath !== undefined) {
+		const current = session.sessionFile;
+		if (!current || resolve(current) !== resolve(sessionPath)) {
+			return {
+				ok: false,
+				error:
+					`Session name not set: this runtime no longer holds ${sessionPath} ` +
+					`(its current session is ${current ?? "not saved to a file"}); try again`,
+			};
+		}
+	}
+	session.setSessionName(nextName);
+	return { ok: true };
+}
+
+/**
  * Handle the `generate_session_title` RPC command: title a saved session file on request with the
  * same {@link TabTitleGenerator} that auto-titles live sessions. The transcript is read without
  * modifying the file; the generator uses this runtime's tab-title settings, model registry,
  * `agentModels` override, and current model (as the parent fallback), while messages, repo, cwd,
  * and the forwarded session ID come from the saved session. Every failure maps to an error.
+ *
+ * Durable settings are reloaded first: the dashboard runs this in long-lived utility runtimes
+ * whose cached settings would otherwise miss later `tabTitle` / `agentModels` changes saved by
+ * another runtime, the TUI, or a hand edit. A failed reload is an error, not a stale title.
  */
 export async function generateSessionTitleForRpc(
 	session: Pick<AgentSession, "settingsManager" | "modelRegistry" | "model">,
@@ -359,6 +393,8 @@ export async function generateSessionTitleForRpc(
 ): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
 	try {
 		const { header, messages } = readSessionTranscript(sessionPath);
+		const refreshed = await settingsWriteLock(() => reloadDurableSettings(session.settingsManager));
+		if (!refreshed.ok) return refreshed;
 		const sessionCwd = header.cwd || undefined;
 		const generator = new TabTitleGenerator(session.settingsManager.getTabTitleSettings(), {
 			setTitle: () => {},
@@ -437,11 +473,12 @@ type SettingsReader = Pick<
 	| "hasProjectEnabledModelsOverride"
 >;
 
-type SettingsRefresher = SettingsReader &
-	Pick<
-		SettingsManager,
-		"reload" | "flush" | "drainErrors" | "hasGlobalSettingsLoadError" | "hasProjectSettingsLoadError"
-	>;
+type DurableSettingsReloader = Pick<
+	SettingsManager,
+	"reload" | "flush" | "drainErrors" | "hasGlobalSettingsLoadError" | "hasProjectSettingsLoadError"
+>;
+
+type SettingsRefresher = SettingsReader & DurableSettingsReloader;
 
 type SettingsWriter = SettingsRefresher &
 	Pick<
@@ -541,53 +578,68 @@ function formatSettingsErrors(errors: Array<{ scope: string; error: Error }>): s
 }
 
 /**
+ * Flush queued settings writes, then reload durable global and project settings.
+ * Callers must hold {@link settingsWriteLock}.
+ *
+ * A failed queued write is returned before reload so its in-memory changes remain intact
+ * rather than being replaced by stale disk content. Reload failures leave SettingsManager's
+ * previous values in memory, therefore they are returned as errors instead of letting the
+ * caller proceed with stale settings.
+ */
+async function reloadDurableSettings(
+	settingsManager: DurableSettingsReloader,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	try {
+		// A runtime setter may have enqueued a write outside the RPC settings lock.
+		// Waiting for SettingsManager's own queue protects that update from reload().
+		await settingsManager.flush();
+	} catch (error) {
+		return { ok: false, error: `Failed to refresh settings: ${(error as Error).message}` };
+	}
+
+	const writeErrors = settingsManager.drainErrors();
+	if (writeErrors.length > 0) {
+		return {
+			ok: false,
+			error: `Failed to refresh settings: pending settings write failed: ${formatSettingsErrors(writeErrors)}`,
+		};
+	}
+
+	try {
+		settingsManager.reload();
+	} catch (error) {
+		return { ok: false, error: `Failed to reload settings: ${(error as Error).message}` };
+	}
+
+	const loadErrors = settingsManager.drainErrors();
+	if (
+		loadErrors.length > 0 ||
+		settingsManager.hasGlobalSettingsLoadError() ||
+		settingsManager.hasProjectSettingsLoadError()
+	) {
+		const detail = formatSettingsErrors(loadErrors);
+		return {
+			ok: false,
+			error: detail ? `Failed to reload settings: ${detail}` : "Failed to reload settings from durable storage",
+		};
+	}
+	return { ok: true };
+}
+
+/**
  * Reload durable global and project settings before serving `get_settings`.
  *
  * The shared settings-operation lock prevents a refresh from discarding another RPC
- * settings operation's queued modifications. A failed queued write is returned before
- * reload so its in-memory changes remain intact rather than being replaced by stale disk
- * content. Reload failures leave SettingsManager's previous values in memory, therefore
- * they must be surfaced as an RPC error instead of producing a stale snapshot.
+ * settings operation's queued modifications. Reload failures must be surfaced as an RPC
+ * error instead of producing a stale snapshot (see {@link reloadDurableSettings}).
  */
 export async function getFreshSettingsForRpc(
 	settingsManager: SettingsRefresher,
 	modelRegistry?: Pick<ModelRegistry, "getAvailable">,
 ): Promise<{ ok: true; settings: RpcSettingsSnapshot } | { ok: false; error: string }> {
 	return settingsWriteLock(async () => {
-		try {
-			// A runtime setter may have enqueued a write outside the RPC settings lock.
-			// Waiting for SettingsManager's own queue protects that update from reload().
-			await settingsManager.flush();
-		} catch (error) {
-			return { ok: false as const, error: `Failed to refresh settings: ${(error as Error).message}` };
-		}
-
-		const writeErrors = settingsManager.drainErrors();
-		if (writeErrors.length > 0) {
-			return {
-				ok: false as const,
-				error: `Failed to refresh settings: pending settings write failed: ${formatSettingsErrors(writeErrors)}`,
-			};
-		}
-
-		try {
-			settingsManager.reload();
-		} catch (error) {
-			return { ok: false as const, error: `Failed to reload settings: ${(error as Error).message}` };
-		}
-
-		const loadErrors = settingsManager.drainErrors();
-		if (
-			loadErrors.length > 0 ||
-			settingsManager.hasGlobalSettingsLoadError() ||
-			settingsManager.hasProjectSettingsLoadError()
-		) {
-			const detail = formatSettingsErrors(loadErrors);
-			return {
-				ok: false as const,
-				error: detail ? `Failed to reload settings: ${detail}` : "Failed to reload settings from durable storage",
-			};
-		}
+		const refreshed = await reloadDurableSettings(settingsManager);
+		if (!refreshed.ok) return refreshed;
 
 		try {
 			const availableModels = modelRegistry ? await modelRegistry.getAvailable() : [];
@@ -2368,11 +2420,10 @@ export async function runRpcMode(
 			}
 
 			case "set_session_name": {
-				const name = command.name.trim();
-				if (!name) {
-					return error(id, "set_session_name", "Session name cannot be empty");
+				const result = setSessionNameForRpc(session, command.name, command.sessionPath);
+				if (!result.ok) {
+					return error(id, "set_session_name", result.error);
 				}
-				session.setSessionName(name);
 				return success(id, "set_session_name");
 			}
 

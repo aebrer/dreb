@@ -934,7 +934,7 @@ The path uses the same unrestricted, cross-project addressing as [`switch_sessio
 
 #### generate_session_title
 
-Generate a title for a saved session file on request, using the same tab-title generator that names live sessions (see [Tab Title settings](settings.md#tab-title)). The session is not loaded or switched to, and the file is never modified: it is read once (old formats are migrated in memory only) and its current branch is used as the context. The command uses this process's `tabTitle.model` and `tabTitle.maxTitleLength` settings, Explore-agent `agentModels` routing, and current model as the parent fallback; `tabTitle.enabled` and `triggerAfter` do not apply. The title is returned, not saved — rename the session separately (for example with the dashboard's rename endpoint or `/name` after resuming).
+Generate a title for a saved session file on request, using the same tab-title generator that names live sessions (see [Tab Title settings](settings.md#tab-title)). The session is not loaded or switched to, and the file is never modified: it is read once (old formats are migrated in memory only) and its current branch is used as the context. The command uses this process's `tabTitle.model` and `tabTitle.maxTitleLength` settings, Explore-agent `agentModels` routing, and current model as the parent fallback; `tabTitle.enabled` and `triggerAfter` do not apply. Global and project settings are reloaded from disk first (like `get_settings`), so changes saved by another process apply; a failed reload is an error response. The title is returned, not saved — rename the session separately (for example with the dashboard's rename endpoint or `/name` after resuming).
 
 ```json
 {"type": "generate_session_title", "sessionPath": "/path/to/session.jsonl"}
@@ -945,7 +945,7 @@ Response:
 {"type": "response", "command": "generate_session_title", "success": true, "data": {"title": "Fix login flow"}}
 ```
 
-Generation is bounded at 60 seconds; `RpcClient.generateSessionTitle()` waits 90 seconds so the generator's own timeout error is returned. Every failure is an error response — an invalid path (not `.jsonl`, missing, not a regular file, or no session header), no available model, a provider error (with the parent-retry detail), or an empty reply:
+Generation is bounded at 60 seconds; `RpcClient.generateSessionTitle()` waits 90 seconds so the generator's own timeout error is returned. Every failure is an error response — an invalid path (not `.jsonl`, missing, not a regular file, or no session header), settings that cannot be reloaded, a session with no user requests or activity to title (its project directory alone is not titled), no available model, a provider error (with the parent-retry detail), or an empty reply:
 ```json
 {
   "type": "response",
@@ -1040,10 +1040,16 @@ Returns `{"text": null}` if no assistant messages exist.
 
 #### set_session_name
 
-Set a display name for the current session. The name appears in session listings and helps identify sessions.
+Set a display name for the current session. The name appears in session listings and helps identify sessions. Empty or whitespace-only names are rejected.
 
 ```json
 {"type": "set_session_name", "name": "my-feature-work"}
+```
+
+The optional `sessionPath` makes the rename conditional: it applies only while that file (compared after path resolution) is the process's current session, and otherwise fails without changing anything. This lets a caller that looked up which process holds a session file rename it safely even if the process switches sessions (`new_session`, `switch_session`, an import) before the command arrives.
+
+```json
+{"type": "set_session_name", "name": "my-feature-work", "sessionPath": "/path/to/session.jsonl"}
 ```
 
 Response:
@@ -1052,6 +1058,16 @@ Response:
   "type": "response",
   "command": "set_session_name",
   "success": true
+}
+```
+
+When `sessionPath` no longer matches the current session:
+```json
+{
+  "type": "response",
+  "command": "set_session_name",
+  "success": false,
+  "error": "Session name not set: this runtime no longer holds /path/to/session.jsonl (its current session is /path/to/other.jsonl); try again"
 }
 ```
 

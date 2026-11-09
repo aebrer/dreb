@@ -193,7 +193,7 @@ export function makeFakeClient() {
 		fork: vi.fn(async () => ({ text: "", cancelled: false })),
 		listSessions: vi.fn(async () => []),
 		switchSession: vi.fn(async () => ({ cancelled: false })),
-		setSessionName: vi.fn(async (_name: string) => {}),
+		setSessionName: vi.fn(async (_name: string, _options?: { sessionPath?: string }) => {}),
 		generateSessionTitle: vi.fn(async (_sessionPath: string) => ({ title: "Generated title" })),
 		prompt: vi.fn(async () => {}),
 		steer: vi.fn(async () => {}),
@@ -470,6 +470,66 @@ describe("RuntimePool", () => {
 		vi.mocked(clients[0].getState).mockRejectedValue(new Error("RPC process not running"));
 
 		await expect(pool.findBySessionFile("/sessions/resumed.jsonl")).resolves.toBe(owner);
+	});
+
+	it("findBySessionFile() waits for a runtime still resuming the file and returns it", async () => {
+		const start = deferred<void>();
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			clientFactory: () => {
+				const client = makeFakeClient();
+				vi.mocked(client.start).mockReturnValue(start.promise);
+				vi.mocked(client.getState).mockResolvedValue({ sessionFile: "/sessions/one.jsonl" } as any);
+				clients.push(client);
+				return client;
+			},
+		});
+		// The child was spawned with --session and has loaded the file, but is not listed yet.
+		const resuming = pool.create("/tmp/a", "/sessions/one.jsonl");
+		let settled = false;
+		const lookup = pool.findBySessionFile("/sessions/sub/../one.jsonl").finally(() => {
+			settled = true;
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(settled).toBe(false);
+		start.resolve();
+
+		const owner = await resuming;
+		await expect(lookup).resolves.toBe(owner);
+	});
+
+	it("findBySessionFile() does not wait for a runtime resuming a different file", async () => {
+		const start = deferred<void>();
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			clientFactory: () => {
+				const client = makeFakeClient();
+				vi.mocked(client.start).mockReturnValue(start.promise);
+				return client;
+			},
+		});
+		const resuming = pool.create("/tmp/a", "/sessions/other.jsonl");
+
+		await expect(pool.findBySessionFile("/sessions/one.jsonl")).resolves.toBeUndefined();
+		start.resolve();
+		await resuming;
+	});
+
+	it("findBySessionFile() looks again when a runtime is listed during the state round trip", async () => {
+		const { pool, clients } = makePool();
+		await pool.create("/tmp/slow");
+		const slowState = deferred<unknown>();
+		vi.mocked(clients[0].getState).mockReturnValue(slowState.promise as any);
+
+		const lookup = pool.findBySessionFile("/sessions/one.jsonl");
+		// While the first runtime is still answering, another resumes the file and finishes starting.
+		const owner = await pool.create("/tmp/fast", "/sessions/one.jsonl");
+		vi.mocked(clients[1].getState).mockResolvedValue({ sessionFile: "/sessions/one.jsonl" } as any);
+		slowState.resolve({ sessionFile: "/sessions/elsewhere.jsonl" });
+
+		await expect(lookup).resolves.toBe(owner);
 	});
 
 	it("findBySessionFile() never returns a utility runtime", async () => {
