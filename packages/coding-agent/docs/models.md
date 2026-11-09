@@ -107,7 +107,7 @@ Set `api` at provider level (default for all models) or model level (override pe
 
 | Field | Description |
 |-------|-------------|
-| `baseUrl` | API endpoint URL |
+| `baseUrl` | API endpoint URL (supports `{env:}`/`{file:}` [value templates](#value-resolution)) |
 | `api` | API type (see above) |
 | `apiKey` | API key (see value resolution below) |
 | `headers` | Custom headers (see value resolution below) |
@@ -117,12 +117,19 @@ Set `api` at provider level (default for all models) or model level (override pe
 
 ### Value Resolution
 
-The `apiKey` and `headers` fields support three formats:
+The `apiKey` and `headers` fields support these formats; `baseUrl` supports
+templates and literals:
 
 - **Shell command:** `"!command"` executes and uses stdout
   ```json
   "apiKey": "!security find-generic-password -ws 'anthropic'"
   "apiKey": "!op read 'op://vault/item/credential'"
+  ```
+- **Templates:** `{env:NAME}` reads an environment variable and `{file:PATH}`
+  reads a file. Both are trimmed and resolved per request:
+  ```json
+  "baseUrl": "{env:PROXY_URL}/v1"
+  "apiKey": "{file:/run/secrets/proxy-key}"
   ```
 - **Environment variable:** Uses the value of the named variable
   ```json
@@ -132,6 +139,10 @@ The `apiKey` and `headers` fields support three formats:
   ```json
   "apiKey": "sk-..."
   ```
+
+Templates take precedence over the bare-name rule. A missing or empty variable,
+or an unreadable file, fails before any request; the token text is never used as
+a value, and resolved values are never logged.
 
 ### Bearer Auth for Anthropic-Compatible Providers
 
