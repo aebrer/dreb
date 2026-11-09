@@ -1,6 +1,6 @@
 # Windows Setup
 
-dreb's built-in tools (`bash`, `grep`, `find`) execute commands through a bash shell. Windows doesn't ship with bash, so dreb searches for one at startup.
+dreb's `bash` tool executes commands through a bash shell. Windows doesn't ship with bash, so dreb searches for one at startup. The built-in `grep` and `find` tools invoke `rg` and `fd` directly rather than passing their patterns through the shell.
 
 ## Shell resolution order
 
@@ -20,7 +20,7 @@ For most users, [Git for Windows](https://git-scm.com/download/win) is the simpl
 
 ## PowerShell
 
-PowerShell is not supported. dreb's tool execution assumes bash semantics (pipes, redirects, `&&`/`||`, glob expansion). PowerShell uses different syntax for all of these, so commands the model generates would fail silently or behave unexpectedly.
+PowerShell is not supported as the shell for the `bash` tool. Commands generated for that tool use bash syntax and semantics, so substituting PowerShell can produce errors or different behavior.
 
 ## WSL vs Git Bash
 
@@ -30,6 +30,20 @@ Both work. Tradeoffs:
 - **WSL** — full Linux environment, all tools behave as expected. Filesystem access across the Windows/Linux boundary is slower. If your project lives on the Windows filesystem, Git Bash may be faster for file operations.
 
 If you use WSL, consider running dreb entirely inside WSL rather than from Windows pointing at WSL's bash.
+
+## Find glob patterns
+
+Use forward slashes in the `find` tool's `pattern`, even on native Windows:
+
+- `*.spec.ts` matches basenames at any depth.
+- `src/**/*.spec.ts` matches both `src/example.spec.ts` and deeper files such as `src/foo/bar/nested.spec.ts`.
+- `some/parent/*.txt` matches direct children, not `some/parent/child/deep.txt`.
+
+fd still handles traversal and `.gitignore` rules. For path-bearing patterns on
+native Windows, dreb matches normalized candidate paths itself so recursive
+stars and single-star directory boundaries keep those meanings with native
+backslash paths. Candidates are streamed, and only matches consume the result
+limit. Output paths remain relative to the search directory with forward slashes.
 
 ## Common issues
 
