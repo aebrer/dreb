@@ -206,3 +206,65 @@ describe("SessionManager.setSessionFile with corrupted files", () => {
 		expect(sm2.getHeader()?.type).toBe("session");
 	});
 });
+
+describe("SessionManager appends to an existing file", () => {
+	let tempDir: string;
+
+	const headerLine = '{"type":"session","version":3,"id":"abc","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp"}';
+	const userLine =
+		'{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hi","timestamp":1}}';
+	const assistantLine =
+		'{"type":"message","id":"a1","parentId":"u1","timestamp":"2025-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"api":"anthropic-messages","provider":"anthropic","model":"test","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}';
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `session-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("starts a new line when the last record has no trailing newline", () => {
+		const file = join(tempDir, "unterminated.jsonl");
+		const before = [headerLine, userLine, assistantLine].join("\n");
+		writeFileSync(file, before);
+
+		const sm = SessionManager.open(file, tempDir);
+		sm.appendMessage({ role: "user", content: "next", timestamp: 3 });
+
+		const after = readFileSync(file, "utf-8");
+		expect(after.startsWith(`${before}\n`)).toBe(true);
+		expect(after.endsWith("\n")).toBe(true);
+		const messages = loadEntriesFromFile(file).filter((entry) => entry.type === "message");
+		expect(messages.map((entry) => entry.id)).toEqual(["u1", "a1", expect.any(String)]);
+	});
+
+	it("keeps a new record readable after a partial last line from an interrupted write", () => {
+		const file = join(tempDir, "partial.jsonl");
+		const before = `${[headerLine, userLine, assistantLine].join("\n")}\n{"type":"message","id":"cut`;
+		writeFileSync(file, before);
+
+		const sm = SessionManager.open(file, tempDir);
+		sm.appendSessionInfo("Recovered");
+
+		const after = readFileSync(file, "utf-8");
+		expect(after.startsWith(`${before}\n`)).toBe(true);
+		const entries = loadEntriesFromFile(file);
+		expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message", "session_info"]);
+	});
+
+	it("does not add a blank line when the file already ends with a newline", () => {
+		const file = join(tempDir, "terminated.jsonl");
+		const before = `${[headerLine, userLine, assistantLine].join("\n")}\n`;
+		writeFileSync(file, before);
+
+		const sm = SessionManager.open(file, tempDir);
+		sm.appendSessionInfo("Named");
+
+		const after = readFileSync(file, "utf-8");
+		expect(after.startsWith(before)).toBe(true);
+		expect(after.slice(before.length)).not.toMatch(/^\n/);
+		expect(after.trimEnd().split("\n")).toHaveLength(4);
+	});
+});

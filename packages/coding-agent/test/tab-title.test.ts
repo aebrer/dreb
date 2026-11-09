@@ -1167,4 +1167,324 @@ describe("TabTitleGenerator", () => {
 			expect(deps.setSessionName).toHaveBeenCalled();
 		});
 	});
+
+	describe("provider error stop reasons", () => {
+		function makeErrorResponse(errorMessage: string, stopReason: "error" | "aborted" = "error") {
+			return { ...makeAssistantResponse(""), content: [], stopReason, errorMessage };
+		}
+
+		it("retries with the parent when the selected model reports an error stop reason", async () => {
+			mockParseAgent.mockReturnValue({
+				ok: true,
+				config: {
+					name: "Explore",
+					description: "test",
+					model: ["explore-provider/explore-model"],
+					systemPrompt: "",
+				},
+			});
+			mockResolveModel.mockResolvedValue({
+				ok: true,
+				modelId: "explore-model",
+				provider: "explore-provider",
+				skippedModels: [],
+			});
+			mockCompleteSimple
+				.mockResolvedValueOnce(makeErrorResponse("404 model not found") as any)
+				.mockResolvedValueOnce(makeAssistantResponse("Parent title") as any);
+			const registry = {
+				getApiKey: vi.fn().mockResolvedValue("test-key"),
+				getAvailable: () => [MOCK_MODEL, EXPLORE_MODEL],
+				find: (provider: string, modelId: string) =>
+					[MOCK_MODEL, EXPLORE_MODEL].find((model) => model.provider === provider && model.id === modelId),
+			};
+			const onError = vi.fn();
+			const deps = createMockDeps({ getModelRegistry: () => registry as any, onError });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => expect(deps.setTitle).toHaveBeenCalledWith("dreb - Parent title"));
+			expect(mockCompleteSimple).toHaveBeenCalledTimes(2);
+			expect(mockCompleteSimple.mock.calls[1][0]).toMatchObject({ provider: "test-provider", id: "test-model" });
+			expect(onError).not.toHaveBeenCalled();
+		});
+
+		it("reports an error stop reason through onError instead of failing silently", async () => {
+			mockCompleteSimple.mockResolvedValue(makeErrorResponse("401 invalid api key") as any);
+			const onError = vi.fn();
+			const deps = createMockDeps({ onError });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+			expect((onError.mock.calls[0][0] as Error).message).toBe(
+				"Tab title generation failed with model test-provider/test-model: 401 invalid api key",
+			);
+			expect(deps.setTitle).not.toHaveBeenCalled();
+		});
+
+		it("reports an aborted stop reason as a failure", async () => {
+			mockCompleteSimple.mockResolvedValue(makeErrorResponse("", "aborted") as any);
+			const gen = new TabTitleGenerator(undefined, createMockDeps());
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				'Tab title generation failed with model test-provider/test-model: request ended with stop reason "aborted"',
+			);
+		});
+
+		it("names the stop reason when an error response carries no message", async () => {
+			mockCompleteSimple.mockResolvedValue(makeErrorResponse("") as any);
+			const gen = new TabTitleGenerator(undefined, createMockDeps());
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				'Tab title generation failed with model test-provider/test-model: request ended with stop reason "error"',
+			);
+		});
+
+		describe("generation timeout", () => {
+			/** Stand in for the 60 s pipeline deadline: the provider aborts once the signal fires. */
+			function expireDeadlineDuringRequest(): void {
+				const deadline = new AbortController();
+				vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+				mockCompleteSimple.mockImplementation(async () => {
+					deadline.abort();
+					return makeErrorResponse("Request was aborted", "aborted") as any;
+				});
+			}
+
+			it("reports the deadline instead of the provider's abort message on demand", async () => {
+				expireDeadlineDuringRequest();
+				const gen = new TabTitleGenerator(undefined, createMockDeps());
+
+				await expect(gen.generateNow()).rejects.toThrow(
+					"Tab title generation failed with model test-provider/test-model: timed out after 60s",
+				);
+				expect(AbortSignal.timeout).toHaveBeenCalledWith(60_000);
+			});
+
+			it("reports the deadline through onError for live auto-titles", async () => {
+				expireDeadlineDuringRequest();
+				const onError = vi.fn();
+				const deps = createMockDeps({ onError });
+				const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+				gen.onToolEnd();
+
+				await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+				expect((onError.mock.calls[0][0] as Error).message).toBe(
+					"Tab title generation failed with model test-provider/test-model: timed out after 60s",
+				);
+				expect(deps.setTitle).not.toHaveBeenCalled();
+			});
+		});
+	});
+
+	describe("on-demand generation (generateNow)", () => {
+		it("returns the sanitized title without setting the terminal title or session name", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse('"Saved session title"') as any);
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator(undefined, deps);
+
+			await expect(gen.generateNow()).resolves.toBe("Saved session title");
+
+			expect(deps.setTitle).not.toHaveBeenCalled();
+			expect(deps.setSessionName).not.toHaveBeenCalled();
+		});
+
+		it("ignores enabled: false, the trigger threshold, and an existing session name", async () => {
+			const deps = createMockDeps({ getSessionName: () => "Already named" });
+			const gen = new TabTitleGenerator({ enabled: false, triggerAfter: 50 }, deps);
+
+			await expect(gen.generateNow()).resolves.toBe("Fix auth bug");
+			expect(gen.currentCount).toBe(0);
+			expect(gen.hasFired).toBe(false);
+		});
+
+		it("honors the pinned tabTitle.model and the maxTitleLength soft target", async () => {
+			const registry = {
+				getApiKey: vi.fn().mockResolvedValue("test-key"),
+				getAvailable: () => [MOCK_MODEL, EXPLORE_MODEL],
+				find: (provider: string, modelId: string) =>
+					[MOCK_MODEL, EXPLORE_MODEL].find((model) => model.provider === provider && model.id === modelId),
+			};
+			const deps = createMockDeps({ getModelRegistry: () => registry as any });
+			const gen = new TabTitleGenerator({ model: "explore-provider/explore-model", maxTitleLength: 42 }, deps);
+
+			await gen.generateNow();
+
+			expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({
+				provider: "explore-provider",
+				id: "explore-model",
+			});
+			expect((mockCompleteSimple.mock.calls[0][1] as any).systemPrompt).toContain("Aim for about 42 characters");
+		});
+
+		it.each([
+			["missing slash", "title-model"],
+			["trailing slash", "dedicated-provider/"],
+			["well-formed but unknown", "dedicated-provider/title-model"],
+		])("throws instead of substituting the parent for a pinned model with %s", async (_label, configuredModel) => {
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ model: configuredModel }, deps);
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				`Tab title generation failed: tabTitle.model "${configuredModel}" is not a known model ` +
+					"(choose another Tab Title model in Settings, or add it to models.json)",
+			);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+			expect(mockResolveModel).not.toHaveBeenCalled();
+		});
+
+		it("forwards the supplied session ID", async () => {
+			const deps = createMockDeps({ getSessionId: () => "saved-session-id" });
+			const gen = new TabTitleGenerator(undefined, deps);
+
+			await gen.generateNow();
+
+			expect((mockCompleteSimple.mock.calls[0][2] as Record<string, unknown>).sessionId).toBe("saved-session-id");
+		});
+
+		it("throws when no model is available", async () => {
+			const deps = createMockDeps({ getModel: () => undefined });
+			const gen = new TabTitleGenerator(undefined, deps);
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				"Tab title generation failed: no model is available (set a default model or tabTitle.model)",
+			);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+		});
+
+		it("throws when there is no context to title", async () => {
+			const deps = createMockDeps({ getMessages: () => [], getBranch: () => undefined, getRepo: () => undefined });
+			const gen = new TabTitleGenerator(undefined, deps);
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				"Tab title generation failed: the session has no requests or activity to title",
+			);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+		});
+
+		it("throws instead of titling branch/repo/cwd metadata alone", async () => {
+			const deps = createMockDeps({ getMessages: () => [], getCwd: () => "/home/user/test-repo" });
+			const gen = new TabTitleGenerator(undefined, deps);
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				"Tab title generation failed: the session has no requests or activity to title",
+			);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+		});
+
+		it("titles session activity when there is no user request", async () => {
+			const deps = createMockDeps({ getMessages: () => [] });
+			const gen = new TabTitleGenerator(undefined, deps);
+			gen.primeFromHistory([{ role: "assistant", content: [{ type: "text", text: "Rebuilt the index." }] }]);
+
+			await expect(gen.generateNow()).resolves.toBe("Fix auth bug");
+			const content = (mockCompleteSimple.mock.calls[0][1] as any).messages[0].content as string;
+			expect(content).toContain("Assistant: Rebuilt the index.");
+		});
+
+		it("throws when the model returns no usable title", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse("   ") as any);
+			const gen = new TabTitleGenerator(undefined, createMockDeps());
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				"Tab title generation failed with model test-provider/test-model: the model returned no usable title",
+			);
+		});
+
+		it("throws model failures with the parent fallback detail", async () => {
+			mockParseAgent.mockReturnValue({
+				ok: true,
+				config: {
+					name: "Explore",
+					description: "test",
+					model: ["explore-provider/explore-model"],
+					systemPrompt: "",
+				},
+			});
+			mockResolveModel.mockResolvedValue({
+				ok: true,
+				modelId: "explore-model",
+				provider: "explore-provider",
+				skippedModels: [],
+			});
+			mockCompleteSimple
+				.mockRejectedValueOnce(new Error("explore down"))
+				.mockRejectedValueOnce(new Error("parent down"));
+			const registry = {
+				getApiKey: vi.fn().mockResolvedValue("test-key"),
+				getAvailable: () => [MOCK_MODEL, EXPLORE_MODEL],
+				find: (provider: string, modelId: string) =>
+					[MOCK_MODEL, EXPLORE_MODEL].find((model) => model.provider === provider && model.id === modelId),
+			};
+			const gen = new TabTitleGenerator(undefined, createMockDeps({ getModelRegistry: () => registry as any }));
+
+			await expect(gen.generateNow()).rejects.toThrow(
+				"Tab title generation failed with model explore-provider/explore-model: explore down. " +
+					"Parent fallback test-provider/test-model also failed: parent down",
+			);
+		});
+	});
+
+	describe("primeFromHistory", () => {
+		const history = [
+			{ role: "user", content: "Rename the dashboard sessions" },
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "SECRET-THINKING" },
+					{ type: "text", text: "Looking at the fleet screen." },
+					{ type: "toolCall", id: "t1", name: "read", arguments: { path: "fleet.tsx" } },
+				],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "t1",
+				toolName: "read",
+				isError: false,
+				content: [
+					{ type: "text", text: "fleet source" },
+					{ type: "image", data: "IMAGE-BASE64-DATA", mimeType: "image/png" },
+				],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "t2",
+				toolName: "bash",
+				isError: true,
+				content: [{ type: "text", text: "boom" }],
+			},
+		];
+
+		it("labels stored assistant turns and tool results like live events", async () => {
+			const deps = createMockDeps({ getMessages: () => history });
+			const gen = new TabTitleGenerator(undefined, deps);
+
+			gen.primeFromHistory(history);
+			await gen.generateNow();
+
+			const content = (mockCompleteSimple.mock.calls[0][1] as any).messages[0].content as string;
+			expect(content).toContain("- Rename the dashboard sessions");
+			expect(content).toContain("Assistant: Looking at the fleet screen.");
+			expect(content).toContain("Called tools: read");
+			expect(content).toContain("Tool read completed: fleet source");
+			expect(content).toContain("Tool bash failed: boom");
+			expect(content).not.toContain("SECRET-THINKING");
+			expect(content).not.toContain("IMAGE-BASE64-DATA");
+		});
+
+		it("never counts toward the trigger or starts automatic generation", async () => {
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, createMockDeps());
+
+			gen.primeFromHistory(history);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(gen.currentCount).toBe(0);
+			expect(gen.hasFired).toBe(false);
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+		});
+	});
 });

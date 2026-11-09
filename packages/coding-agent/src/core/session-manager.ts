@@ -8,6 +8,7 @@ import {
 	appendFileSync,
 	closeSync,
 	existsSync,
+	fstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -465,20 +466,180 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 	return entries;
 }
 
+/** Upper bound on bytes scanned for a session header line (headers carry paths, so 512 bytes is not enough). */
+const MAX_SESSION_HEADER_BYTES = 64 * 1024;
+
+/**
+ * Read a file's first line without loading the whole file. Returns undefined when the line
+ * exceeds `maxBytes`. Filesystem errors propagate.
+ */
+function readFirstLine(filePath: string, maxBytes: number): string | undefined {
+	const fd = openSync(filePath, "r");
+	try {
+		const chunks: Buffer[] = [];
+		const buffer = Buffer.alloc(4096);
+		let position = 0;
+		while (position < maxBytes) {
+			const bytesRead = readSync(fd, buffer, 0, Math.min(buffer.length, maxBytes - position), position);
+			if (bytesRead === 0) return Buffer.concat(chunks).toString("utf8");
+			const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+			if (newline !== -1) {
+				chunks.push(Buffer.from(buffer.subarray(0, newline)));
+				return Buffer.concat(chunks).toString("utf8");
+			}
+			chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+			position += bytesRead;
+		}
+		return undefined;
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/**
+ * Whether `filePath` is a non-empty file whose last byte is not a newline. dreb ends every record
+ * with "\n", but a session file edited by hand or written by another JSONL tool may leave its last
+ * record unterminated, and an interrupted write leaves a partial line. Appending a record there
+ * without first starting a new line would join it to that line and make both unreadable.
+ */
+function endsWithoutNewline(filePath: string): boolean {
+	let fd: number;
+	try {
+		fd = openSync(filePath, "r");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+	try {
+		const { size } = fstatSync(fd);
+		if (size === 0) return false;
+		const last = Buffer.alloc(1);
+		readSync(fd, last, 0, 1, size - 1);
+		return last[0] !== 0x0a;
+	} finally {
+		closeSync(fd);
+	}
+}
+
+function parseSessionHeaderLine(line: string | undefined): SessionHeader | undefined {
+	if (!line) return undefined;
+	try {
+		const header = JSON.parse(line);
+		return header?.type === "session" && typeof header.id === "string" ? (header as SessionHeader) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function isValidSessionFile(filePath: string): boolean {
 	try {
-		const fd = openSync(filePath, "r");
-		const buffer = Buffer.alloc(512);
-		const bytesRead = readSync(fd, buffer, 0, 512, 0);
-		closeSync(fd);
-		const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
-		if (!firstLine) return false;
-		const header = JSON.parse(firstLine);
-		return header.type === "session" && typeof header.id === "string";
+		return parseSessionHeaderLine(readFirstLine(filePath, MAX_SESSION_HEADER_BYTES)) !== undefined;
 	} catch {
-		/* Not a valid session file (corrupt, not JSON) */
+		/* Not a valid session file (unreadable) */
 		return false;
 	}
+}
+
+/** Result of {@link checkSessionFile}: the resolved path and header, or why it is not a usable session file. */
+export type SessionFileCheck = { ok: true; path: string; header: SessionHeader } | { ok: false; error: string };
+
+/**
+ * Check, without side effects, that a caller-supplied path names an existing session file:
+ * a `.jsonl` regular file whose first line is a valid session header.
+ *
+ * {@link SessionManager.open} is not safe on unchecked paths: it truncates an existing file that
+ * lacks a session header and creates missing parent directories. Callers that open or read a
+ * session by an externally supplied path (e.g. the dashboard) must check it first. Like
+ * `switch_session` and {@link SessionManager.deleteSession}, there is no sessions-directory
+ * containment guard (see the PR #315 discussion).
+ */
+export function checkSessionFile(sessionPath: string): SessionFileCheck {
+	const resolvedPath = resolve(sessionPath);
+	if (!resolvedPath.endsWith(".jsonl")) {
+		return { ok: false, error: `Not a session file (expected .jsonl): ${sessionPath}` };
+	}
+
+	let stats: Stats;
+	try {
+		stats = statSync(resolvedPath);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException | undefined)?.code;
+		if (code === "ENOENT" || code === "ENOTDIR") {
+			return { ok: false, error: `Session file does not exist: ${sessionPath}` };
+		}
+		return { ok: false, error: `Cannot access session file ${sessionPath}: ${(error as Error).message}` };
+	}
+	if (!stats.isFile()) {
+		return { ok: false, error: `Not a session file (not a regular file): ${sessionPath}` };
+	}
+
+	let firstLine: string | undefined;
+	try {
+		firstLine = readFirstLine(resolvedPath, MAX_SESSION_HEADER_BYTES);
+	} catch (error) {
+		return { ok: false, error: `Cannot read session file ${sessionPath}: ${(error as Error).message}` };
+	}
+	const header = parseSessionHeaderLine(firstLine);
+	if (!header) {
+		return { ok: false, error: `Not a session file (missing or invalid session header): ${sessionPath}` };
+	}
+	return { ok: true, path: resolvedPath, header };
+}
+
+/** A persisted session's header and current-branch messages, read without modifying the file. */
+export interface SessionTranscript {
+	header: SessionHeader;
+	/**
+	 * Messages on the current branch from root to leaf. Compaction is ignored, so messages a
+	 * compaction summarized (including the session's original first request) are present.
+	 */
+	messages: AgentMessage[];
+}
+
+/**
+ * Read a persisted session's transcript for analysis (e.g. on-demand titling).
+ *
+ * Unlike {@link SessionManager.open}, this never writes: old-format sessions are migrated in
+ * memory only, and invalid paths are rejected by {@link checkSessionFile} before anything is read.
+ * The current branch ends at the last entry in the file, matching what a resume would load.
+ * Throws an Error describing why the path is not a readable session file.
+ */
+export function readSessionTranscript(sessionPath: string): SessionTranscript {
+	const check = checkSessionFile(sessionPath);
+	if (!check.ok) throw new Error(check.error);
+
+	const entries = loadEntriesFromFile(check.path);
+	const header = entries[0];
+	if (!header || header.type !== "session") {
+		throw new Error(`Not a session file (missing or invalid session header): ${sessionPath}`);
+	}
+	migrateToCurrentVersion(entries);
+
+	const sessionEntries = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
+	const byId = new Map(sessionEntries.map((entry) => [entry.id, entry]));
+	const branch: SessionEntry[] = [];
+	const visited = new Set<string>();
+	let current = sessionEntries.at(-1);
+	// The visited guard keeps a corrupt parentId cycle from looping forever.
+	while (current && !visited.has(current.id)) {
+		visited.add(current.id);
+		branch.push(current);
+		current = current.parentId ? byId.get(current.parentId) : undefined;
+	}
+	branch.reverse();
+
+	const messages = branch.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+	return { header: header as SessionHeader, messages };
+}
+
+/** The session name recorded in a session file: the latest `session_info` entry, if any. */
+function readPersistedSessionName(filePath: string): string | undefined {
+	const entries = loadEntriesFromFile(filePath);
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry.type === "session_info") return entry.name?.trim() || undefined;
+	}
+	return undefined;
 }
 
 /** Exported for testing */
@@ -1005,14 +1166,14 @@ export class SessionManager {
 			return;
 		}
 
-		if (!this.flushed) {
-			for (const e of this.fileEntries) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(e)}\n`);
-			}
-			this.flushed = true;
-		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+		const records = this.flushed ? [entry] : this.fileEntries;
+		// Start on a fresh line if the file's last record is unterminated (see endsWithoutNewline).
+		let prefix = endsWithoutNewline(this.sessionFile) ? "\n" : "";
+		for (const record of records) {
+			appendFileSync(this.sessionFile, `${prefix}${JSON.stringify(record)}\n`);
+			prefix = "";
 		}
+		this.flushed = true;
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
@@ -1661,6 +1822,46 @@ export class SessionManager {
 			const error = trashErrorHint ? `${unlinkError} (${trashErrorHint})` : unlinkError;
 			return { ok: false, method: "unlink", error };
 		}
+	}
+
+	/**
+	 * Rename a persisted session by path by appending a `session_info` entry, the same record
+	 * `/name` and the `/resume` picker write. Empty names are rejected (no clearing).
+	 *
+	 * The path is checked first with {@link checkSessionFile}, because {@link SessionManager.open}
+	 * truncates header-less files and creates missing directories. After appending, the file is
+	 * re-read to confirm the name was saved: entries are held in memory until a session has an
+	 * assistant reply, so a header-only session would otherwise "succeed" without writing anything.
+	 *
+	 * A process that already has the session open does not see this write and may later rewrite
+	 * the file without it. Callers that can reach that process (e.g. a dashboard runtime) should
+	 * rename through it instead.
+	 */
+	static renameSession(sessionPath: string, name: string): { ok: true; name: string } | { ok: false; error: string } {
+		const nextName = name.trim();
+		if (!nextName) {
+			return { ok: false, error: "Session name cannot be empty" };
+		}
+
+		const check = checkSessionFile(sessionPath);
+		if (!check.ok) return check;
+
+		try {
+			SessionManager.open(check.path).appendSessionInfo(nextName);
+			const persisted = readPersistedSessionName(check.path);
+			if (persisted !== nextName) {
+				return {
+					ok: false,
+					error:
+						`Session name was not saved to ${sessionPath}: the file does not record it after writing ` +
+						"(sessions without an assistant reply are not written to disk yet)",
+				};
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { ok: false, error: `Failed to rename session ${sessionPath}: ${message}` };
+		}
+		return { ok: true, name: nextName };
 	}
 
 	/**

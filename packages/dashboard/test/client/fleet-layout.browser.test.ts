@@ -90,6 +90,7 @@ const HARNESS_HTML = `<!DOCTYPE html>
 					<span class="meta" data-critical>${prose}${unbroken}</span>
 					<span class="actions" data-critical data-no-overflow>
 						<button type="button" class="btn btn-small" data-disk-action>resume</button>
+						<button type="button" class="btn btn-small" data-disk-action>rename</button>
 						<button type="button" class="btn btn-small btn-danger" data-disk-action>delete</button>
 					</span>
 				</div>

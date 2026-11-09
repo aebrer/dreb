@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDashboardSessionLister } from "../src/index.js";
@@ -32,6 +32,7 @@ interface TestServerOptions {
 	auth?: DashboardAuth;
 	listAllSessions?: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession?: (path: string) => Promise<unknown>;
+	renameSession?: (path: string, name: string) => Promise<unknown>;
 	staticDir?: string;
 	onRestart?: () => void;
 	logger?: (line: string) => void;
@@ -114,11 +115,13 @@ function parseSseEnvelopes(body: string): Array<{ seq: number; key: string; even
 
 async function startServer(options: TestServerOptions = {}) {
 	const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+	const clientCwds: string[] = [];
 	const pool = new RuntimePool({
 		cliPath: "/fake/cli.js",
-		clientFactory: () => {
+		clientFactory: ({ cwd }) => {
 			const client = makeFakeClient();
 			clients.push(client);
+			clientCwds.push(cwd);
 			return client;
 		},
 		fleetSnapshotDebounceMs: options.fleetSnapshotDebounceMs,
@@ -128,6 +131,7 @@ async function startServer(options: TestServerOptions = {}) {
 		pool,
 		listAllSessions: options.listAllSessions ?? (async () => []),
 		deleteSession: options.deleteSession ?? (async () => ({ method: "trash" })),
+		renameSession: options.renameSession ?? (async (_path: string, name: string) => ({ name })),
 		staticDir: options.staticDir,
 		onRestart: options.onRestart,
 		logger: options.logger ?? (() => {}),
@@ -142,7 +146,7 @@ async function startServer(options: TestServerOptions = {}) {
 	servers.push(server);
 	const address = server.address();
 	if (address === null || typeof address === "string") throw new Error("no port");
-	return { base: `http://127.0.0.1:${address.port}`, pool, clients, app };
+	return { base: `http://127.0.0.1:${address.port}`, pool, clients, clientCwds, app };
 }
 
 describe("dashboard server — auth middleware", () => {
@@ -2549,6 +2553,219 @@ describe("dashboard server — lifecycle and disk sessions", () => {
 		expect(deleteSession).toHaveBeenCalledWith("/sessions/one.jsonl");
 		expect(frames).toHaveLength(1);
 		expect(frames[0]).toContain('"key":"","event":{"type":"disk_sessions_changed"}');
+	});
+});
+
+describe("dashboard server — past-session rename and titles", () => {
+	async function writeSessionFile(cwd: string, name = "session.jsonl"): Promise<string> {
+		const dir = await createTempProject();
+		const path = join(dir, name);
+		const header = { type: "session", version: 3, id: "saved", timestamp: "2026-01-01T00:00:00.000Z", cwd };
+		await writeFile(path, `${JSON.stringify(header)}\n`, "utf8");
+		return path;
+	}
+
+	function postJson(base: string, route: string, body: unknown): Promise<globalThis.Response> {
+		return fetch(`${base}${route}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	}
+
+	function captureHub(): { hub: EventHub; diskChanges: () => number } {
+		const hub = new EventHub();
+		const frames: string[] = [];
+		hub.attach({
+			write: (frame) => {
+				frames.push(frame);
+				return true;
+			},
+		});
+		return {
+			hub,
+			diskChanges: () => frames.filter((frame) => frame.includes('"event":{"type":"disk_sessions_changed"}')).length,
+		};
+	}
+
+	it("POST /api/sessions/rename rejects missing paths, empty names, and non-session files", async () => {
+		const renameSession = vi.fn(async () => ({}));
+		const { base } = await startServer({ renameSession });
+		const dir = await createTempProject();
+		const notSession = join(dir, "notes.jsonl");
+		await writeFile(notSession, "keep me\n", "utf8");
+
+		const missingPath = await postJson(base, "/api/sessions/rename", { name: "x" });
+		expect(missingPath.status).toBe(400);
+		await expect(missingPath.json()).resolves.toEqual({ error: "path is required" });
+
+		const emptyName = await postJson(base, "/api/sessions/rename", { path: notSession, name: "   " });
+		expect(emptyName.status).toBe(400);
+		await expect(emptyName.json()).resolves.toEqual({ error: "name is required" });
+
+		const invalid = await postJson(base, "/api/sessions/rename", { path: notSession, name: "x" });
+		expect(invalid.status).toBe(400);
+		await expect(invalid.json()).resolves.toEqual({
+			error: `Not a session file (missing or invalid session header): ${notSession}`,
+		});
+		expect(await readFile(notSession, "utf8")).toBe("keep me\n");
+		expect(renameSession).not.toHaveBeenCalled();
+	});
+
+	it("POST /api/sessions/rename renames sessions no runtime holds and notifies other clients", async () => {
+		const path = await writeSessionFile("/work/project");
+		const renameSession = vi.fn(async (_path: string, name: string) => ({ name }));
+		const { hub, diskChanges } = captureHub();
+		const { base } = await startServer({ renameSession, eventHub: hub });
+
+		const res = await postJson(base, "/api/sessions/rename", { path, name: "  Fix login  " });
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ name: "Fix login" });
+		expect(renameSession).toHaveBeenCalledWith(path, "Fix login");
+		expect(diskChanges()).toBe(1);
+	});
+
+	it("POST /api/sessions/rename reports rename failures", async () => {
+		const path = await writeSessionFile("/work/project");
+		const renameSession = vi.fn(async () => {
+			throw new Error("Session name was not saved");
+		});
+		const { hub, diskChanges } = captureHub();
+		const { base } = await startServer({ renameSession, eventHub: hub });
+
+		const res = await postJson(base, "/api/sessions/rename", { path, name: "Nope" });
+
+		expect(res.status).toBe(500);
+		await expect(res.json()).resolves.toEqual({ error: "Session name was not saved" });
+		expect(diskChanges()).toBe(0);
+	});
+
+	it("POST /api/sessions/rename renames through the runtime that holds the session", async () => {
+		const project = await createTempProject();
+		const path = await writeSessionFile(project);
+		const renameSession = vi.fn(async () => ({}));
+		const { hub, diskChanges } = captureHub();
+		const { base, clients } = await startServer({ renameSession, eventHub: hub });
+		await postJson(base, "/api/runtimes", { cwd: project });
+		const state = await clients[0].getState();
+		vi.mocked(clients[0].getState).mockResolvedValue({ ...state, sessionFile: path } as any);
+
+		const res = await postJson(base, "/api/sessions/rename", { path, name: "Live rename" });
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ name: "Live rename" });
+		// The runtime is told which file the rename is for, so it refuses if it has switched since.
+		expect(clients[0].setSessionName).toHaveBeenCalledWith("Live rename", { sessionPath: path });
+		expect(renameSession).not.toHaveBeenCalled();
+		expect(diskChanges()).toBe(1);
+	});
+
+	it("POST /api/sessions/rename trusts a runtime's current session over its resume path", async () => {
+		const project = await createTempProject();
+		const path = await writeSessionFile(project);
+		const renameSession = vi.fn(async (_path: string, name: string) => ({ name }));
+		const { base, clients } = await startServer({ renameSession });
+		// Resumed from `path`, but the runtime has since moved to another session.
+		await postJson(base, "/api/runtimes", { cwd: project, sessionPath: path });
+		const state = await clients[0].getState();
+		vi.mocked(clients[0].getState).mockResolvedValue({ ...state, sessionFile: join(project, "other.jsonl") } as any);
+
+		const res = await postJson(base, "/api/sessions/rename", { path, name: "Disk rename" });
+
+		expect(res.status).toBe(200);
+		expect(clients[0].setSessionName).not.toHaveBeenCalled();
+		expect(renameSession).toHaveBeenCalledWith(path, "Disk rename");
+	});
+
+	it("POST /api/sessions/rename reports a runtime that switched away from the session before renaming", async () => {
+		const project = await createTempProject();
+		const path = await writeSessionFile(project);
+		const renameSession = vi.fn(async () => ({}));
+		const { hub, diskChanges } = captureHub();
+		const { base, clients } = await startServer({ renameSession, eventHub: hub });
+		await postJson(base, "/api/runtimes", { cwd: project, sessionPath: path });
+		const state = await clients[0].getState();
+		vi.mocked(clients[0].getState).mockResolvedValue({ ...state, sessionFile: path } as any);
+		const refusal = `Session name not set: this runtime no longer holds ${path} (its current session is /other.jsonl); try again`;
+		vi.mocked(clients[0].setSessionName).mockRejectedValue(new Error(refusal));
+
+		const res = await postJson(base, "/api/sessions/rename", { path, name: "Meant for this file" });
+
+		expect(res.status).toBe(502);
+		await expect(res.json()).resolves.toEqual({ error: refusal });
+		expect(renameSession).not.toHaveBeenCalled();
+		expect(diskChanges()).toBe(0);
+	});
+
+	it("POST /api/sessions/rename reports a failure from the owning runtime", async () => {
+		const project = await createTempProject();
+		const path = await writeSessionFile(project);
+		const renameSession = vi.fn(async () => ({}));
+		const { base, clients } = await startServer({ renameSession });
+		await postJson(base, "/api/runtimes", { cwd: project, sessionPath: path });
+		vi.mocked(clients[0].getState).mockRejectedValue(new Error("RPC process not running"));
+		vi.mocked(clients[0].setSessionName).mockRejectedValue(new Error("RPC process not running"));
+
+		const res = await postJson(base, "/api/sessions/rename", { path, name: "Too late" });
+
+		expect(res.status).toBe(502);
+		await expect(res.json()).resolves.toEqual({ error: "RPC process not running" });
+		expect(renameSession).not.toHaveBeenCalled();
+	});
+
+	it("POST /api/sessions/title validates the path before starting any runtime", async () => {
+		const { base, clients } = await startServer();
+		const dir = await createTempProject();
+
+		const missing = await postJson(base, "/api/sessions/title", {});
+		expect(missing.status).toBe(400);
+		await expect(missing.json()).resolves.toEqual({ error: "path is required" });
+
+		const absent = join(dir, "absent.jsonl");
+		const invalid = await postJson(base, "/api/sessions/title", { path: absent });
+		expect(invalid.status).toBe(400);
+		await expect(invalid.json()).resolves.toEqual({ error: `Session file does not exist: ${absent}` });
+		expect(clients).toHaveLength(0);
+	});
+
+	it("POST /api/sessions/title generates in a utility runtime in the session's recorded project", async () => {
+		const project = await createTempProject();
+		const path = await writeSessionFile(project);
+		const { base, clients, clientCwds } = await startServer();
+		await postJson(base, "/api/runtimes", { cwd: project });
+
+		const res = await postJson(base, "/api/sessions/title", { path });
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ title: "Generated title" });
+		expect(clients[0].generateSessionTitle).not.toHaveBeenCalled();
+		expect(clients[1].generateSessionTitle).toHaveBeenCalledWith(path);
+		expect(clientCwds[1]).toBe(await realpath(project));
+	});
+
+	it("POST /api/sessions/title falls back to the home utility runtime when the project is gone", async () => {
+		const path = await writeSessionFile("/definitely/missing/project");
+		const { base, clients, clientCwds } = await startServer();
+
+		const res = await postJson(base, "/api/sessions/title", { path });
+
+		expect(res.status).toBe(200);
+		expect(clients[0].generateSessionTitle).toHaveBeenCalledWith(path);
+		expect(clientCwds[0]).toBe(homedir());
+	});
+
+	it("POST /api/sessions/title reports generator failures", async () => {
+		const path = await writeSessionFile("/definitely/missing/project");
+		const { base, clients, pool } = await startServer();
+		const failure = "Tab title generation failed with model p/m: 429 rate limited";
+		await pool.ensureUtilityRuntime();
+		vi.mocked(clients[0].generateSessionTitle).mockRejectedValue(new Error(failure));
+
+		const res = await postJson(base, "/api/sessions/title", { path });
+
+		expect(res.status).toBe(502);
+		await expect(res.json()).resolves.toEqual({ error: failure });
 	});
 });
 

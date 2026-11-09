@@ -236,6 +236,8 @@ vi.mock("../../src/client/api.js", () => ({
 		resume: vi.fn(async () => ({ cancelled: false })),
 		saveSettings: vi.fn(async (settings) => settings),
 		deleteSession: vi.fn(async () => ({ ok: true })),
+		renameDiskSession: vi.fn(async (_path: string, name: string) => ({ name })),
+		generateSessionTitle: vi.fn(async () => ({ title: "Generated title" })),
 		stopRuntime: vi.fn(async () => ({ ok: true })),
 		createRuntime: vi.fn(async (cwd: string) => ({
 			key: "new-key",
@@ -461,7 +463,11 @@ afterEach(() => {
 	vi.mocked(api.agentTypes).mockResolvedValue({ agentTypes: [] });
 	vi.mocked(api.settings).mockResolvedValue({ defaultProvider: "anthropic", defaultModel: "m1" });
 	vi.mocked(api.saveSettings).mockImplementation(async (settings) => settings);
-	vi.mocked(api.deleteSession).mockResolvedValue({ ok: true });
+	vi.mocked(api.deleteSession).mockReset().mockResolvedValue({ ok: true });
+	vi.mocked(api.renameDiskSession)
+		.mockReset()
+		.mockImplementation(async (_path: string, name: string) => ({ name }));
+	vi.mocked(api.generateSessionTitle).mockReset().mockResolvedValue({ title: "Generated title" });
 	vi.mocked(api.stopRuntime).mockResolvedValue({ ok: true });
 	vi.mocked(api.createRuntime).mockImplementation(async (cwd: string) => ({
 		key: "new-key",
@@ -7094,6 +7100,25 @@ describe("dashboard client regressions", () => {
 				await vi.waitFor(() => expect(api.deleteSession).toHaveBeenCalledWith(target.path));
 			});
 
+			it("keeps the rename target bound to its file through filtering, reordering, and fresh inventory", async () => {
+				const target = disk("Needle target", "/historical/target", 1);
+				const other = disk("Other past", "/other", 2);
+				const { el, setFleet } = fixture([], [other, target]);
+				search(el, "needle");
+				[...el.querySelectorAll<HTMLButtonElement>(".disk-row .actions .btn")]
+					.find((button) => button.textContent === "rename")!
+					.click();
+				// Fresh inventory replaces objects, reorders rows, and the filter now hides the target row.
+				setFleet({ runtimes: [], diskSessions: [{ ...target, name: "Renamed elsewhere" }, other] });
+				expect(diskNames(el)).toEqual([]);
+				const input = el.querySelector<HTMLInputElement>("#rename-session-name")!;
+				expect(input.value).toBe("Needle target");
+				input.value = "Needle renamed";
+				input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+				el.querySelector<HTMLButtonElement>(".rename-session-modal .btn-primary")!.click();
+				await vi.waitFor(() => expect(api.renameDiskSession).toHaveBeenCalledWith(target.path, "Needle renamed"));
+			});
+
 			it("searches the recorded historical path and keeps its missing-directory chooser bound to that exact file", async () => {
 				const target = { ...disk("Target", "/home/test/Old-project", 1), cwdAvailable: false };
 				const { el } = fixture([], [disk("Other", "/other", 2), target]);
@@ -7294,6 +7319,7 @@ describe("dashboard client regressions", () => {
 					expect(row.querySelector(".name")).not.toBeNull();
 					expect([...row.querySelectorAll(".actions button")].map((button) => button.textContent)).toEqual([
 						"resume",
+						"rename",
 						"delete",
 					]);
 				}
@@ -8266,6 +8292,195 @@ describe("dashboard client regressions", () => {
 		expect(api.deleteSession).toHaveBeenCalledWith("/sessions/delete.jsonl");
 		expect(refreshDiskSessions).toHaveBeenCalled();
 		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
+	});
+
+	describe("fleet past-session rename", () => {
+		function pastSession(overrides: Partial<SessionInfoDto> = {}): SessionInfoDto {
+			return {
+				path: "/sessions/rename.jsonl",
+				id: "rename",
+				cwd: "/repo",
+				name: "Old name",
+				created: new Date().toISOString(),
+				modified: new Date().toISOString(),
+				messageCount: 4,
+				firstMessage: "Please fix the login flow",
+				...overrides,
+			};
+		}
+
+		function renderFleet(sessions: SessionInfoDto[] = [pastSession()]) {
+			const store = makeStore() as any;
+			const refreshDiskSessions = vi.fn(async () => {});
+			const el = mount(() => (
+				<FleetScreen
+					store={{ ...store, refreshDiskSessions, fleet: () => ({ runtimes: [], diskSessions: sessions }) }}
+				/>
+			));
+			return { el, refreshDiskSessions };
+		}
+
+		function rowButton(el: HTMLElement, label: string, rowIndex = 0): HTMLButtonElement {
+			const row = el.querySelectorAll(".disk-row")[rowIndex]!;
+			return [...row.querySelectorAll<HTMLButtonElement>(".actions .btn")].find((b) => b.textContent === label)!;
+		}
+
+		function modalButton(el: HTMLElement, label: string): HTMLButtonElement {
+			return [...el.querySelectorAll<HTMLButtonElement>(".rename-session-modal button")].find(
+				(b) => b.textContent === label,
+			)!;
+		}
+
+		function nameInput(el: HTMLElement): HTMLInputElement {
+			return el.querySelector<HTMLInputElement>("#rename-session-name")!;
+		}
+
+		function typeName(el: HTMLElement, value: string): void {
+			const input = nameInput(el);
+			input.value = value;
+			input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		}
+
+		const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+		it("offers resume, rename, and delete in that order on every past-session row", () => {
+			const { el } = renderFleet([
+				pastSession(),
+				pastSession({ path: "/sessions/two.jsonl", id: "two", name: "Two" }),
+			]);
+
+			for (const row of el.querySelectorAll(".disk-row")) {
+				expect([...row.querySelectorAll(".actions .btn")].map((b) => b.textContent)).toEqual([
+					"resume",
+					"rename",
+					"delete",
+				]);
+			}
+		});
+
+		it("pre-fills the current name and renames with the trimmed value", async () => {
+			const { el, refreshDiskSessions } = renderFleet();
+			rowButton(el, "rename").click();
+
+			expect(nameInput(el).value).toBe("Old name");
+			typeName(el, "  New name  ");
+			modalButton(el, "rename").click();
+			await tick();
+
+			expect(api.renameDiskSession).toHaveBeenCalledWith("/sessions/rename.jsonl", "New name");
+			expect(refreshDiskSessions).toHaveBeenCalled();
+			expect(el.querySelector(".rename-session-modal")).toBeNull();
+		});
+
+		it("starts unnamed sessions empty with the first message as a placeholder", () => {
+			const { el } = renderFleet([pastSession({ name: undefined })]);
+			rowButton(el, "rename").click();
+
+			expect(nameInput(el).value).toBe("");
+			expect(nameInput(el).placeholder).toBe("Please fix the login flow");
+			expect(modalButton(el, "rename").disabled).toBe(true);
+			typeName(el, "   ");
+			expect(modalButton(el, "rename").disabled).toBe(true);
+		});
+
+		it("keeps the modal open with an alert when renaming fails", async () => {
+			vi.mocked(api.renameDiskSession).mockRejectedValue(new Error("Session name was not saved"));
+			const { el, refreshDiskSessions } = renderFleet();
+			rowButton(el, "rename").click();
+			typeName(el, "New name");
+			modalButton(el, "rename").click();
+			await tick();
+
+			expect(el.querySelector(".rename-session-modal")).not.toBeNull();
+			expect(el.querySelector('.rename-session-modal [role="alert"]')?.textContent).toBe(
+				"Failed to rename session: Session name was not saved",
+			);
+			expect(refreshDiskSessions).not.toHaveBeenCalled();
+		});
+
+		it("auto-generate fills the input for this session and blocks a second request while busy", async () => {
+			let resolveTitle: (value: { title: string }) => void = () => {};
+			vi.mocked(api.generateSessionTitle).mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						resolveTitle = resolve;
+					}),
+			);
+			const { el } = renderFleet();
+			rowButton(el, "rename").click();
+
+			modalButton(el, "auto-generate").click();
+			await tick();
+			expect(modalButton(el, "generating…").disabled).toBe(true);
+			expect(modalButton(el, "rename").disabled).toBe(true);
+			modalButton(el, "generating…").click();
+			expect(api.generateSessionTitle).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(api.generateSessionTitle).mock.calls[0][0]).toBe("/sessions/rename.jsonl");
+
+			resolveTitle({ title: "Fix login flow" });
+			await tick();
+			expect(nameInput(el).value).toBe("Fix login flow");
+			expect(modalButton(el, "rename").disabled).toBe(false);
+			expect(api.renameDiskSession).not.toHaveBeenCalled();
+		});
+
+		it("shows generation failures as an alert and keeps the typed name", async () => {
+			vi.mocked(api.generateSessionTitle).mockRejectedValue(
+				new Error("Tab title generation failed: no model is available (set a default model or tabTitle.model)"),
+			);
+			const { el } = renderFleet();
+			rowButton(el, "rename").click();
+			typeName(el, "Typed");
+
+			modalButton(el, "auto-generate").click();
+			await tick();
+
+			expect(el.querySelector('.rename-session-modal [role="alert"]')?.textContent).toBe(
+				"Failed to generate a title: Tab title generation failed: no model is available (set a default model or tabTitle.model)",
+			);
+			expect(nameInput(el).value).toBe("Typed");
+		});
+
+		it("drops a generated title that arrives after the modal closed", async () => {
+			let resolveTitle: (value: { title: string }) => void = () => {};
+			let signal: AbortSignal | undefined;
+			vi.mocked(api.generateSessionTitle).mockImplementation((_path, abortSignal) => {
+				signal = abortSignal;
+				return new Promise((resolve) => {
+					resolveTitle = resolve;
+				});
+			});
+			const { el } = renderFleet([
+				pastSession(),
+				pastSession({ path: "/sessions/two.jsonl", id: "two", name: "Two" }),
+			]);
+			rowButton(el, "rename").click();
+			modalButton(el, "auto-generate").click();
+			await tick();
+
+			modalButton(el, "cancel").click();
+			expect(signal?.aborted).toBe(true);
+			rowButton(el, "rename", 1).click();
+			resolveTitle({ title: "Late title" });
+			await tick();
+
+			expect(nameInput(el).value).toBe("Two");
+			expect(el.querySelector('.rename-session-modal [role="alert"]')).toBeNull();
+		});
+
+		it("shows delete failures in the confirmation instead of swallowing them", async () => {
+			vi.mocked(api.deleteSession).mockRejectedValue(new Error("Cannot delete the currently active session"));
+			const { el, refreshDiskSessions } = renderFleet();
+			rowButton(el, "delete").click();
+			el.querySelector<HTMLButtonElement>(".modal .btn-danger")!.click();
+			await tick();
+
+			expect(el.querySelector(".modal")).not.toBeNull();
+			expect(el.querySelector('.modal [role="alert"]')?.textContent).toBe(
+				"Failed to delete session: Cannot delete the currently active session",
+			);
+			expect(refreshDiskSessions).not.toHaveBeenCalled();
+		});
 	});
 
 	it("fleet polls stats every 30 seconds without an immediate round and cleans up on unmount", async () => {

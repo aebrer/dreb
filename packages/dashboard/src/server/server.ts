@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { checkSessionFile } from "@dreb/coding-agent";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type {
@@ -69,6 +70,8 @@ export interface DashboardServerOptions {
 	/** Session listing (cross-project) — injected so tests can stub it. */
 	listAllSessions: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession: (path: string) => Promise<unknown>;
+	/** Rename a session file that no live runtime holds; rejects with the reason on failure. */
+	renameSession: (path: string, name: string) => Promise<unknown>;
 	logger?: (line: string) => void;
 	/** Build version of the running server process (for the settings footer / stale-server detection). */
 	serverVersion?: string;
@@ -1128,6 +1131,67 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 				res.json(result ?? { ok: true });
 			})
 			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+	});
+
+	app.post("/api/sessions/rename", (req, res) => {
+		const path = typeof req.body?.path === "string" ? req.body.path : "";
+		const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+		if (!path) {
+			res.status(400).json({ error: "path is required" });
+			return;
+		}
+		if (!name) {
+			res.status(400).json({ error: "name is required" });
+			return;
+		}
+		const check = checkSessionFile(path);
+		if (!check.ok) {
+			res.status(400).json({ error: check.error });
+			return;
+		}
+		(async () => {
+			// A runtime holding this session keeps its entries in memory and may rewrite the
+			// file, so rename through it rather than appending behind its back. The runtime
+			// re-checks that it still holds this file when the rename arrives, so a session
+			// switch after the lookup fails loudly instead of renaming the wrong session.
+			const owner = await pool.findBySessionFile(check.path);
+			if (owner) {
+				try {
+					await owner.client.setSessionName(name, { sessionPath: check.path });
+				} catch (err) {
+					res.status(502).json({ error: String((err as Error)?.message ?? err) });
+					return;
+				}
+				log(`session renamed via runtime ${owner.key}: ${check.path}`);
+			} else {
+				await options.renameSession(check.path, name);
+				log(`session renamed: ${check.path}`);
+			}
+			hub.publish("", { type: "disk_sessions_changed" });
+			res.json({ name });
+		})().catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+	});
+
+	/** Generate a title for a saved session with the runtime tab-title generator (read-only). */
+	app.post("/api/sessions/title", (req, res) => {
+		const path = typeof req.body?.path === "string" ? req.body.path : "";
+		if (!path) {
+			res.status(400).json({ error: "path is required" });
+			return;
+		}
+		const check = checkSessionFile(path);
+		if (!check.ok) {
+			res.status(400).json({ error: check.error });
+			return;
+		}
+		// Run in a utility runtime in the session's recorded project when that directory still
+		// exists, so project-local Explore agent and agentModels settings apply as they would for
+		// a live session there; otherwise use the home utility runtime.
+		const recordedCwd = typeof check.header.cwd === "string" ? check.header.cwd : "";
+		const runtimeCwd = recordedCwd
+			? resolveExistingDirectory(recordedCwd).catch(() => undefined)
+			: Promise.resolve(undefined);
+		void runtimeCwd.then((cwd) => withAnyRuntime(res, (h) => h.client.generateSessionTitle(check.path), cwd));
 	});
 
 	// -- settings ------------------------------------------------------------------

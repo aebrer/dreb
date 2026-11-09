@@ -1,8 +1,8 @@
 /**
  * Fleet overview — home screen. Live-first: one grid of all live session
  * cards (stable path/start order by default, user-selected sorting otherwise), then compact past
- * sessions grouped by project (3 rows + expand). Screen-local name/path search
- * and live-only attention filtering. "+ new session" modal.
+ * sessions grouped by project (3 rows + expand) with resume / rename / delete.
+ * Screen-local name/path search and live-only attention filtering. "+ new session" modal.
  */
 
 import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
@@ -10,6 +10,7 @@ import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
 import { FleetSortHeader, FleetSortReset, fleetColumnSort } from "../components/fleet-sort-headers.js";
+import { RenameSessionModal } from "../components/rename-session-modal.js";
 import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { SessionCardSummary, sessionCardStatus } from "../components/session-card-summary.js";
 import {
@@ -169,6 +170,9 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const [newSessionCwd, setNewSessionCwd] = createSignal<string | undefined>();
 	const [showNewSession, setShowNewSession] = createSignal(false);
 	const [confirmDelete, setConfirmDelete] = createSignal<SessionInfoDto>();
+	const [deleteBusy, setDeleteBusy] = createSignal(false);
+	const [deleteError, setDeleteError] = createSignal<string>();
+	const [renameTarget, setRenameTarget] = createSignal<SessionInfoDto>();
 	const [resumeSession, setResumeSession] = createSignal<SessionInfoDto>();
 	const [expandedGroups, setExpandedGroups] = createSignal<Record<string, boolean>>({});
 	const [query, setQuery] = createSignal("");
@@ -255,6 +259,29 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 			.finally(() => resumeRequests.delete(session.path));
 		resumeRequests.set(session.path, request);
 		return request;
+	}
+
+	function closeDeleteConfirm(): void {
+		if (deleteBusy()) return;
+		setConfirmDelete(undefined);
+		setDeleteError(undefined);
+	}
+
+	async function confirmDeletion(session: SessionInfoDto): Promise<void> {
+		if (deleteBusy()) return;
+		setDeleteBusy(true);
+		setDeleteError(undefined);
+		try {
+			await api.deleteSession(session.path);
+		} catch (err) {
+			setDeleteError(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		} finally {
+			setDeleteBusy(false);
+		}
+		setConfirmDelete(undefined);
+		// Inventory refresh failures surface through the fleet error banner.
+		void props.store.refreshDiskSessions().catch(() => {});
 	}
 
 	async function resume(session: SessionInfoDto): Promise<void> {
@@ -569,8 +596,18 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 																			</button>
 																			<button
 																				type="button"
+																				class="btn btn-small"
+																				onClick={() => setRenameTarget(session())}
+																			>
+																				rename
+																			</button>
+																			<button
+																				type="button"
 																				class="btn btn-small btn-danger"
-																				onClick={() => setConfirmDelete(session())}
+																				onClick={() => {
+																					setDeleteError(undefined);
+																					setConfirmDelete(session());
+																				}}
 																			>
 																				delete
 																			</button>
@@ -635,26 +672,44 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 				/>
 			</Show>
 
+			<Show when={renameTarget()} keyed>
+				{(session) => (
+					<RenameSessionModal
+						session={session}
+						onClose={() => setRenameTarget(undefined)}
+						onGenerate={async (signal) => (await api.generateSessionTitle(session.path, signal)).title}
+						onRename={async (name) => {
+							await api.renameDiskSession(session.path, name);
+							setRenameTarget(undefined);
+							// Inventory refresh failures surface through the fleet error banner.
+							void props.store.refreshDiskSessions().catch(() => {});
+						}}
+					/>
+				)}
+			</Show>
+
 			<Show when={confirmDelete()}>
 				{(session) => (
 					<Modal
 						title="delete session?"
-						onDismiss={() => setConfirmDelete(undefined)}
+						onDismiss={closeDeleteConfirm}
 						actions={
 							<>
-								<button type="button" class="btn btn-small" onClick={() => setConfirmDelete(undefined)}>
+								<button
+									type="button"
+									class="btn btn-small"
+									disabled={deleteBusy()}
+									onClick={closeDeleteConfirm}
+								>
 									cancel
 								</button>
 								<button
 									type="button"
 									class="btn btn-small btn-danger"
-									onClick={async () => {
-										await api.deleteSession(session().path);
-										setConfirmDelete(undefined);
-										await props.store.refreshDiskSessions();
-									}}
+									disabled={deleteBusy()}
+									onClick={() => void confirmDeletion(session())}
 								>
-									delete
+									{deleteBusy() ? "deleting…" : "delete"}
 								</button>
 							</>
 						}
@@ -663,6 +718,11 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 							{session().name ?? session().firstMessage.slice(0, 80)} — {session().messageCount} messages. The
 							session file is moved to trash where supported.
 						</p>
+						<Show when={deleteError()}>
+							<p class="pair-error" role="alert">
+								{deleteError()}
+							</p>
+						</Show>
 					</Modal>
 				)}
 			</Show>

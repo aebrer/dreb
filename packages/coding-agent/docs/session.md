@@ -2,6 +2,8 @@
 
 Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with a `type` field. Session entries form a tree structure via `id`/`parentId` fields, enabling in-place branching without creating new files.
 
+dreb ends every record it writes with a newline. When it appends to an existing file whose last record has no trailing newline (for example after a hand edit, another JSONL tool, or an interrupted write), it starts the new record on a new line first, so the earlier record is not joined to it. A partial line left by an interrupted write stays unreadable and is skipped on load.
+
 ## File Locations
 
 The default main-session layout is a nested all-project tree:
@@ -306,7 +308,7 @@ Set `label` to `undefined` to clear a label.
 
 ### SessionInfoEntry
 
-Session metadata (e.g., user-defined display name). Set via `/name` command or `dreb.setSessionName()` in extensions.
+Session metadata (e.g., user-defined display name). Set via `/name` command, the TUI `/resume` picker's rename, the dashboard's [past-session rename](dashboard.md#renaming-past-sessions), automatic tab titles, or `dreb.setSessionName()` in extensions. The latest `session_info` entry wins.
 
 ```json
 {"type":"session_info","id":"k1l2m3n4","parentId":"j0k1l2m3","timestamp":"2024-12-03T14:35:00.000Z","name":"Refactor auth module"}
