@@ -94,15 +94,20 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 			// and just verify the helper logic works correctly
 			const { streamAnthropic } = await import("../src/providers/anthropic.js");
 
+			// Abort as soon as the payload is captured so no network request is made.
+			const controller = new AbortController();
+
 			try {
 				const s = streamAnthropic(proxyModel, context, {
 					apiKey: "fake-key",
+					signal: controller.signal,
 					onPayload: (payload) => {
 						capturedPayload = payload;
+						controller.abort();
 					},
 				});
 
-				// This will fail since we're using a fake key and fake proxy, but the payload should be captured
+				// Aborted from onPayload, so the request never reaches the network
 				for await (const event of s) {
 					if (event.type === "error") break;
 				}
@@ -110,11 +115,9 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 				// Expected to fail
 			}
 
-			// The payload should have been captured before the error
-			if (capturedPayload) {
-				// System prompt should have cache_control WITHOUT ttl (proxy URL)
-				expect(capturedPayload.system[0].cache_control).toEqual({ type: "ephemeral" });
-			}
+			expect(capturedPayload).not.toBeNull();
+			// System prompt should have cache_control WITHOUT ttl (proxy URL)
+			expect(capturedPayload.system[0].cache_control).toEqual({ type: "ephemeral" });
 		});
 
 		it("should omit cache_control when cacheRetention is none", async () => {
@@ -123,12 +126,17 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 
 			const { streamAnthropic } = await import("../src/providers/anthropic.js");
 
+			// Abort as soon as the payload is captured so no network request is made.
+			const controller = new AbortController();
+
 			try {
 				const s = streamAnthropic(baseModel, context, {
 					apiKey: "fake-key",
+					signal: controller.signal,
 					cacheRetention: "none",
 					onPayload: (payload) => {
 						capturedPayload = payload;
+						controller.abort();
 					},
 				});
 
@@ -149,11 +157,16 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 
 			const { streamAnthropic } = await import("../src/providers/anthropic.js");
 
+			// Abort as soon as the payload is captured so no network request is made.
+			const controller = new AbortController();
+
 			try {
 				const s = streamAnthropic(baseModel, context, {
 					apiKey: "fake-key",
+					signal: controller.signal,
 					onPayload: (payload) => {
 						capturedPayload = payload;
+						controller.abort();
 					},
 				});
 
@@ -177,12 +190,17 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 
 			const { streamAnthropic } = await import("../src/providers/anthropic.js");
 
+			// Abort as soon as the payload is captured so no network request is made.
+			const controller = new AbortController();
+
 			try {
 				const s = streamAnthropic(baseModel, context, {
 					apiKey: "fake-key",
+					signal: controller.signal,
 					cacheRetention: "long",
 					onPayload: (payload) => {
 						capturedPayload = payload;
+						controller.abort();
 					},
 				});
 
@@ -258,15 +276,20 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 
 			const { streamOpenAIResponses } = await import("../src/providers/openai-responses.js");
 
+			// Abort as soon as the payload is captured so no network request is made.
+			const controller = new AbortController();
+
 			try {
 				const s = streamOpenAIResponses(proxyModel, context, {
 					apiKey: "fake-key",
+					signal: controller.signal,
 					onPayload: (payload) => {
 						capturedPayload = payload;
+						controller.abort();
 					},
 				});
 
-				// This will fail since we're using a fake key and fake proxy, but the payload should be captured
+				// Aborted from onPayload, so the request never reaches the network
 				for await (const event of s) {
 					if (event.type === "error") break;
 				}
@@ -274,10 +297,8 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 				// Expected to fail
 			}
 
-			// The payload should have been captured before the error
-			if (capturedPayload) {
-				expect(capturedPayload.prompt_cache_retention).toBeUndefined();
-			}
+			expect(capturedPayload).not.toBeNull();
+			expect(capturedPayload.prompt_cache_retention).toBeUndefined();
 		});
 
 		it("should omit prompt_cache_key when cacheRetention is none", async () => {
@@ -286,13 +307,18 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 
 			const { streamOpenAIResponses } = await import("../src/providers/openai-responses.js");
 
+			// Abort as soon as the payload is captured so no network request is made.
+			const controller = new AbortController();
+
 			try {
 				const s = streamOpenAIResponses(model, context, {
 					apiKey: "fake-key",
+					signal: controller.signal,
 					cacheRetention: "none",
 					sessionId: "session-1",
 					onPayload: (payload) => {
 						capturedPayload = payload;
+						controller.abort();
 					},
 				});
 
@@ -314,13 +340,18 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 
 			const { streamOpenAIResponses } = await import("../src/providers/openai-responses.js");
 
+			// Abort as soon as the payload is captured so no network request is made.
+			const controller = new AbortController();
+
 			try {
 				const s = streamOpenAIResponses(model, context, {
 					apiKey: "fake-key",
+					signal: controller.signal,
 					cacheRetention: "long",
 					sessionId: "session-2",
 					onPayload: (payload) => {
 						capturedPayload = payload;
+						controller.abort();
 					},
 				});
 
