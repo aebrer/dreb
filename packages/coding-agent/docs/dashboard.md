@@ -797,13 +797,13 @@ For browser acceptance, use Chromium's network throttling with 100 ms RTT and
 
 ## README screenshots
 
-The dashboard screenshots in the root and dashboard READMEs are generated, not
-hand-captured. `npm run screenshots -w @dreb/dashboard` (after `npm run build`)
-renders fictional fixture sessions through the real dashboard client and server
-in a sandbox: no agent, model, API key, or real session is involved, and a leak
-guard fails the run if the capturing machine's home directory, user paths, or
-hostname would appear in an image. Regenerate and commit them in any PR that
-changes the dashboard's layout. See
+The dashboard screenshots in the root README are generated, not hand-captured.
+`npm run screenshots -w @dreb/dashboard` (after `npm run build`) renders
+fictional fixture sessions, files, and memories through the real dashboard
+client and server in a sandbox: no agent, model, API key, real session, or host
+file is involved, and a leak guard fails the run if the capturing machine's home
+directory, user paths, or hostname would appear in an image. Regenerate and
+commit them in any PR that changes the dashboard's layout. See
 [README screenshots](../../dashboard/README.md#readme-screenshots) for the
 scenario, the shot list, and the CI artifact workflow.
 

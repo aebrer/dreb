@@ -20,6 +20,7 @@ import type {
 	RpcSessionTask,
 	RpcSettingsSnapshot,
 } from "@dreb/coding-agent/rpc";
+import type { FileEntryDto, MemoryEntryMetadataDto } from "../../src/shared/protocol.js";
 import { type FixtureModel, SessionBuilder, type SessionFixture, text, thinking, toolCall } from "./session-builder.js";
 
 /** The instant every screenshot is rendered at. */
@@ -41,7 +42,7 @@ export const FIXTURE_HOME = "/home/demo";
  * Fleet's default order is project path, so these parents deliberately place the
  * showcase session first and the idle session last.
  */
-const FIXTURE_PROJECTS = {
+export const FIXTURE_PROJECTS = {
 	tidewatch: `${FIXTURE_HOME}/code/tidewatch`,
 	kiln: `${FIXTURE_HOME}/projects/kiln`,
 	pantry: `${FIXTURE_HOME}/projects/pantry-api`,
@@ -727,9 +728,216 @@ export interface LiveRuntimeScenario {
 	liveEvents?: RpcEvent[];
 }
 
+// ---------------------------------------------------------------------------
+// Host surfaces: the Files tree and dreb memories
+// ---------------------------------------------------------------------------
+
+/** One directory the fictional Files API can list. */
+export interface FixtureDirectory {
+	path: string;
+	entries: FileEntryDto[];
+}
+
+/** One dreb memory entry: its front matter and body render the file content. */
+export interface FixtureMemoryEntry {
+	file: string;
+	metadata: MemoryEntryMetadataDto;
+	body: string;
+	modified: number;
+}
+
+/** One dreb memory scope (global, or a project root) and its documents. */
+export interface FixtureMemoryScope {
+	id: string;
+	kind: "global" | "project";
+	label: string;
+	projectRoot?: string;
+	memoryDir: string;
+	index: string;
+	entries: FixtureMemoryEntry[];
+}
+
+const KIB = 1024;
+
+function dir(name: string, ageMs: number): FileEntryDto {
+	return { name, type: "dir", size: 4 * KIB, modified: new Date(NOW_MS - ageMs).toISOString() };
+}
+
+function file(name: string, size: number, ageMs: number): FileEntryDto {
+	return { name, type: "file", size, modified: new Date(NOW_MS - ageMs).toISOString() };
+}
+
+/** The showcase project as the Files screen lists it, mid-way through the showcase session. */
+const FILES: FixtureDirectory[] = [
+	{
+		path: FIXTURE_PROJECTS.tidewatch,
+		entries: [
+			dir(".dreb", 3 * DAY),
+			dir(".github", 12 * DAY),
+			dir("node_modules", 2 * DAY),
+			dir("src", 70_000),
+			dir("test", 95_000),
+			file(".gitignore", 61, 23 * DAY),
+			file("CHANGELOG.md", 2_140, 12 * DAY),
+			file("LICENSE", 1_071, 23 * DAY),
+			file("README.md", 3_712, 14_000),
+			file("package-lock.json", 90_112, 2 * DAY),
+			file("package.json", 1_342, 2 * DAY),
+			file("tsconfig.json", 402, 23 * DAY),
+			file("vitest.config.ts", 231, 23 * DAY),
+		],
+	},
+];
+
+function memoryEntry(file: string, metadata: MemoryEntryMetadataDto, ageMs: number, body: string): FixtureMemoryEntry {
+	return { file, metadata, body, modified: NOW_MS - ageMs };
+}
+
+/** Render a memory entry exactly as dreb stores it: YAML front matter, then the body. */
+export function memoryEntryContent(entry: FixtureMemoryEntry): string {
+	const { name, description, type } = entry.metadata;
+	return `---\nname: ${name}\ndescription: ${description}\ntype: ${type}\n---\n\n${entry.body}\n`;
+}
+
+const MEMORIES: FixtureMemoryScope[] = [
+	{
+		id: "global",
+		kind: "global",
+		label: "global",
+		memoryDir: `${FIXTURE_HOME}/.dreb/memory`,
+		index: [
+			"# Memory Index",
+			"",
+			"## User Preferences",
+			"- [Working style](working_style.md) — terse status updates; ask before large refactors",
+			"- [Units and times](units_and_times.md) — metric units, 24-hour times, ISO dates",
+			"",
+			"## Good Practices",
+			"- [Failing test first](failing_test_first.md) — reproduce a bug with a failing test before fixing it",
+			"- [One concern per PR](one_concern_per_pr.md) — keep drive-by cleanups in their own pull request",
+			"",
+		].join("\n"),
+		entries: [
+			memoryEntry(
+				"failing_test_first.md",
+				{
+					name: "failing-test-first",
+					description: "Reproduce a bug with a failing test before fixing it",
+					type: "good-practices",
+				},
+				9 * DAY,
+				"Write the failing test before touching the fix, and keep it in the same commit as the fix.\n\n" +
+					"**Why:** a fix without a reproduction has regressed twice in kiln.\n\n" +
+					"**How to apply:** any bug report or failing CI run that names a behavior.",
+			),
+			memoryEntry(
+				"one_concern_per_pr.md",
+				{
+					name: "one-concern-per-pr",
+					description: "Keep drive-by cleanups in their own pull request",
+					type: "good-practices",
+				},
+				16 * DAY,
+				"Unrelated cleanups found while working go in a separate pull request.\n\n" +
+					"**Why:** mixed diffs make review slow and reverts risky.",
+			),
+			memoryEntry(
+				"units_and_times.md",
+				{
+					name: "units-and-times",
+					description: "Metric units, 24-hour times, ISO dates",
+					type: "user-preferences",
+				},
+				21 * DAY,
+				"Use metres and kilometres, 24-hour times, and ISO 8601 dates in code, docs, and CLI output.",
+			),
+			memoryEntry(
+				"working_style.md",
+				{
+					name: "working-style",
+					description: "Terse status updates; ask before large refactors",
+					type: "user-preferences",
+				},
+				4 * DAY,
+				"Prefers short progress updates over play-by-play narration. Ask before any refactor that touches " +
+					"more than one module.",
+			),
+		],
+	},
+	{
+		id: "project-tidewatch",
+		kind: "project",
+		label: "tidewatch",
+		projectRoot: FIXTURE_PROJECTS.tidewatch,
+		memoryDir: `${FIXTURE_PROJECTS.tidewatch}/.dreb/memory`,
+		index: [
+			"# Memory Index",
+			"",
+			"## Project",
+			"- [Station API limits](station_api_limits.md) — 60 requests/minute per key; metadata rarely changes",
+			"- [Release process](release_process.md) — tag vX.Y.Z on main; the workflow publishes to npm",
+			"",
+		].join("\n"),
+		entries: [
+			memoryEntry(
+				"release_process.md",
+				{
+					name: "release-process",
+					description: "Tag vX.Y.Z on main; the workflow publishes to npm",
+					type: "project",
+				},
+				12 * DAY,
+				"Bump `package.json`, merge to main, then push a `vX.Y.Z` tag. The release workflow checks the tag " +
+					"against `package.json` and publishes with provenance.",
+			),
+			memoryEntry(
+				"station_api_limits.md",
+				{
+					name: "station-api-limits",
+					description: "60 requests/minute per key; metadata rarely changes",
+					type: "project",
+				},
+				3 * DAY,
+				"The station API allows 60 requests per minute per key and returns HTTP 429 beyond that. Station " +
+					"metadata changes a few times a year, so caching it for a day is safe.",
+			),
+		],
+	},
+	{
+		id: "project-pantry-api",
+		kind: "project",
+		label: "pantry-api",
+		projectRoot: FIXTURE_PROJECTS.pantry,
+		memoryDir: `${FIXTURE_PROJECTS.pantry}/.dreb/memory`,
+		index: [
+			"# Memory Index",
+			"",
+			"## Project",
+			"- [Local database](local_database.md) — Postgres 17 via compose; migrations run on start",
+			"",
+		].join("\n"),
+		entries: [
+			memoryEntry(
+				"local_database.md",
+				{
+					name: "local-database",
+					description: "Postgres 17 via compose; migrations run on start",
+					type: "project",
+				},
+				9 * DAY,
+				"`docker compose up db` starts Postgres 17 on port 5433. The API runs pending migrations on start.",
+			),
+		],
+	},
+];
+
 export interface Scenario {
 	live: LiveRuntimeScenario[];
 	past: SessionFixture[];
+	/** Directories the fictional Files API serves. */
+	files: FixtureDirectory[];
+	/** Memory scopes the fictional memory API serves, in display order. */
+	memories: FixtureMemoryScope[];
 }
 
 /** Build the complete fictional world. Pure and deterministic. */
@@ -874,6 +1082,8 @@ export function buildScenario(): Scenario {
 			},
 		],
 		past: PAST_SESSIONS.map(pastSession),
+		files: structuredClone(FILES),
+		memories: structuredClone(MEMORIES),
 	};
 }
 

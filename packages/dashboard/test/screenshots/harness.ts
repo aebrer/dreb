@@ -7,8 +7,9 @@
  * - live sessions are fake RPC runtimes (`fixture-rpc-client.ts`) — no dreb child
  *   process, no model call, no API key;
  * - the server runs in-process with an injected runtime pool, session listing,
- *   memory home, and directory resolver — never the `dreb-dashboard` binary and
- *   never the real `~/.dreb`;
+ *   directory resolver, and fictional Files and memory APIs
+ *   (`fixture-host-apis.ts`) — never the `dreb-dashboard` binary, the real
+ *   `~/.dreb`, or the host filesystem;
  * - `HOME` and `DREB_CODING_AGENT_DIR` point into a throwaway sandbox for the
  *   whole run and are restored afterwards;
  * - the browser may reach only the harness origin (plus Google Fonts for the
@@ -32,10 +33,11 @@ import solid from "vite-plugin-solid";
 import { DashboardAuth } from "../../src/server/auth.js";
 import { RuntimePool } from "../../src/server/runtime-pool.js";
 import { createDashboardServer, type DashboardServerApp } from "../../src/server/server.js";
-import { createFixtureRpcClient, FixtureRpcFailures, fixtureControls } from "./fixture-rpc-client.js";
+import { createFixtureFileApi, createFixtureMemoryApi } from "./fixture-host-apis.js";
+import { createFixtureRpcClient, FixtureFailures, fixtureControls } from "./fixture-rpc-client.js";
 import { captureHostIdentity, findLeaks, type HostIdentity, type LeakNeedle, leakNeedles } from "./leak-guard.js";
 import { collectRenderedSurface, fontsReady, loadFontFamily, seedAppearance, twoFrames } from "./page-scripts.js";
-import { buildScenario, FIXTURE_DIRECTORIES, NOW_MS, type Scenario } from "./scenario.js";
+import { buildScenario, FIXTURE_DIRECTORIES, FIXTURE_HOME, NOW_MS, type Scenario } from "./scenario.js";
 import { toJsonl } from "./session-builder.js";
 import { type ShotDefinition, shotViewport } from "./shots.js";
 
@@ -186,7 +188,7 @@ interface RunningDashboard {
 	runtimeKeys: Map<string, string>;
 	/** Stream every runtime's scenario live events to connected browsers. */
 	emitLiveEvents(): void;
-	failures: FixtureRpcFailures;
+	failures: FixtureFailures;
 	serverErrors: string[];
 	close(): Promise<void>;
 }
@@ -197,7 +199,7 @@ async function startDashboard(
 	clientDir: string,
 	paths: Map<string, string>,
 ): Promise<RunningDashboard> {
-	const failures = new FixtureRpcFailures();
+	const failures = new FixtureFailures();
 	const serverErrors: string[] = [];
 	const version = await dashboardVersion();
 	const sessionFile = (sessionId: string): string => {
@@ -250,11 +252,13 @@ async function startDashboard(
 		},
 		logger: () => {},
 		serverVersion: version,
-		memoryHomeDir: sandbox.home,
 		resolveSessionDirectory: async (cwd) => {
 			if (available.has(cwd)) return cwd;
 			throw new Error(`Not a fixture project directory: ${cwd}`);
 		},
+		fileApi: createFixtureFileApi(scenario, failures),
+		filesHomeDir: FIXTURE_HOME,
+		memoryApi: createFixtureMemoryApi(scenario, failures),
 	});
 	const server = await new Promise<Server>((resolveServer, reject) => {
 		const listening = app.listen(0, "127.0.0.1", () => resolveServer(listening));
@@ -294,6 +298,10 @@ function routeHash(shot: ShotDefinition, runtimeKeys: Map<string, string>): stri
 			return `#/session/${key(shot.route.runtime)}`;
 		case "subagent":
 			return `#/session/${key(shot.route.runtime)}/subagent/${encodeURIComponent(shot.route.agentId)}`;
+		case "files":
+			return `#/files/${encodeURIComponent(shot.route.path)}`;
+		case "memories":
+			return "#/memories";
 		case "settings":
 			return "#/settings";
 	}

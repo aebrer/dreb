@@ -8,7 +8,7 @@
 
 import type { Page } from "playwright";
 import { pinTranscripts, scrollElementToTop } from "./page-scripts.js";
-import type { LiveRuntimeScenario } from "./scenario.js";
+import { FIXTURE_PROJECTS, type LiveRuntimeScenario } from "./scenario.js";
 
 export type ViewportName = "desktop" | "mobile";
 
@@ -29,12 +29,14 @@ export type ShotRoute =
 	| { screen: "fleet" }
 	| { screen: "session"; runtime: LiveRuntimeScenario["slug"] }
 	| { screen: "subagent"; runtime: LiveRuntimeScenario["slug"]; agentId: string }
+	| { screen: "files"; path: string }
+	| { screen: "memories" }
 	| { screen: "settings" };
 
 export interface ShotDefinition {
 	/** File stem; the image is `<name>.png`. */
 	name: string;
-	/** Alt text used in the READMEs. */
+	/** Alt text used in the root README. */
 	alt: string;
 	viewport: ViewportName;
 	/** CSS-pixel height override for screens that need more vertical room than the base viewport. */
@@ -128,7 +130,6 @@ export const SHOTS: ShotDefinition[] = [
 		name: "fleet-desktop-light",
 		alt: "dreb dashboard Fleet view in light mode",
 		viewport: "desktop",
-		height: 1280,
 		colorMode: "light",
 		route: { screen: "fleet" },
 		ready: FLEET_READY,
@@ -152,6 +153,22 @@ export const SHOTS: ShotDefinition[] = [
 		route: { screen: "subagent", runtime: "tidewatch", agentId: "b83f0c" },
 		ready: [".entry.user", "details.tool", "textarea", ':text("steering delivery: one-at-a-time")'],
 		prepare: pinTranscriptToBottom,
+	},
+	{
+		name: "files-desktop-dark",
+		alt: "dreb dashboard Files view in dark mode: a project folder on the host with places shortcuts, nested-context trust, upload, new folder, and new session here",
+		viewport: "desktop",
+		colorMode: "dark",
+		route: { screen: "files", path: FIXTURE_PROJECTS.tidewatch },
+		ready: [CONNECTED, ".file-table tbody tr", ".place-chip", ".context-trust .btn"],
+	},
+	{
+		name: "memories-desktop-dark",
+		alt: "dreb dashboard Memories view in dark mode: global and project memory scopes, their entries, and the MEMORY.md index editor with a rendered preview",
+		viewport: "desktop",
+		colorMode: "dark",
+		route: { screen: "memories" },
+		ready: [CONNECTED, ".memory-nav-item", ".memory-textarea", ".memory-preview"],
 	},
 ];
 

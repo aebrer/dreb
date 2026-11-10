@@ -6,7 +6,7 @@
  * are stubbed). They fail if the harness rots (a screen needs an RPC member the
  * fixture runtime lacks, a selector disappears, an API call errors) or if a
  * rendered screen could leak host data. The docs-sync tests keep the shot list,
- * the committed images, and both READMEs consistent.
+ * the committed images, and the root README consistent.
  */
 
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -18,17 +18,17 @@ import type { RpcEvent } from "@dreb/coding-agent/rpc";
 import type { Route } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_OUT_DIR, parseCaptureArgs } from "./capture-args.js";
-import { createFixtureRpcClient, FixtureRpcFailures, fixtureControls } from "./fixture-rpc-client.js";
+import { createFixtureFileApi, createFixtureMemoryApi } from "./fixture-host-apis.js";
+import { createFixtureRpcClient, FixtureFailures, fixtureControls } from "./fixture-rpc-client.js";
 import { buildDashboardClient, runScreenshotHarness, ScreenshotHarnessError } from "./harness.js";
 import { findLeaks, leakNeedles } from "./leak-guard.js";
-import { buildScenario, FIXTURE_DIRECTORIES, FIXTURE_HOME, liveScenario } from "./scenario.js";
+import { buildScenario, FIXTURE_DIRECTORIES, FIXTURE_HOME, liveScenario, memoryEntryContent } from "./scenario.js";
 import { type SessionFixture, toJsonl } from "./session-builder.js";
 import { SHOTS, selectShots, shotViewport } from "./shots.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const DASHBOARD_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCREENSHOT_DIR = join(DASHBOARD_ROOT, "docs", "screenshots");
-const RAW_SCREENSHOT_BASE = "https://raw.githubusercontent.com/aebrer/dreb/master/packages/dashboard/docs/screenshots/";
 
 const tempDirs: string[] = [];
 async function tempDir(prefix: string): Promise<string> {
@@ -151,6 +151,19 @@ describe("scenario fixtures", () => {
 		}
 	});
 
+	it("keep every Files and Memories path inside the fictional home", () => {
+		const scenario = buildScenario();
+		const paths = [
+			...scenario.files.map((directory) => directory.path),
+			...scenario.memories.flatMap((scope) => [scope.memoryDir, ...(scope.projectRoot ? [scope.projectRoot] : [])]),
+		];
+		expect(paths.length).toBeGreaterThan(0);
+		for (const path of paths) expect(path.startsWith(`${FIXTURE_HOME}/`), path).toBe(true);
+		for (const scope of scenario.memories.filter((candidate) => candidate.projectRoot)) {
+			expect(FIXTURE_DIRECTORIES).toContain(scope.projectRoot);
+		}
+	});
+
 	it("round-trip through the real session parser and inventory", async () => {
 		const dir = await tempDir("dreb-screenshot-fixtures-");
 		const scenario = buildScenario();
@@ -177,7 +190,7 @@ describe("fixture RPC runtime", () => {
 		const runtime = liveScenario(scenario, "pantry");
 		const path = join(dir, runtime.session.fileName);
 		await writeFile(path, toJsonl(runtime.session));
-		const failures = new FixtureRpcFailures();
+		const failures = new FixtureFailures();
 		const client = createFixtureRpcClient({
 			scenario,
 			binding: { scenario: runtime, paths: { sessionFile: () => path } },
@@ -226,13 +239,58 @@ describe("fixture RPC runtime", () => {
 	});
 
 	it("rejects session reads on the session-less utility runtime but serves settings", async () => {
-		const failures = new FixtureRpcFailures();
+		const failures = new FixtureFailures();
 		const client = createFixtureRpcClient({ scenario: buildScenario(), version: "9.9.9", failures });
 		await client.start();
 		expect(await client.getVersion()).toBe("9.9.9");
 		expect((await client.getSettings()).defaultModel).toBe("claude-opus-5-5");
 		await expect(client.getState()).rejects.toThrow(/utility runtime has no session/);
 		expect(failures.messages).toHaveLength(1);
+		await expect(client.evaluateContextTrust("/home/demo/code/tidewatch")).resolves.toEqual({
+			canonicalTarget: "/home/demo/code/tidewatch",
+			state: "untrusted",
+		});
+	});
+});
+
+describe("fixture host APIs", () => {
+	it("list only the scenario's directories, directories first, and fail loudly elsewhere", async () => {
+		const scenario = buildScenario();
+		const failures = new FixtureFailures();
+		const files = createFixtureFileApi(scenario, failures);
+		const [directory] = scenario.files;
+		const listing = await files.list(directory.path);
+		expect(listing.path).toBe(directory.path);
+		const kinds = listing.entries.map((entry) => entry.type);
+		expect(kinds.indexOf("file")).toBeGreaterThan(kinds.lastIndexOf("dir"));
+		expect(failures.messages).toEqual([]);
+		await expect(files.list(FIXTURE_HOME)).rejects.toMatchObject({ status: 404 });
+		await expect(files.mkdir(directory.path, "new")).rejects.toMatchObject({ status: 403 });
+		expect(failures.messages).toEqual([
+			expect.stringContaining(`no fixture directory ${FIXTURE_HOME}`),
+			expect.stringContaining("never performs mkdir"),
+		]);
+	});
+
+	it("serve memory scopes and documents read-only with metadata matching their front matter", async () => {
+		const scenario = buildScenario();
+		const failures = new FixtureFailures();
+		const memories = createFixtureMemoryApi(scenario, failures);
+		expect((await memories.scopes([])).map((scope) => scope.id)).toEqual(scenario.memories.map((scope) => scope.id));
+		const [scope] = scenario.memories;
+		const listing = await memories.listing(scope.id, []);
+		expect(listing.indexContent).toBe(scope.index);
+		const entry = scope.entries[0];
+		const document = await memories.readDocument(scope.id, entry.file, []);
+		expect(document).toMatchObject({ kind: "entry", content: memoryEntryContent(entry), metadata: entry.metadata });
+		expect(document.content).toContain(`name: ${entry.metadata.name}\ndescription: ${entry.metadata.description}`);
+		await expect(memories.readDocument(scope.id, "MEMORY.md", [])).resolves.toMatchObject({ kind: "index" });
+		await expect(memories.listing("project-missing", [])).rejects.toMatchObject({ status: 404 });
+		await expect(memories.saveDocument(scope.id, entry.file, {}, [])).rejects.toMatchObject({ status: 403 });
+		expect(failures.messages).toEqual([
+			expect.stringContaining("no fixture scope project-missing"),
+			expect.stringContaining("never performs saves"),
+		]);
 	});
 });
 
@@ -264,23 +322,17 @@ describe("committed screenshots and READMEs", () => {
 		expect([...referenced].sort()).toEqual(SHOTS.map((shot) => shot.name).sort());
 	});
 
-	it("reference shots from the dashboard README via absolute URLs that render on npm", async () => {
+	it("keep screenshots out of the dashboard README, which links to the root README instead", async () => {
 		const readme = await readFile(join(DASHBOARD_ROOT, "README.md"), "utf8");
-		const all = [...readme.matchAll(/([^\s("']*)docs\/screenshots\/([a-z0-9-]+)\.png/g)];
-		expect(all.length).toBeGreaterThan(0);
-		for (const [, prefix, name] of all) {
-			expect(`${prefix}docs/screenshots/`).toBe(RAW_SCREENSHOT_BASE);
-			expect(SHOTS.map((shot) => shot.name)).toContain(name);
-		}
+		expect(screenshotImages(readme)).toEqual([]);
+		expect(readme).toContain("(https://github.com/aebrer/dreb#web-dashboard)");
 	});
 
-	it("use each shot's alt text wherever its image appears", async () => {
-		for (const path of [join(REPO_ROOT, "README.md"), join(DASHBOARD_ROOT, "README.md")]) {
-			const images = screenshotImages(await readFile(path, "utf8"));
-			expect(images.length).toBeGreaterThan(0);
-			for (const image of images) {
-				expect(image.alt, `${path}: ${image.src}`).toBe(SHOTS.find((shot) => shot.name === image.name)?.alt);
-			}
+	it("use each shot's alt text in the root README", async () => {
+		const images = screenshotImages(await readFile(join(REPO_ROOT, "README.md"), "utf8"));
+		expect(images.length).toBeGreaterThan(0);
+		for (const image of images) {
+			expect(image.alt, image.src).toBe(SHOTS.find((shot) => shot.name === image.name)?.alt);
 		}
 	});
 });

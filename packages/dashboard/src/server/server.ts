@@ -92,7 +92,27 @@ export interface DashboardServerOptions {
 	 * fictional fixture project paths resolve without touching the host filesystem.
 	 */
 	resolveSessionDirectory?: (cwd: string) => Promise<string>;
+	/**
+	 * Test-only replacement for the host Files API (listings, downloads, uploads, new folders).
+	 * Defaults to the real host filesystem; the README screenshot harness injects a fictional tree.
+	 */
+	fileApi?: DashboardFileApi;
+	/**
+	 * Test-only override for the home directory the Files screen opens at and offers as a place.
+	 * Defaults to the server process's home directory.
+	 */
+	filesHomeDir?: string;
+	/**
+	 * Test-only replacement for the dreb memory API, taking precedence over `memoryHomeDir`.
+	 * Defaults to the real API; the README screenshot harness injects fictional memory scopes.
+	 */
+	memoryApi?: DashboardMemoryApi;
 }
+
+/** The Files API surface the server uses: a {@link FileApi} or a test replacement. */
+export type DashboardFileApi = Pick<FileApi, keyof FileApi>;
+/** The memory API surface the server uses: a {@link MemoryApi} or a test replacement. */
+export type DashboardMemoryApi = Pick<MemoryApi, keyof MemoryApi>;
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
 export const MAX_SSE_BUFFERED_BYTES = 4 * 1024 * 1024;
@@ -215,10 +235,14 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const serverStartedAt = new Date().toISOString();
 	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
 	const log = options.logger ?? ((line: string) => console.log(`[dashboard] ${line}`));
-	const files = new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
-	const memories = new MemoryApi(options.memoryHomeDir ?? homedir(), (op, scopeId, detail) =>
-		log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
-	);
+	const files: DashboardFileApi =
+		options.fileApi ?? new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
+	const filesHomeDir = (): string => options.filesHomeDir ?? homedir();
+	const memories: DashboardMemoryApi =
+		options.memoryApi ??
+		new MemoryApi(options.memoryHomeDir ?? homedir(), (op, scopeId, detail) =>
+			log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
+		);
 	const hub = options.eventHub ?? new EventHub();
 	const images = options.imageService ?? new DashboardImageService(new ImagePreviewWorker());
 	hub.setEventProjector((key, event) => (key ? images.projectEvent(event, { runtimeKey: key }) : event));
@@ -1327,7 +1351,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	// -- files -----------------------------------------------------------------------
 	app.get("/api/files", (req, res) => {
-		const path = typeof req.query.path === "string" ? req.query.path : homedir();
+		const path = typeof req.query.path === "string" ? req.query.path : filesHomeDir();
 		files
 			.list(path)
 			.then(async (listing) => {
@@ -1364,7 +1388,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	app.get("/api/files/places", (_req, res) => {
 		const roots = [...new Set(pool.list().map((h) => h.cwd))];
-		res.json({ places: defaultPlaces(homedir(), roots) });
+		res.json({ places: defaultPlaces(filesHomeDir(), roots) });
 	});
 
 	app.get("/api/files/download", (req, res) => {

@@ -1,5 +1,5 @@
 /**
- * Regenerate the dashboard README screenshots.
+ * Regenerate the dashboard screenshots used in the root README.
  *
  *   npm run screenshots -w @dreb/dashboard                  # all shots → docs/screenshots/
  *   npm run screenshots -w @dreb/dashboard -- --only fleet-desktop-dark

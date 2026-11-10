@@ -5,7 +5,7 @@
  * fake implements exactly the read-only subset the captured screens need, typed
  * against the real `RpcClient` signatures so an RPC interface change fails
  * `tsgo`. Every other member throws a descriptive error when called and is also
- * recorded in {@link FixtureRpcFailures}, so a screen that starts depending on a
+ * recorded in {@link FixtureFailures}, so a screen that starts depending on a
  * new RPC call fails the capture loudly instead of rendering an empty panel.
  *
  * No process is spawned and no model is ever called.
@@ -54,17 +54,22 @@ type FixtureRpcMember =
 	| "getSettings"
 	| "getAvailableModels"
 	| "listAgentTypes"
-	| "getVersion";
+	| "getVersion"
+	| "evaluateContextTrust";
 
 type FixtureRpcSurface = Pick<RpcClient, FixtureRpcMember>;
 
-/** Collects every call to an RPC member the fixture runtime does not implement. */
-export class FixtureRpcFailures {
+/**
+ * Collects every call a fixture surface (RPC runtime, Files, Memories) does not support, so
+ * the harness fails the capture even when the caller swallows the thrown error.
+ */
+export class FixtureFailures {
 	readonly messages: string[] = [];
 
-	record(message: string): Error {
+	/** Record `message` and return an error to throw; `status` becomes the HTTP status the server sends. */
+	record(message: string, status?: number): Error {
 		this.messages.push(message);
-		return new Error(message);
+		return status === undefined ? new Error(message) : Object.assign(new Error(message), { status });
 	}
 }
 
@@ -102,7 +107,7 @@ export function createFixtureRpcClient(options: {
 	scenario: Scenario;
 	binding?: FixtureRuntimeBinding;
 	version: string;
-	failures: FixtureRpcFailures;
+	failures: FixtureFailures;
 }): RpcClient {
 	const { scenario, binding, failures } = options;
 	const events = new EventEmitter();
@@ -267,6 +272,10 @@ export function createFixtureRpcClient(options: {
 		},
 		async getVersion() {
 			return options.version;
+		},
+		async evaluateContextTrust(path: string) {
+			// The scenario trusts no folders (SETTINGS.trustedContextFolders is empty).
+			return { canonicalTarget: path, state: "untrusted" as const };
 		},
 	} satisfies FixtureRpcSurface;
 
