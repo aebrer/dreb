@@ -126,7 +126,8 @@ templates and literals:
   "apiKey": "!op read 'op://vault/item/credential'"
   ```
 - **Templates:** `{env:NAME}` reads an environment variable and `{file:PATH}`
-  reads a file. Both are trimmed and resolved per request:
+  reads a file. Both are trimmed. `baseUrl` and `apiKey` are resolved per
+  request; `headers` are resolved when the config loads or on `/reload`:
   ```json
   "baseUrl": "{env:PROXY_URL}/v1"
   "apiKey": "{file:/run/secrets/proxy-key}"
@@ -141,8 +142,9 @@ templates and literals:
   ```
 
 Templates take precedence over the bare-name rule. A missing or empty variable,
-or an unreadable file, fails before any request; the token text is never used as
-a value, and resolved values are never logged.
+or an unreadable file, is never used as a value. A `baseUrl` template fails the
+request; an `apiKey` template yields no key; a failed `headers` template is
+skipped. Resolved values are never logged.
 
 ### Bearer Auth for Anthropic-Compatible Providers
 
@@ -164,7 +166,7 @@ Third-party Anthropic-compatible endpoints use `x-api-key` by default. If an end
 }
 ```
 
-For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`. The credential can use any [value resolution](#value-resolution) format; the environment variable does not need a special Anthropic SDK name.
+For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the credential as `Authorization` and does not also send `x-api-key`. The credential can use any [value resolution](#value-resolution) format; the environment variable does not need a special Anthropic SDK name. With `authHeader: true`, the credential is resolved when the config loads, so a changed template value requires `/reload`.
 
 The flag also works when redirecting a built-in provider without redefining its models:
 
