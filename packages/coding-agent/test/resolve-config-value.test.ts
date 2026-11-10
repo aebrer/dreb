@@ -70,8 +70,10 @@ describe("resolveConfigValue", () => {
 	it("does not fall back to the token text when resolution fails", () => {
 		delete process.env.TEST_TEMPLATE_MISSING;
 		expect(resolveConfigValue("{env:TEST_TEMPLATE_MISSING}")).toBeUndefined();
+		expect(resolveConfigValue("{env:TEST_TEMPLATE_MISSING}")).toBeUndefined();
 		const missing = join(tmpdir(), `dreb-missing-${Date.now()}-${Math.random()}.txt`);
 		expect(resolveConfigValue(`{file:${missing}}`)).toBeUndefined();
-		expect(configValueWarnings.length).toBeGreaterThan(0);
+		expect(configValueWarnings.filter((w) => w.includes("TEST_TEMPLATE_MISSING"))).toHaveLength(1);
+		expect(configValueWarnings.some((w) => w.includes(`{file:${missing}}`))).toBe(true);
 	});
 });

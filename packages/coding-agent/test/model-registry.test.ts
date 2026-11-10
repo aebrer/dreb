@@ -7,6 +7,7 @@ import { getOAuthProvider } from "@dreb/ai/oauth";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearApiKeyCache, ModelRegistry } from "../src/core/model-registry.js";
+import { configValueWarnings } from "../src/core/resolve-config-value.js";
 
 describe("ModelRegistry", () => {
 	let tempDir: string;
@@ -1622,5 +1623,24 @@ describe("ModelRegistry baseUrl templates", () => {
 		});
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		expect(registry.find("test", "m")!.baseUrl).toBe(`{env:${ENV_VAR}}/v1`);
+	});
+
+	test("warns once and names the provider for a failing apiKey template", async () => {
+		delete process.env[ENV_VAR];
+		writeProvider({
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: `{env:${ENV_VAR}}`,
+			api: "openai-completions",
+			models: [model()],
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const found = registry.find("test", "m")!;
+
+		await registry.getApiKey(found);
+		await registry.getApiKey(found);
+
+		const warnings = configValueWarnings.filter((w) => w.includes(ENV_VAR));
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('provider "test" apiKey');
 	});
 });

@@ -23,7 +23,11 @@ function readFile(path: string): string {
 	if (!fs || !("readFileSync" in fs)) {
 		throw new Error(`{file:${path}} is not supported in this environment`);
 	}
-	return (fs as typeof import("node:fs")).readFileSync(path, "utf-8");
+	try {
+		return (fs as typeof import("node:fs")).readFileSync(path, "utf-8");
+	} catch (error) {
+		throw new Error(`{file:${path}}: ${error instanceof Error ? error.message : String(error)}`);
+	}
 }
 
 /** Expand `{env:NAME}` / `{file:PATH}` tokens; undefined when the value has none. */

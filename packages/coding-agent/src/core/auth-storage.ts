@@ -426,7 +426,7 @@ export class AuthStorage {
 		const cred = this.data[providerId];
 
 		if (cred?.type === "api_key") {
-			return resolveConfigValue(cred.key);
+			return resolveConfigValue(cred.key, `provider "${providerId}" key`);
 		}
 
 		if (cred?.type === "oauth") {
