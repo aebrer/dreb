@@ -223,7 +223,7 @@ dreb.registerProvider("company-anthropic", {
 });
 ```
 
-For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`. Without `authHeader`, third-party Anthropic-compatible endpoints use `x-api-key` by default. `apiKey` can name any environment variable or use a literal or `!command`; it does not need to be named `ANTHROPIC_AUTH_TOKEN`.
+For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`. Without `authHeader`, third-party Anthropic-compatible endpoints use `x-api-key` by default. `apiKey` can name any environment variable or use a literal, `!command`, or `{env:}`/`{file:}` template; it does not need to be named `ANTHROPIC_AUTH_TOKEN`.
 
 The same option works when redirecting an existing provider without replacing its models:
 
@@ -554,10 +554,10 @@ Run tests with your provider/model pairs to verify compatibility.
 
 ```typescript
 interface ProviderConfig {
-  /** API endpoint URL. Required when defining models. */
+  /** API endpoint URL. Required when defining models. Supports {env:NAME}/{file:PATH} templates, resolved per request. */
   baseUrl?: string;
 
-  /** API key or environment variable name. Required when defining models (unless oauth). */
+  /** API key, environment variable name, !command, or {env:NAME}/{file:PATH} template. Required when defining models (unless oauth). */
   apiKey?: string;
 
   /** API type for streaming. Required at provider or model level when defining models. */
@@ -570,7 +570,7 @@ interface ProviderConfig {
     options?: SimpleStreamOptions
   ) => AssistantMessageEventStream;
 
-  /** Custom headers to include in requests. Values can be env var names. */
+  /** Custom headers to include in requests. Values use the same formats as apiKey, resolved at registration. */
   headers?: Record<string, string>;
 
   /** Use Authorization: Bearer with the resolved API key instead of provider API-key auth. */

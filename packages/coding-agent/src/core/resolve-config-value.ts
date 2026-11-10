@@ -3,11 +3,13 @@
  * Used by auth-storage.ts and model-registry.ts.
  */
 
+import { resolveConfigTemplate } from "@dreb/ai";
 import { execSync, spawnSync } from "child_process";
 import { getShellConfig } from "../utils/shell.js";
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
+const warnedConfigValues = new Set<string>();
 
 /** Warnings from config value resolution — queried by session to surface errors */
 export const configValueWarnings: string[] = [];
@@ -15,11 +17,26 @@ export const configValueWarnings: string[] = [];
 /**
  * Resolve a config value (API key, header value, etc.) to an actual value.
  * - If starts with "!", executes the rest as a shell command and uses stdout (cached)
+ * - Otherwise expands {env:VAR} / {file:PATH} templates (never cached)
  * - Otherwise checks environment variable first, then treats as literal (not cached)
  */
-export function resolveConfigValue(config: string): string | undefined {
+export function resolveConfigValue(config: string, context?: string): string | undefined {
 	if (config.startsWith("!")) {
 		return executeCommand(config);
+	}
+	try {
+		const templated = resolveConfigTemplate(config);
+		if (templated !== undefined) {
+			return templated;
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const warning = context ? `${context}: ${message}` : message;
+		if (!warnedConfigValues.has(warning)) {
+			warnedConfigValues.add(warning);
+			configValueWarnings.push(warning);
+		}
+		return undefined;
 	}
 	const envValue = process.env[config];
 	return envValue || config;
@@ -111,5 +128,6 @@ export function resolveHeaders(headers: Record<string, string> | undefined): Rec
 /** Clear the config value command cache and warnings. Exported for testing. */
 export function clearConfigValueCache(): void {
 	commandResultCache.clear();
+	warnedConfigValues.clear();
 	configValueWarnings.length = 0;
 }

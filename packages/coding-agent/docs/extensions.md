@@ -1361,8 +1361,8 @@ dreb.registerProvider("corporate-ai", {
 ```
 
 **Config options:**
-- `baseUrl` - API endpoint URL. Required when defining models.
-- `apiKey` - API key or environment variable name. Required when defining models (unless `oauth` provided).
+- `baseUrl` - API endpoint URL (supports `{env:}`/`{file:}` templates). Required when defining models.
+- `apiKey` - API key, environment variable name, `!command`, or `{env:}`/`{file:}` template. Required when defining models (unless `oauth` provided).
 - `api` - API type: `"anthropic-messages"`, `"openai-completions"`, `"openai-responses"`, etc.
 - `headers` - Custom headers to include in requests.
 - `authHeader` - Use the resolved API key as `Authorization: Bearer`; for built-in `anthropic-messages`, this replaces `x-api-key` rather than sending both. See [Custom Providers](custom-provider.md#bearer-auth).

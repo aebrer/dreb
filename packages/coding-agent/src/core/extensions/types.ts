@@ -1298,15 +1298,15 @@ export interface ExtensionAPI {
 
 /** Configuration for registering a provider via dreb.registerProvider(). */
 export interface ProviderConfig {
-	/** Base URL for the API endpoint. Required when defining models. */
+	/** Base URL for the API endpoint. Required when defining models. Supports {env:NAME}/{file:PATH} templates, resolved per request. */
 	baseUrl?: string;
-	/** API key or environment variable name. Required when defining models (unless oauth provided). */
+	/** API key, environment variable name, !command, or {env:NAME}/{file:PATH} template. Required when defining models (unless oauth provided). */
 	apiKey?: string;
 	/** API type. Required at provider or model level when defining models. */
 	api?: Api;
 	/** Optional streamSimple handler for custom APIs. */
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
-	/** Custom headers to include in requests. */
+	/** Custom headers to include in requests. Values use the same formats as apiKey, resolved at registration. */
 	headers?: Record<string, string>;
 	/** Use Authorization: Bearer with the resolved API key instead of the provider's API-key auth channel. */
 	authHeader?: boolean;

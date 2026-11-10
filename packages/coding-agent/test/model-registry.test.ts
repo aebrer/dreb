@@ -7,6 +7,7 @@ import { getOAuthProvider } from "@dreb/ai/oauth";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearApiKeyCache, ModelRegistry } from "../src/core/model-registry.js";
+import { configValueWarnings } from "../src/core/resolve-config-value.js";
 
 describe("ModelRegistry", () => {
 	let tempDir: string;
@@ -1535,5 +1536,111 @@ describe("ModelRegistry GitHub Copilot model discovery", () => {
 		expect(registry.getAll().filter((model) => model.provider === "github-copilot")).toHaveLength(
 			getModels("github-copilot").length,
 		);
+	});
+});
+
+describe("ModelRegistry baseUrl templates", () => {
+	const ENV_VAR = "DREB_TEST_TEMPLATE_BASE_URL";
+	const context: Context = { messages: [{ role: "user", content: "hello", timestamp: Date.now() }] };
+	const sse = [
+		`data: ${JSON.stringify({ choices: [{ delta: { content: "hi" }, finish_reason: null }] })}`,
+		"",
+		`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}`,
+		"",
+		"data: [DONE]",
+		"",
+	].join("\n");
+
+	let tempDir: string;
+	let modelsJsonPath: string;
+	let authStorage: AuthStorage;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `dreb-template-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+		modelsJsonPath = join(tempDir, "models.json");
+		authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+	});
+
+	afterEach(() => {
+		delete process.env[ENV_VAR];
+		rmSync(tempDir, { recursive: true, force: true });
+		clearApiKeyCache();
+		vi.restoreAllMocks();
+	});
+
+	function writeProvider(provider: Record<string, unknown>): void {
+		writeFileSync(modelsJsonPath, JSON.stringify({ providers: { test: provider } }));
+	}
+
+	function model(baseUrl?: string) {
+		return {
+			id: "m",
+			name: "M",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+			...(baseUrl ? { baseUrl } : {}),
+		};
+	}
+
+	test("resolves provider-level baseUrl per request and fails closed", async () => {
+		const urls: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation((async (input: string | URL | Request) => {
+			urls.push(String(input));
+			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+		}) as typeof fetch);
+
+		process.env[ENV_VAR] = "http://127.0.0.1:1";
+		writeProvider({
+			baseUrl: `{env:${ENV_VAR}}/v1`,
+			apiKey: "test-key",
+			api: "openai-completions",
+			models: [model()],
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const found = registry.find("test", "m")!;
+
+		await streamSimple(found, context, { apiKey: "test-key" }).result();
+		process.env[ENV_VAR] = "http://127.0.0.1:2";
+		await streamSimple(found, context, { apiKey: "test-key" }).result();
+
+		expect(urls[0]).toContain("127.0.0.1:1/v1");
+		expect(urls[1]).toContain("127.0.0.1:2/v1");
+
+		delete process.env[ENV_VAR];
+		expect(() => streamSimple(found, context, { apiKey: "test-key" })).toThrow(ENV_VAR);
+	});
+
+	test("model-level baseUrl overrides the provider baseUrl", () => {
+		writeProvider({
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "test-key",
+			api: "openai-completions",
+			models: [model(`{env:${ENV_VAR}}/v1`)],
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		expect(registry.find("test", "m")!.baseUrl).toBe(`{env:${ENV_VAR}}/v1`);
+	});
+
+	test("warns once and names the provider for a failing apiKey template", async () => {
+		delete process.env[ENV_VAR];
+		writeProvider({
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: `{env:${ENV_VAR}}`,
+			api: "openai-completions",
+			models: [model()],
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const found = registry.find("test", "m")!;
+
+		await registry.getApiKey(found);
+		await registry.getApiKey(found);
+
+		const warnings = configValueWarnings.filter((w) => w.includes(ENV_VAR));
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('provider "test" apiKey');
 	});
 });

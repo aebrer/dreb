@@ -344,7 +344,7 @@ export class ModelRegistry {
 		this.authStorage.setFallbackResolver((provider) => {
 			const keyConfig = this.customProviderApiKeys.get(provider);
 			if (keyConfig) {
-				return resolveConfigValue(keyConfig);
+				return resolveConfigValue(keyConfig, `provider "${provider}" apiKey`);
 			}
 			return undefined;
 		});
