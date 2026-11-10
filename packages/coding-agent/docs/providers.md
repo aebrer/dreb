@@ -122,12 +122,17 @@ The file is created with `0600` permissions (user read/write only). Auth file cr
 
 ### Key Resolution
 
-The `key` field supports three formats:
+The `key` field supports these formats:
 
 - **Shell command:** `"!command"` executes and uses stdout (cached for process lifetime)
   ```json
   { "type": "api_key", "key": "!security find-generic-password -ws 'anthropic'" }
   { "type": "api_key", "key": "!op read 'op://vault/item/credential'" }
+  ```
+- **Templates:** `{env:NAME}` reads an environment variable and `{file:PATH}` reads a file
+  ```json
+  { "type": "api_key", "key": "{env:MY_ANTHROPIC_KEY}" }
+  { "type": "api_key", "key": "{file:/run/secrets/anthropic}" }
   ```
 - **Environment variable:** Uses the value of the named variable
   ```json

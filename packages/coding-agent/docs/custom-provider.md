@@ -223,7 +223,7 @@ dreb.registerProvider("company-anthropic", {
 });
 ```
 
-For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`. Without `authHeader`, third-party Anthropic-compatible endpoints use `x-api-key` by default. `apiKey` can name any environment variable or use a literal or `!command`; it does not need to be named `ANTHROPIC_AUTH_TOKEN`.
+For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`. Without `authHeader`, third-party Anthropic-compatible endpoints use `x-api-key` by default. `apiKey` can name any environment variable or use a literal, `!command`, or `{env:}`/`{file:}` template; it does not need to be named `ANTHROPIC_AUTH_TOKEN`.
 
 The same option works when redirecting an existing provider without replacing its models:
 
