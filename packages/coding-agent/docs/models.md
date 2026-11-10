@@ -166,7 +166,7 @@ Third-party Anthropic-compatible endpoints use `x-api-key` by default. If an end
 }
 ```
 
-For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the credential as `Authorization` and does not also send `x-api-key`. The credential can use any [value resolution](#value-resolution) format; the environment variable does not need a special Anthropic SDK name. With `authHeader: true`, the credential is resolved when the config loads, so a changed template value requires `/reload`.
+For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`, so a rotated `{file:}` key takes effect on the next request. The credential can use any [value resolution](#value-resolution) format; the environment variable does not need a special Anthropic SDK name. Other APIs and custom stream implementations receive the `Authorization: Bearer` header resolved when the config loads, so a changed template value there requires `/reload`.
 
 The flag also works when redirecting a built-in provider without redefining its models:
 

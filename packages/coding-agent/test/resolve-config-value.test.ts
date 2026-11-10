@@ -76,4 +76,21 @@ describe("resolveConfigValue", () => {
 		expect(configValueWarnings.filter((w) => w.includes("TEST_TEMPLATE_MISSING"))).toHaveLength(1);
 		expect(configValueWarnings.some((w) => w.includes(`{file:${missing}}`))).toBe(true);
 	});
+
+	it("runs !command values through the shell without expanding template syntax", () => {
+		process.env.TEST_TEMPLATE_ENV = "must-not-be-substituted";
+		expect(resolveConfigValue("!echo '{env:TEST_TEMPLATE_ENV}'")).toBe("{env:TEST_TEMPLATE_ENV}");
+	});
+
+	it("never re-resolves a template result as an env name or command", () => {
+		process.env.TEST_TEMPLATE_ENV = "TEST_RESOLVE_CONFIG";
+		process.env.TEST_RESOLVE_CONFIG = "should-not-be-used";
+		try {
+			expect(resolveConfigValue("{env:TEST_TEMPLATE_ENV}")).toBe("TEST_RESOLVE_CONFIG");
+			process.env.TEST_TEMPLATE_ENV = "!echo executed";
+			expect(resolveConfigValue("{env:TEST_TEMPLATE_ENV}")).toBe("!echo executed");
+		} finally {
+			delete process.env.TEST_RESOLVE_CONFIG;
+		}
+	});
 });
