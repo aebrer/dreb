@@ -11,6 +11,8 @@ import { FilePairingStorage } from "../src/server/pairing-storage.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
 import {
 	createDashboardServer,
+	type DashboardFileApi,
+	type DashboardMemoryApi,
 	type DashboardSessionInfoSource,
 	MAX_SSE_BUFFERED_BYTES,
 	parseDeviceCookie,
@@ -41,6 +43,10 @@ interface TestServerOptions {
 	heartbeatIntervalMs?: number;
 	fleetSnapshotDebounceMs?: number;
 	memoryHomeDir?: string;
+	resolveSessionDirectory?: (cwd: string) => Promise<string>;
+	fileApi?: DashboardFileApi;
+	filesHomeDir?: string;
+	memoryApi?: DashboardMemoryApi;
 }
 
 async function createTempProject(): Promise<string> {
@@ -139,6 +145,10 @@ async function startServer(options: TestServerOptions = {}) {
 		imageService: options.imageService,
 		heartbeatIntervalMs: options.heartbeatIntervalMs,
 		memoryHomeDir: options.memoryHomeDir,
+		resolveSessionDirectory: options.resolveSessionDirectory,
+		fileApi: options.fileApi,
+		filesHomeDir: options.filesHomeDir,
+		memoryApi: options.memoryApi,
 	});
 	const server = await new Promise<Server>((resolve) => {
 		const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -959,6 +969,57 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(listAllSessions).toHaveBeenCalledTimes(1);
 		expect(describe).not.toHaveBeenCalled();
 		expect(clients[0].getState).not.toHaveBeenCalled();
+	});
+
+	it("projects session cwd availability through an injected directory resolver", async () => {
+		const fictionalCwd = "/home/fixture-user/projects/fictional";
+		const missingCwd = "/home/fixture-user/projects/gone";
+		const resolveSessionDirectory = vi.fn(async (cwd: string) => {
+			if (cwd === fictionalCwd) return `${cwd}-resolved`;
+			throw new Error(`missing: ${cwd}`);
+		});
+		const { base, clients, pool } = await startServer({
+			listAllSessions: async () => [
+				diskSession(fictionalCwd, { path: "/s/fictional.jsonl", id: "fictional" }),
+				diskSession(missingCwd, { path: "/s/gone.jsonl", id: "gone" }),
+			],
+			resolveSessionDirectory,
+		});
+
+		const inventory = (await (await fetch(`${base}/api/sessions`)).json()) as {
+			sessions: Array<{ id: string; cwdAvailable: boolean; resolvedCwd?: string }>;
+		};
+		expect(inventory.sessions).toEqual([
+			expect.objectContaining({ id: "fictional", cwdAvailable: true, resolvedCwd: `${fictionalCwd}-resolved` }),
+			expect.objectContaining({ id: "gone", cwdAvailable: false }),
+		]);
+		expect(inventory.sessions[1].resolvedCwd).toBeUndefined();
+
+		// Runtime-local listings use the same resolver.
+		const runtimeCwd = await createTempProject();
+		const handle = await pool.create(runtimeCwd);
+		vi.mocked(clients[0].listSessions).mockResolvedValueOnce([
+			{
+				path: "/sessions/fictional.jsonl",
+				id: "runtime-fictional",
+				cwd: fictionalCwd,
+				created: "2026-01-02T03:04:05.000Z",
+				modified: "2026-02-03T04:05:06.000Z",
+				messageCount: 2,
+				firstMessage: "hello",
+			},
+		]);
+		const runtimeListing = (await (await fetch(`${base}/api/runtimes/${handle.key}/sessions`)).json()) as {
+			sessions: Array<{ id: string; cwdAvailable: boolean; resolvedCwd?: string }>;
+		};
+		expect(runtimeListing.sessions).toEqual([
+			expect.objectContaining({
+				id: "runtime-fictional",
+				cwdAvailable: true,
+				resolvedCwd: `${fictionalCwd}-resolved`,
+			}),
+		]);
+		expect(resolveSessionDirectory.mock.calls.map(([cwd]) => cwd)).toEqual([fictionalCwd, missingCwd, fictionalCwd]);
 	});
 
 	it("projects cwd availability for runtime-local session listings", async () => {
@@ -2770,6 +2831,70 @@ describe("dashboard server — past-session rename and titles", () => {
 });
 
 describe("dashboard server — files", () => {
+	it("opens Files at the process home directory by default", async () => {
+		const { base } = await startServer();
+		const places = (await (await fetch(`${base}/api/files/places`)).json()) as {
+			places: Array<{ label: string; path: string }>;
+		};
+		expect(places.places[0]).toEqual({ label: "home", path: homedir() });
+	});
+
+	it("serves Files and Memories through injected host surfaces", async () => {
+		const unused = (name: string) => async () => {
+			throw new Error(`unexpected ${name}`);
+		};
+		const fileApi: DashboardFileApi = {
+			resolveDirectory: vi.fn(async (path: string) => path),
+			list: vi.fn(async (path: string) => ({
+				path,
+				entries: [{ name: "notes.md", type: "file" as const, size: 12, modified: "2026-01-02T03:04:05.000Z" }],
+			})),
+			resolveDownload: unused("resolveDownload"),
+			prepareUpload: unused("prepareUpload"),
+			mkdir: unused("mkdir"),
+		};
+		const scope = {
+			id: "global",
+			kind: "global" as const,
+			label: "global",
+			memoryDir: "/home/fixture/.dreb/memory",
+			exists: true,
+		};
+		const memoryApi: DashboardMemoryApi = {
+			scopes: vi.fn(async () => [scope]),
+			listing: vi.fn(async () => ({
+				scope,
+				indexContent: "# Index\n",
+				indexRevision: "r1",
+				indexOverLimit: false,
+				entries: [],
+			})),
+			readDocument: unused("readDocument"),
+			saveDocument: unused("saveDocument"),
+			deleteEntry: unused("deleteEntry"),
+		};
+		const { base } = await startServer({ fileApi, filesHomeDir: "/home/fixture", memoryApi });
+
+		const places = (await (await fetch(`${base}/api/files/places`)).json()) as {
+			places: Array<{ label: string; path: string }>;
+		};
+		expect(places.places[0]).toEqual({ label: "home", path: "/home/fixture" });
+		const listing = await fetch(`${base}/api/files`);
+		expect(listing.status).toBe(200);
+		await expect(listing.json()).resolves.toMatchObject({
+			path: "/home/fixture",
+			entries: [{ name: "notes.md" }],
+			contextTrust: { canonicalTarget: "/home/fixture", state: "untrusted" },
+		});
+		expect(fileApi.list).toHaveBeenCalledWith("/home/fixture");
+
+		await expect((await fetch(`${base}/api/memories/scopes`)).json()).resolves.toEqual({ scopes: [scope] });
+		await expect((await fetch(`${base}/api/memories/global`)).json()).resolves.toMatchObject({
+			indexContent: "# Index\n",
+		});
+		expect(memoryApi.listing).toHaveBeenCalledWith("global", expect.any(Array));
+	});
+
 	it("returns utility-RPC trust state for canonical listings and delegates canonical trust mutations", async () => {
 		const dir = await createTempProject();
 		const canonical = await realpath(dir);

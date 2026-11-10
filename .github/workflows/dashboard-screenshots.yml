@@ -1,0 +1,41 @@
+name: Dashboard screenshots
+
+# Renders the README dashboard screenshots from fictional fixture sessions and
+# uploads them as an artifact for review. It never commits: the PR author
+# regenerates and commits docs/screenshots/ when the dashboard layout changes
+# (see packages/dashboard/README.md#readme-screenshots). No secrets are used.
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "packages/dashboard/**"
+      - ".github/workflows/dashboard-screenshots.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    name: Render dashboard screenshots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - name: Render screenshots
+        run: npm run screenshots -w @dreb/dashboard -- --out "$RUNNER_TEMP/dashboard-screenshots"
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-screenshots
+          path: ${{ runner.temp }}/dashboard-screenshots/*.png
+          if-no-files-found: error
+          retention-days: 30

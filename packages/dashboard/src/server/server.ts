@@ -85,7 +85,34 @@ export interface DashboardServerOptions {
 	heartbeatIntervalMs?: number;
 	/** Test-only override for the global dreb memory home directory. */
 	memoryHomeDir?: string;
+	/**
+	 * Test-only override for resolving a historical session's recorded project directory
+	 * (`cwdAvailable` / `resolvedCwd`). Rejecting means the directory is unavailable.
+	 * Defaults to the real filesystem check; the README screenshot harness injects it so
+	 * fictional fixture project paths resolve without touching the host filesystem.
+	 */
+	resolveSessionDirectory?: (cwd: string) => Promise<string>;
+	/**
+	 * Test-only replacement for the host Files API (listings, downloads, uploads, new folders).
+	 * Defaults to the real host filesystem; the README screenshot harness injects a fictional tree.
+	 */
+	fileApi?: DashboardFileApi;
+	/**
+	 * Test-only override for the home directory the Files screen opens at and offers as a place.
+	 * Defaults to the server process's home directory.
+	 */
+	filesHomeDir?: string;
+	/**
+	 * Test-only replacement for the dreb memory API, taking precedence over `memoryHomeDir`.
+	 * Defaults to the real API; the README screenshot harness injects fictional memory scopes.
+	 */
+	memoryApi?: DashboardMemoryApi;
 }
+
+/** The Files API surface the server uses: a {@link FileApi} or a test replacement. */
+export type DashboardFileApi = Pick<FileApi, keyof FileApi>;
+/** The memory API surface the server uses: a {@link MemoryApi} or a test replacement. */
+export type DashboardMemoryApi = Pick<MemoryApi, keyof MemoryApi>;
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
 export const MAX_SSE_BUFFERED_BYTES = 4 * 1024 * 1024;
@@ -122,10 +149,13 @@ function toIsoString(value: Date | string): string {
 	return value instanceof Date ? value.toISOString() : value;
 }
 
-async function toSessionInfoDto(session: SessionInfoProjectionSource): Promise<SessionInfoDto> {
+async function toSessionInfoDto(
+	session: SessionInfoProjectionSource,
+	resolveDirectory: (cwd: string) => Promise<string>,
+): Promise<SessionInfoDto> {
 	let resolvedCwd: string | undefined;
 	try {
-		resolvedCwd = await resolveExistingDirectory(session.cwd);
+		resolvedCwd = await resolveDirectory(session.cwd);
 	} catch {
 		// Historical metadata remains useful even when its directory disappeared.
 	}
@@ -205,10 +235,14 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const serverStartedAt = new Date().toISOString();
 	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
 	const log = options.logger ?? ((line: string) => console.log(`[dashboard] ${line}`));
-	const files = new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
-	const memories = new MemoryApi(options.memoryHomeDir ?? homedir(), (op, scopeId, detail) =>
-		log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
-	);
+	const files: DashboardFileApi =
+		options.fileApi ?? new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
+	const filesHomeDir = (): string => options.filesHomeDir ?? homedir();
+	const memories: DashboardMemoryApi =
+		options.memoryApi ??
+		new MemoryApi(options.memoryHomeDir ?? homedir(), (op, scopeId, detail) =>
+			log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
+		);
 	const hub = options.eventHub ?? new EventHub();
 	const images = options.imageService ?? new DashboardImageService(new ImagePreviewWorker());
 	hub.setEventProjector((key, event) => (key ? images.projectEvent(event, { runtimeKey: key }) : event));
@@ -562,8 +596,11 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	// -- fleet -----------------------------------------------------------------
+	const resolveSessionDirectory = options.resolveSessionDirectory ?? resolveExistingDirectory;
+	const projectSessionInfo = (session: SessionInfoProjectionSource): Promise<SessionInfoDto> =>
+		toSessionInfoDto(session, resolveSessionDirectory);
 	const listDiskSessions = async (): Promise<SessionInfoDto[]> =>
-		Promise.all((await options.listAllSessions()).map(toSessionInfoDto));
+		Promise.all((await options.listAllSessions()).map(projectSessionInfo));
 
 	const currentCwdInventory = async (): Promise<string[]> => [
 		...pool.list().map((handle) => handle.cwd),
@@ -1045,7 +1082,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	app.get("/api/runtimes/:key/sessions", (req, res) => {
 		withRuntime(req, res, async (h) => ({
-			sessions: await Promise.all((await h.client.listSessions()).map(toSessionInfoDto)),
+			sessions: await Promise.all((await h.client.listSessions()).map(projectSessionInfo)),
 		}));
 	});
 
@@ -1314,7 +1351,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	// -- files -----------------------------------------------------------------------
 	app.get("/api/files", (req, res) => {
-		const path = typeof req.query.path === "string" ? req.query.path : homedir();
+		const path = typeof req.query.path === "string" ? req.query.path : filesHomeDir();
 		files
 			.list(path)
 			.then(async (listing) => {
@@ -1351,7 +1388,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	app.get("/api/files/places", (_req, res) => {
 		const roots = [...new Set(pool.list().map((h) => h.cwd))];
-		res.json({ places: defaultPlaces(homedir(), roots) });
+		res.json({ places: defaultPlaces(filesHomeDir(), roots) });
 	});
 
 	app.get("/api/files/download", (req, res) => {
