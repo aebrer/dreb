@@ -77,6 +77,9 @@ Documentation files to check on every feature change:
 - `packages/coding-agent/README.md` (detailed product docs)
 - `packages/coding-agent/docs/` (feature-specific docs: extensions, json, rpc, sdk, etc.)
 - `AGENTS.md` (this file — development guide)
+- `packages/dashboard/docs/screenshots/` (dashboard screenshots shown in both READMEs)
+
+**Dashboard screenshots are part of the docs surface.** Any PR that changes the dashboard's layout or appearance must regenerate them before merge (`npm run build`, then `npm run screenshots -w @dreb/dashboard`) and commit the results. The script needs no agent, model, or API key: it renders fictional fixture sessions through the real dashboard in a sandbox and fails on any host-data leak. Unchanged layouts produce byte-identical images on the same machine. The **Dashboard screenshots** CI workflow uploads the same renders as an artifact on every dashboard PR. To add or change a shot, see [README screenshots](packages/dashboard/README.md#readme-screenshots).
 
 ## Nested Context Trust Boundary
 

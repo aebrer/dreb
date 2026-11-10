@@ -85,6 +85,13 @@ export interface DashboardServerOptions {
 	heartbeatIntervalMs?: number;
 	/** Test-only override for the global dreb memory home directory. */
 	memoryHomeDir?: string;
+	/**
+	 * Test-only override for resolving a historical session's recorded project directory
+	 * (`cwdAvailable` / `resolvedCwd`). Rejecting means the directory is unavailable.
+	 * Defaults to the real filesystem check; the README screenshot harness injects it so
+	 * fictional fixture project paths resolve without touching the host filesystem.
+	 */
+	resolveSessionDirectory?: (cwd: string) => Promise<string>;
 }
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
@@ -122,10 +129,13 @@ function toIsoString(value: Date | string): string {
 	return value instanceof Date ? value.toISOString() : value;
 }
 
-async function toSessionInfoDto(session: SessionInfoProjectionSource): Promise<SessionInfoDto> {
+async function toSessionInfoDto(
+	session: SessionInfoProjectionSource,
+	resolveDirectory: (cwd: string) => Promise<string>,
+): Promise<SessionInfoDto> {
 	let resolvedCwd: string | undefined;
 	try {
-		resolvedCwd = await resolveExistingDirectory(session.cwd);
+		resolvedCwd = await resolveDirectory(session.cwd);
 	} catch {
 		// Historical metadata remains useful even when its directory disappeared.
 	}
@@ -562,8 +572,11 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	// -- fleet -----------------------------------------------------------------
+	const resolveSessionDirectory = options.resolveSessionDirectory ?? resolveExistingDirectory;
+	const projectSessionInfo = (session: SessionInfoProjectionSource): Promise<SessionInfoDto> =>
+		toSessionInfoDto(session, resolveSessionDirectory);
 	const listDiskSessions = async (): Promise<SessionInfoDto[]> =>
-		Promise.all((await options.listAllSessions()).map(toSessionInfoDto));
+		Promise.all((await options.listAllSessions()).map(projectSessionInfo));
 
 	const currentCwdInventory = async (): Promise<string[]> => [
 		...pool.list().map((handle) => handle.cwd),
@@ -1045,7 +1058,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	app.get("/api/runtimes/:key/sessions", (req, res) => {
 		withRuntime(req, res, async (h) => ({
-			sessions: await Promise.all((await h.client.listSessions()).map(toSessionInfoDto)),
+			sessions: await Promise.all((await h.client.listSessions()).map(projectSessionInfo)),
 		}));
 	});
 

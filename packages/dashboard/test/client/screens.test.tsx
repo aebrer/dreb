@@ -9320,6 +9320,56 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector(".session-meta")?.textContent).toContain("tasks 1/2");
 	});
 
+	it("fleet cards keep runtime task progress after a live event creates an unhydrated session entry", () => {
+		const runtimeTasks = [
+			{ id: "1", title: "Done task", status: "completed" as const },
+			{ id: "2", title: "WIP task", status: "in_progress" as const },
+		];
+		const runtime = (key: string) => ({
+			key,
+			cwd: `/repo/${key}`,
+			state: {
+				sessionId: `${key}-session`,
+				tasks: runtimeTasks,
+				thinkingLevel: "off",
+				isStreaming: true,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 3,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date(0).toISOString(),
+			lastActivity: new Date(0).toISOString(),
+		});
+		// An SSE event for a session this browser never opened creates its reducer entry
+		// without any task knowledge.
+		const streamed = createSessionViewState("streamed");
+		applySessionEvent(streamed, { type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: {} });
+		expect(streamed.tasks).toBeUndefined();
+		// A tasks_update is authoritative for the client, including an explicit empty list.
+		const cleared = createSessionViewState("cleared");
+		applySessionEvent(cleared, { type: "tasks_update", tasks: [] });
+		expect(cleared.tasks).toEqual([]);
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { streamed, cleared },
+			fleet: () => ({ runtimes: [runtime("streamed"), runtime("cleared")], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		const meta = (key: string) =>
+			[...el.querySelectorAll(".session-card")]
+				.find((card) => card.querySelector(".session-project")?.textContent === `/repo/${key}`)
+				?.querySelector(".session-meta")?.textContent;
+		expect(meta("streamed")).toContain("tasks 1/2");
+		expect(meta("cleared")).not.toContain("tasks");
+	});
+
 	it("fleet cards use lastAssistantText as a muted activity preview", () => {
 		const store = makeStore() as any;
 		const fakeStore = {

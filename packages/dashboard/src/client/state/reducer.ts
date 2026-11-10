@@ -202,7 +202,12 @@ export interface SessionViewState {
 	workingText?: string;
 	workingSince?: number;
 	statusEntries: StatusLineEntry[];
-	tasks: SessionTaskItem[];
+	/**
+	 * Task list known to this browser, from a snapshot hydration or a `tasks_update`
+	 * event. Undefined until then: a session entry created by some other live event
+	 * knows nothing about tasks, so views fall back to the runtime's server-side list.
+	 */
+	tasks?: SessionTaskItem[];
 	suggestedCommand?: string;
 	backgroundAgents: Record<string, BackgroundAgentDto>;
 	uiRequests: ExtensionUiRequest[];
@@ -237,7 +242,6 @@ export function createSessionViewState(key: string): SessionViewState {
 		streaming: false,
 		compacting: false,
 		statusEntries: [],
-		tasks: [],
 		backgroundAgents: {},
 		uiRequests: [],
 		toasts: [],
