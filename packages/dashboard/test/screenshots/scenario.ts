@@ -23,7 +23,7 @@ import type {
 import { type FixtureModel, SessionBuilder, type SessionFixture, text, thinking, toolCall } from "./session-builder.js";
 
 /** The instant every screenshot is rendered at. */
-export const SCENARIO_NOW = "2026-03-18T15:30:00.000Z";
+const SCENARIO_NOW = "2026-03-18T15:30:00.000Z";
 export const NOW_MS = Date.parse(SCENARIO_NOW);
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -41,7 +41,7 @@ export const FIXTURE_HOME = "/home/demo";
  * Fleet's default order is project path, so these parents deliberately place the
  * showcase session first and the idle session last.
  */
-export const FIXTURE_PROJECTS = {
+const FIXTURE_PROJECTS = {
 	tidewatch: `${FIXTURE_HOME}/code/tidewatch`,
 	kiln: `${FIXTURE_HOME}/projects/kiln`,
 	pantry: `${FIXTURE_HOME}/projects/pantry-api`,

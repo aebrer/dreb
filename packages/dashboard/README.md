@@ -684,9 +684,10 @@ How it works (`test/screenshots/`):
   `DREB_CODING_AGENT_DIR` point into a throwaway sandbox; the browser may reach
   only the harness and Google Fonts (for the default typeface — capture fails if
   it cannot load).
-- Before writing each image, a leak guard scans the rendered text and every
-  attribute value for the capturing machine's home directory, user home paths,
-  hostname, and the sandbox path, and fails the run on any hit.
+- Before writing each image, a leak guard scans the rendered text, every
+  attribute value, and the values of text fields for the capturing machine's
+  home directory, user home paths, hostname, and the sandbox path, and fails the
+  run on any hit.
 - `shots.ts` lists the shots (route, viewport, color mode/theme, readiness
   selectors, framing). Add or change a shot there, then update the image
   references in both READMEs; `screenshots.test.ts` fails if the shot list,

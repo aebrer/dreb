@@ -18,18 +18,24 @@ interface PageElement {
 	getBoundingClientRect(): { top: number };
 }
 
+/** An `<input>` or `<textarea>`: its live `value` is painted but is neither text nor an attribute. */
+interface PageFormControl extends PageElement {
+	readonly value: string;
+}
+
 declare const document: {
 	readonly title: string;
 	readonly body: PageElement & { readonly innerText: string };
+	querySelectorAll(selector: "input, textarea"): Iterable<PageFormControl>;
 	querySelectorAll(selector: string): Iterable<PageElement>;
-	readonly fonts: { readonly ready: Promise<unknown>; check(font: string): boolean };
+	readonly fonts: { readonly ready: Promise<unknown>; load(font: string): Promise<unknown[]> };
 };
 declare const window: {
 	readonly scrollY: number;
 	scrollTo(options: { top: number; behavior: "instant" }): void;
 };
 declare const localStorage: { clear(): void; setItem(key: string, value: string): void };
-declare function getComputedStyle(element: PageElement): { readonly overflowY: string; readonly fontFamily: string };
+declare function getComputedStyle(element: PageElement): { readonly overflowY: string };
 declare function requestAnimationFrame(callback: () => void): number;
 
 /** Seed the browser-local appearance before any app script runs. */
@@ -39,22 +45,31 @@ export function seedAppearance(appearance: { theme: string | null; colorMode: st
 	if (appearance.theme) localStorage.setItem("dreb.dashboard.theme", appearance.theme);
 }
 
-/** Visible text plus every attribute value in the document (tooltips, hrefs, aria labels…). */
+/**
+ * Everything the page can paint as text: visible text, every attribute value (tooltips,
+ * hrefs, aria labels…), and the live values of text fields.
+ */
 export function collectRenderedSurface(): string {
 	const parts: string[] = [document.title, document.body.innerText];
 	for (const element of document.querySelectorAll("*")) {
 		for (const attribute of element.getAttributeNames()) parts.push(element.getAttribute(attribute) ?? "");
 	}
+	for (const control of document.querySelectorAll("input, textarea")) parts.push(control.value);
 	return parts.join("\n");
 }
 
-/** Whether the page body uses `family`, and whether that face finished loading. */
-export async function fontState(family: string): Promise<{ usesFamily: boolean; loaded: boolean }> {
+/**
+ * Load `family` and report how many of its faces loaded. `document.fonts.check()` cannot
+ * be used for this: it returns true when no face of the family is registered at all.
+ */
+export async function loadFontFamily(family: string): Promise<{ loadedFaces: number; error?: string }> {
 	await document.fonts.ready;
-	return {
-		usesFamily: getComputedStyle(document.body).fontFamily.includes(family),
-		loaded: document.fonts.check(`16px "${family}"`),
-	};
+	try {
+		return { loadedFaces: (await document.fonts.load(`16px "${family}"`)).length };
+	} catch (error) {
+		// A registered face whose file failed to load rejects the whole load.
+		return { loadedFaces: 0, error: String(error) };
+	}
 }
 
 /** Resolve after webfonts settle. */

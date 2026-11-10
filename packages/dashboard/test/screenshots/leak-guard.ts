@@ -1,10 +1,10 @@
 /**
  * Leak guard for README screenshots.
  *
- * Before a screenshot is written, the rendered DOM (visible text plus every
- * attribute value, which covers tooltips, hrefs, and aria labels) is scanned for
- * identifying values of the machine running the capture. Any hit fails the
- * capture: published images must only ever contain the fictional scenario.
+ * Before a screenshot is written, the rendered DOM (visible text, every attribute
+ * value, which covers tooltips, hrefs, and aria labels, and the live values of text
+ * fields) is scanned for identifying values of the machine running the capture. Any
+ * hit fails the capture: published images must only ever contain the fictional scenario.
  */
 
 import { homedir, hostname, userInfo } from "node:os";

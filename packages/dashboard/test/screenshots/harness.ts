@@ -26,7 +26,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "@dreb/coding-agent";
 import type { RpcClient } from "@dreb/coding-agent/rpc";
-import { type Browser, type BrowserContext, chromium, type Page, type Request } from "playwright";
+import { type Browser, type BrowserContext, chromium, type Page, type Request, type Route } from "playwright";
 import { build as buildVite } from "vite";
 import solid from "vite-plugin-solid";
 import { DashboardAuth } from "../../src/server/auth.js";
@@ -34,7 +34,7 @@ import { RuntimePool } from "../../src/server/runtime-pool.js";
 import { createDashboardServer, type DashboardServerApp } from "../../src/server/server.js";
 import { createFixtureRpcClient, FixtureRpcFailures, fixtureControls } from "./fixture-rpc-client.js";
 import { captureHostIdentity, findLeaks, type HostIdentity, type LeakNeedle, leakNeedles } from "./leak-guard.js";
-import { collectRenderedSurface, fontState, fontsReady, seedAppearance, twoFrames } from "./page-scripts.js";
+import { collectRenderedSurface, fontsReady, loadFontFamily, seedAppearance, twoFrames } from "./page-scripts.js";
 import { buildScenario, FIXTURE_DIRECTORIES, NOW_MS, type Scenario } from "./scenario.js";
 import { toJsonl } from "./session-builder.js";
 import { type ShotDefinition, shotViewport } from "./shots.js";
@@ -79,6 +79,11 @@ export interface HarnessOptions {
 	clientDir?: string;
 	/** Additional values the leak guard must reject (tests use this to prove the scan runs). */
 	extraLeakNeedles?: LeakNeedle[];
+	/**
+	 * Answers Google Fonts requests in `network` mode instead of the real network. Tests use
+	 * it to simulate an unreachable or filtered font host offline; capture runs leave it unset.
+	 */
+	googleFontsRoute?: (route: Route) => Promise<void>;
 	/** Progress lines; defaults to silent. */
 	log?: (line: string) => void;
 }
@@ -342,7 +347,7 @@ async function newShotContext(
 	browser: Browser,
 	shot: ShotDefinition,
 	baseUrl: string,
-	fonts: FontMode,
+	options: HarnessOptions,
 	blocked: string[],
 ): Promise<BrowserContext> {
 	const viewport = shotViewport(shot);
@@ -362,7 +367,9 @@ async function newShotContext(
 		const url = new URL(route.request().url());
 		if (url.origin === baseUrl) return route.continue();
 		if (GOOGLE_FONT_ORIGINS.has(url.origin)) {
-			if (fonts === "network") return route.continue();
+			if (options.fonts === "network") {
+				return options.googleFontsRoute ? options.googleFontsRoute(route) : route.continue();
+			}
 			return route.fulfill({
 				status: 200,
 				contentType: "text/css",
@@ -375,11 +382,15 @@ async function newShotContext(
 	return context;
 }
 
+/**
+ * Published captures must use the default typeface. Every shot is checked, even one whose
+ * body uses another theme font, because theme previews still render it.
+ */
 async function assertDefaultFontLoaded(page: Page): Promise<void> {
-	const state = await page.evaluate(fontState, DEFAULT_FONT_FAMILY);
-	if (state.usesFamily && !state.loaded) {
+	const font = await page.evaluate(loadFontFamily, DEFAULT_FONT_FAMILY);
+	if (font.loadedFaces === 0) {
 		throw new ScreenshotHarnessError(
-			`${DEFAULT_FONT_FAMILY} did not load from Google Fonts — published screenshots need network access to fonts.googleapis.com and fonts.gstatic.com`,
+			`${DEFAULT_FONT_FAMILY} did not load from Google Fonts${font.error ? ` (${font.error})` : ""} — published screenshots need network access to fonts.googleapis.com and fonts.gstatic.com`,
 		);
 	}
 }
@@ -392,7 +403,7 @@ async function captureShot(
 	needles: LeakNeedle[],
 ): Promise<CaptureResult> {
 	const blocked: string[] = [];
-	const context = await newShotContext(browser, shot, dashboard.baseUrl, options.fonts, blocked);
+	const context = await newShotContext(browser, shot, dashboard.baseUrl, options, blocked);
 	try {
 		const page = await context.newPage();
 		await page.clock.setFixedTime(NOW_MS);

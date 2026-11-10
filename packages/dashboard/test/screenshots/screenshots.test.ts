@@ -15,8 +15,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@dreb/coding-agent";
 import type { RpcEvent } from "@dreb/coding-agent/rpc";
+import type { Route } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEFAULT_OUT_DIR, parseCaptureArgs } from "./capture.js";
+import { DEFAULT_OUT_DIR, parseCaptureArgs } from "./capture-args.js";
 import { createFixtureRpcClient, FixtureRpcFailures, fixtureControls } from "./fixture-rpc-client.js";
 import { buildDashboardClient, runScreenshotHarness, ScreenshotHarnessError } from "./harness.js";
 import { findLeaks, leakNeedles } from "./leak-guard.js";
@@ -331,6 +332,84 @@ describe("screenshot harness (offline smoke)", () => {
 		).rejects.toThrow(/would publish host data:\n- test needle/);
 		expect(await readdir(outDir)).toEqual([]);
 	}, 120_000);
+
+	it("refuses to write a screenshot whose form-control value matches a leak needle", async () => {
+		const outDir = await tempDir("dreb-screenshot-leak-value-");
+		const needle = "/home/alice/private-project";
+		const [fleet] = selectShots(["fleet-desktop-dark"]);
+		await expect(
+			runScreenshotHarness({
+				outDir,
+				shots: [
+					{
+						...fleet,
+						// Only the live `value` property changes: it is painted, but it is neither
+						// text content nor an attribute, and no input event lets the app echo it.
+						prepare: async (page) => {
+							await page
+								.locator("input")
+								.first()
+								.evaluate((input, value) => {
+									(input as unknown as { value: string }).value = value;
+								}, needle);
+						},
+					},
+				],
+				fonts: "stub",
+				clientDir,
+				extraLeakNeedles: [{ label: "test needle", value: needle }],
+			}),
+		).rejects.toThrow(/would publish host data:\n- test needle/);
+		expect(await readdir(outDir)).toEqual([]);
+	}, 120_000);
+
+	describe("network font check", () => {
+		const FONT_FACE_CSS = `@font-face { font-family: "IBM Plex Mono"; src: url(https://fonts.gstatic.com/fixture/plex-mono.woff2) format("woff2"); }`;
+		const stylesheet = (body: string) => (route: Route) =>
+			route.fulfill({ status: 200, contentType: "text/css", body });
+		const runNetworkShot = (outDir: string, googleFontsRoute: (route: Route) => Promise<void>) =>
+			runScreenshotHarness({
+				outDir,
+				shots: selectShots(["fleet-desktop-dark"]),
+				fonts: "network",
+				clientDir,
+				googleFontsRoute,
+			});
+
+		it.each<[string, (route: Route) => Promise<void>]>([
+			["is unreachable", (route) => route.abort("internetdisconnected")],
+			["serves a stylesheet without the face", stylesheet("/* filtered */")],
+			[
+				"serves the stylesheet but not the font file",
+				(route) =>
+					new URL(route.request().url()).origin === "https://fonts.googleapis.com"
+						? stylesheet(FONT_FACE_CSS)(route)
+						: route.fulfill({ status: 404, body: "" }),
+			],
+		])(
+			"fails with a clear message when Google Fonts %s",
+			async (_case, googleFontsRoute) => {
+				const outDir = await tempDir("dreb-screenshot-font-");
+				await expect(runNetworkShot(outDir, googleFontsRoute)).rejects.toThrow(
+					/IBM Plex Mono did not load from Google Fonts/,
+				);
+				expect(await readdir(outDir)).toEqual([]);
+			},
+			120_000,
+		);
+
+		it("captures once the face actually loads", async () => {
+			const fontBytes = await readFile(join(DASHBOARD_ROOT, "src/client/assets/fonts/jetbrains-mono.woff2"));
+			const outDir = await tempDir("dreb-screenshot-font-");
+			const [result] = await runNetworkShot(outDir, (route) =>
+				new URL(route.request().url()).origin === "https://fonts.googleapis.com"
+					? stylesheet(FONT_FACE_CSS)(route)
+					: route.fulfill({ status: 200, contentType: "font/woff2", body: fontBytes }),
+			);
+			expect(result.path).toBe(join(outDir, "fleet-desktop-dark.png"));
+			expect(await pngSize(result.path)).toEqual(expectedPixels("fleet-desktop-dark"));
+		}, 120_000);
+	});
 
 	it("rejects an empty shot list", async () => {
 		await expect(runScreenshotHarness({ outDir: firstRun, shots: [], fonts: "stub" })).rejects.toBeInstanceOf(
