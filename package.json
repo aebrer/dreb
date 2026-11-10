@@ -50,7 +50,7 @@
 			"onFail": "error"
 		}
 	},
-	"version": "2.81.0",
+	"version": "2.82.0",
 	"dependencies": {
 		"@dreb/coding-agent": "*",
 		"@mariozechner/jiti": "^2.6.5",
