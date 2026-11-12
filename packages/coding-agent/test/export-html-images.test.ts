@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { getExportTemplateDir } from "../src/config.js";
 import { exportFromFile } from "../src/core/export-html/index.js";
+import { loadTemplateInternals } from "./export-html-template-harness.js";
 
 /**
  * Regression + security tests for HTML-export image rendering.
@@ -18,10 +18,9 @@ import { exportFromFile } from "../src/core/export-html/index.js";
  *      tags via the real `renderToolCall()` / `renderEntry()` dispatch, and
  *      rejects crafted MIME/base64 that could inject attributes or markup.
  *
- * To test (2) faithfully, `loadTemplateInternals()` below evaluates the real
- * shipped template.js: it decodes a session payload exactly like the browser
- * does, then returns the internal render functions. A `return` statement is
- * injected right before the DOM-heavy "HEADER / STATS" section so none of the
+ * To test (2) faithfully, `loadTemplateInternals()` (export-html-template-harness.ts)
+ * evaluates the real shipped template.js: it decodes a session payload exactly
+ * like the browser does, then returns the internal render functions before the
  * browser-only initialization (event listeners, marked.use, navigateTo) runs —
  * only lightweight `document`/`window`/`hljs` stubs are needed.
  */
@@ -47,87 +46,10 @@ function extractSessionData(html: string): {
 	return JSON.parse(json);
 }
 
-// ---------------------------------------------------------------------------
-// Template harness: run the REAL template.js and expose its render functions.
-// ---------------------------------------------------------------------------
-
 interface ImageBlock {
 	type: "image";
 	mimeType: string;
 	data: string;
-}
-
-interface TemplateInternals {
-	renderToolCall(call: { id: string; name: string; arguments: Record<string, unknown> }): string;
-	renderEntry(entry: unknown): string;
-	sanitizeImageDataUri(mimeType: unknown, data: unknown): string | null;
-	renderImageTag(img: unknown, className: string): string;
-}
-
-/** Minimal DOM stub sufficient for the template's data-loading + escapeHtml(). */
-function makeStubs(sessionBase64: string) {
-	const documentStub = {
-		getElementById(id: string) {
-			if (id === "session-data") return { textContent: sessionBase64 };
-			return null;
-		},
-		querySelector() {
-			return null;
-		},
-		// escapeHtml() creates a <div>, sets textContent, reads innerHTML.
-		createElement() {
-			let value = "";
-			return {
-				set textContent(v: unknown) {
-					value = String(v);
-				},
-				get textContent() {
-					return value;
-				},
-				get innerHTML() {
-					return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-				},
-				set innerHTML(v: string) {
-					value = v;
-				},
-			};
-		},
-	};
-	const windowStub = { location: { search: "" } };
-	const hljsStub = {
-		highlight: (code: string) => ({ value: code }),
-		highlightAuto: (code: string) => ({ value: code }),
-		getLanguage: () => null,
-	};
-	return { documentStub, windowStub, hljsStub };
-}
-
-function loadTemplateInternals(entries: unknown[]): TemplateInternals {
-	const templateJs = readFileSync(join(getExportTemplateDir(), "template.js"), "utf-8").trim();
-
-	// Inject a `return` just before the browser-only init section so we get the
-	// render functions without running any DOM/marked/navigate side effects.
-	const marker = "      // ============================================================\n      // HEADER / STATS";
-	if (!templateJs.includes(marker)) {
-		throw new Error("HEADER / STATS marker not found in template.js — harness needs updating");
-	}
-	const instrumented = templateJs.replace(
-		marker,
-		`      return { renderToolCall, renderEntry, sanitizeImageDataUri, renderImageTag };\n\n${marker}`,
-	);
-
-	const sessionData = { header: { id: "t" }, entries, leafId: null, systemPrompt: "", tools: [], renderedTools: {} };
-	const sessionBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
-	const { documentStub, windowStub, hljsStub } = makeStubs(sessionBase64);
-
-	// The template is an IIFE expression: `return` its value to obtain internals.
-	const factory = new Function("document", "window", "hljs", `return ${instrumented}`) as (
-		documentArg: unknown,
-		windowArg: unknown,
-		hljsArg: unknown,
-	) => TemplateInternals;
-
-	return factory(documentStub, windowStub, hljsStub);
 }
 
 /** Build a toolResult session entry that carries a single image block. */

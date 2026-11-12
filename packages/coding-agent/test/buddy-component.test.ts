@@ -130,6 +130,19 @@ describe("BuddyComponent", () => {
 			expect(joined).toContain("_maybe_");
 		});
 
+		it("keeps approximate-value tildes literal and code spans intact (GFM strikethrough rules)", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("about ~7 percent vs ~12 percent (see `~`)");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			// The bubble has no strikethrough styling, so a false `del` match used to
+			// silently drop the opening `~` and break the `~` code span.
+			const joined = lines.join("\n");
+			expect(joined).toContain("about ~7 percent vs ~12 percent (see `~`)");
+		});
+
 		it("word-wraps long speech text", () => {
 			const state = createTestState();
 			const comp = new BuddyComponent(mockUI, state);

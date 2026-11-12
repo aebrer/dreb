@@ -1140,4 +1140,99 @@ bar`,
 			);
 		});
 	});
+
+	describe("Spacing after HTML blocks", () => {
+		it("should have one blank line between an HTML block and the following paragraph", () => {
+			const markdown = new Markdown("<div>hi</div>\n\ntext", 0, 0, defaultMarkdownTheme);
+			const plainLines = markdown.render(80).map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+
+			assert.deepStrictEqual(plainLines, ["<div>hi</div>", "", "text"]);
+		});
+	});
+
+	describe("Strikethrough (GitHub GFM parity)", () => {
+		// The reported bug: `~` used as "approximately" turned unrelated text into
+		// strikethrough, and could even close on a `~` inside an inline code span.
+		const REPORTED =
+			'Starting from the first ~ in "~7 percent vs ~12 percent", the 7 passes the lookahead, but the next `~` sits after a space, so nothing ends a valid match there.';
+
+		// Bracket markers make strikethrough and code-span boundaries exact in assertions.
+		const markerTheme = {
+			...defaultMarkdownTheme,
+			strikethrough: (text: string) => `[del]${text}[/del]`,
+			code: (text: string) => `[code]${text}[/code]`,
+		};
+
+		function renderInline(text: string): string {
+			const markdown = new Markdown(text, 0, 0, markerTheme);
+			return markdown
+				.render(400)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd())
+				.join("\n");
+		}
+
+		// Expected output for each input matches GitHub's GFM renderer.
+		const cases: Array<{ name: string; input: string; expected: string }> = [
+			{
+				name: "reported example: no strikethrough, code span intact",
+				input: REPORTED,
+				expected:
+					'Starting from the first ~ in "~7 percent vs ~12 percent", the 7 passes the lookahead, but the next [code]~[/code] sits after a space, so nothing ends a valid match there.',
+			},
+			{
+				name: "approximate values with a code-span tilde",
+				input: "about ~7 percent vs ~12 percent (see `~`)",
+				expected: "about ~7 percent vs ~12 percent (see [code]~[/code])",
+			},
+			{
+				name: "tilde after punctuation and before a word cannot close",
+				input: "(~7 percent) vs (~12 percent)",
+				expected: "(~7 percent) vs (~12 percent)",
+			},
+			{
+				name: "intra-word tildes still strike",
+				input: "range 5~7 and 10~12",
+				expected: "range 5[del]7 and 10[/del]12",
+			},
+			{
+				name: "double and single tilde strikethrough still work",
+				input: "~~real strike~~ and ~single strike~",
+				expected: "[del]real strike[/del] and [del]single strike[/del]",
+			},
+			{
+				name: "double tilde opening after a space still strikes",
+				input: "word ~~real strike~~ here",
+				expected: "word [del]real strike[/del] here",
+			},
+			{
+				name: "single tilde opening after a space still strikes",
+				input: "a ~single~ b",
+				expected: "a [del]single[/del] b",
+			},
+		];
+
+		for (const { name, input, expected } of cases) {
+			it(name, () => {
+				assert.strictEqual(renderInline(input), expected);
+			});
+		}
+
+		it("does not emit the strikethrough SGR for the reported example with the real theme", () => {
+			const markdown = new Markdown(REPORTED, 0, 0, defaultMarkdownTheme);
+			const rendered = markdown.render(400).join("\n");
+
+			assert.ok(!rendered.includes("\x1b[9m"), `Unexpected strikethrough in ${JSON.stringify(rendered)}`);
+			assert.ok(rendered.includes(chalk.yellow("~")), "Expected the `~` code span to be styled as inline code");
+		});
+
+		it("emits the strikethrough SGR for intentional strikethrough with the real theme", () => {
+			const markdown = new Markdown("~~done~~", 0, 0, defaultMarkdownTheme);
+			const rendered = markdown.render(80).join("\n");
+
+			assert.ok(
+				rendered.includes(chalk.strikethrough("done")),
+				`Expected strikethrough in ${JSON.stringify(rendered)}`,
+			);
+		});
+	});
 });
