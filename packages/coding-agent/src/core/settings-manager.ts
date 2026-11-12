@@ -175,13 +175,13 @@ export interface Settings {
 
 export interface TabTitleSettings {
 	enabled?: boolean; // default: true — auto-generate terminal tab title from session task
-	/** Exact canonical provider/model used for title generation; absent preserves Explore-agent routing. */
+	/** Exact canonical provider/model used for title generation; absent uses the parent in single-model mode, otherwise Explore-agent routing. */
 	model?: string;
 	triggerAfter?: number; // default: 9 — number of tool calls before generating title
 	maxTitleLength?: number; // default: 60 — soft target length hint for generated titles (hard-capped at 300)
 }
 
-/** Partial tab-title update; `model: null` removes the pinned model, restoring Explore-agent routing. */
+/** Partial tab-title update; `model: null` removes the pinned model, restoring the default route (parent in single-model mode, otherwise Explore-agent routing). */
 export type TabTitleSettingsUpdate = Omit<TabTitleSettings, "model"> & { model?: string | null };
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */

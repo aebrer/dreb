@@ -744,7 +744,7 @@ export interface RpcSettingsUpdate {
 	enabledModels?: string[] | null;
 	/** Replaces the complete global-only arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings | null;
-	/** Partial global automatic tab-title configuration update. `model: null` removes the pinned model, restoring Explore-agent routing. */
+	/** Partial global automatic tab-title configuration update. `model: null` removes the pinned model, restoring the default route (parent in single-model mode, otherwise Explore-agent routing). */
 	tabTitle?: TabTitleSettingsUpdate;
 }
 

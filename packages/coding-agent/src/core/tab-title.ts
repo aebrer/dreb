@@ -74,7 +74,7 @@ export interface TabTitleDeps {
 	getModelRegistry: () => ModelRegistry;
 	/** Get the parent provider name. */
 	getProvider: () => string | undefined;
-	/** Read current single-model mode for the unpinned Explore route. */
+	/** Read current single-model mode; when enabled, an unpinned title uses the parent model instead of Explore routing. */
 	getSingleModelMode?: () => boolean;
 	/** Get the parent session's stable conversation UUID, forwarded to LLM requests (issue 500). */
 	getSessionId?: () => string | undefined;
