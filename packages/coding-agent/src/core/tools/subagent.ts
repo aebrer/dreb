@@ -900,7 +900,7 @@ export function resolveModelWithFallbacks(
 	}
 	// After all configured fallbacks are exhausted, try the parent model as a last resort
 	if (parentModel) {
-		const result = resolveModelStringSingle(parentModel, parentProvider, registry);
+		const result = resolveParentModel(parentModel, parentProvider, registry);
 		if (result.ok) {
 			return {
 				...result,
@@ -965,6 +965,36 @@ export function resolveModelStringSingle(
 	}
 
 	return { ok: true, modelId: resolved.model.id, provider: resolved.model.provider };
+}
+
+/** Inherited parent IDs are already resolved identities, not user-entered model patterns. */
+function resolveParentModel(
+	parentModel: string,
+	parentProvider: string | undefined,
+	registry: ModelRegistry | undefined,
+	signal?: AbortSignal,
+): ReturnType<typeof resolveModelStringSingle> {
+	if (signal?.aborted) return { ok: false, error: "Aborted before spawn" };
+	if (!registry) return { ok: true, modelId: parentModel, provider: parentProvider };
+	// Legacy callers may supply only a provider-qualified reference.
+	if (!parentProvider) return resolveModelStringSingle(parentModel, undefined, registry);
+
+	// Do not infer a different provider from a slash in the parent's raw model ID,
+	// or fuzzy-match an unavailable parent to another model.
+	const model = registry.getAll().find((m) => m.provider === parentProvider && m.id === parentModel);
+	if (!model) {
+		return {
+			ok: false,
+			error: `Parent model "${parentProvider}/${parentModel}" not found. Use --list-models to see available models.`,
+		};
+	}
+	if (!registry.authStorage.hasAuth(model.provider)) {
+		return {
+			ok: false,
+			error: `No authentication configured for provider "${model.provider}". Model "${parentModel}" cannot be used.`,
+		};
+	}
+	return { ok: true, modelId: model.id, provider: model.provider };
 }
 
 export interface ProbeModelAvailabilityOptions {
@@ -1153,7 +1183,7 @@ export async function resolveModelForSubagentSpawn(
 	if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels };
 
 	if (parentModel) {
-		const parentResolved = resolveModelStringSingle(parentModel, parentProvider, registry);
+		const parentResolved = resolveParentModel(parentModel, parentProvider, registry, signal);
 		if (parentResolved.ok) {
 			const warning = `Agent preferred models were unavailable. Falling back to parent model "${parentResolved.modelId}".`;
 			log.warn(`${logPrefix} ${warning}`);
@@ -1367,7 +1397,7 @@ export async function executeSingle(
 					`"${name}" cannot be spawned. Disable singleModelMode or run the parent session with a model.`,
 			};
 		}
-		const parentResolution = resolveModelStringSingle(parentModel, parentProvider, registry);
+		const parentResolution = resolveParentModel(parentModel, parentProvider, registry, signal);
 		if (!parentResolution.ok) {
 			return {
 				agent: name,
@@ -1388,15 +1418,18 @@ export async function executeSingle(
 		}
 	} else if (modelSpec) {
 		const parentFallback = configuredModelSpec ? parentModel : undefined;
-		const resolved = await resolveModelForSubagentSpawn(
-			modelSpec,
-			parentProvider,
-			registry,
-			parentFallback,
-			signal,
-			"[subagent]",
-			parentSessionId,
-		);
+		const resolved: SubagentModelResolution =
+			!configuredModelSpec && parentModel
+				? { ...resolveParentModel(parentModel, parentProvider, registry, signal), skippedModels: [] }
+				: await resolveModelForSubagentSpawn(
+						modelSpec,
+						parentProvider,
+						registry,
+						parentFallback,
+						signal,
+						"[subagent]",
+						parentSessionId,
+					);
 		skippedModels = resolved.skippedModels;
 		if (!resolved.ok) {
 			const skippedDetails = formatSkippedModelFailureDetails(skippedModels);
@@ -2682,10 +2715,10 @@ export function createSubagentToolDefinition(
 			"All subagents run in background — the tool returns immediately and you are notified when each agent completes.",
 			"Subagents have their own context window — provide enough context in the task prompt",
 			"Each agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, end your current turn with no tool calls (as if you were asking the user a question and waiting for their reply). This emits `agent_end` and lets the framework deliver the completion as a new message that resumes your turn automatically. Do not call `sleep` or any other waiting action, and do not launch filler work.",
-			"Agent definitions specify a `model` field with a provider fallback list (comma-separated or YAML list). The spawner tries each in order and uses the first one that resolves for the current provider. This makes agents portable across providers.",
+			"Built-in agents inherit the parent session's model by default. Agent definitions may specify an optional `model` field (a single model or a comma-separated/YAML fallback list); per-agent settings can also configure a fallback list. Explicit lists are tried in order before falling back to the parent model.",
 			"Per-invocation `model` overrides take precedence but **discard the entire fallback list** — if the single override model isn't available on the current provider, the agent fails. Only override when you have a specific reason (e.g. escalating to a stronger tier for a complex task).",
 			"Optional `thinking` overrides accept off/minimal/low/medium/high/xhigh/max. Per-task values override a top-level value; unsupported levels fail before spawn. Omit thinking to preserve the child's configured default.",
-			"**Model routing** — choose an agent by role fit first. Agent definitions already specify the normal model tier for that role; override the model only when the assigned task genuinely requires a different capability tier.",
+			"**Model routing** — choose an agent by role fit first; the role does not automatically select a model tier. Without explicit model configuration, the child uses the parent model. Override only when the task genuinely needs a different model, and respect single-model mode.",
 			"**Model identity** — Your current model is stated in the system prompt as `You are running on: provider/id`. Use this for explicit routing decisions — e.g. delegate vision tasks if you're on a text-only model, or use a differently-architected model as a critic for tasks where diverse model perspectives improve reliability.",
 		],
 		parameters: subagentSchema,

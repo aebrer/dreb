@@ -4,7 +4,7 @@ Configure per-agent model overrides for subagents via settings, without editing 
 
 ## What it does
 
-The `agentModels.models` setting lets you override the default model used by each subagent type (e.g., Explore, Sandbox) without modifying the agent definition `.md` files. You can specify an ordered fallback list — the first available model is used.
+Built-in subagents (e.g., Explore, Sandbox) inherit the current parent session's provider/model by default; bundled definitions contain no provider-specific model choices. The `agentModels.models` setting lets you choose models for each agent type without modifying its `.md` file. You can specify an ordered fallback list — the first available model is used.
 
 This applies to all subagents, including those launched by the mach6 skill workflow.
 
@@ -32,9 +32,9 @@ When a subagent is launched, its model is resolved in this priority:
 1. **Per-invocation `model` override** — highest priority, set explicitly in the subagent tool call
 2. **`agentModels.models` setting** — from your settings.json, per agent type
 3. **Agent definition `model` field** — from the `.md` agent file's frontmatter
-4. **Parent session model** — used when none of the above resolve to an available model
+4. **Parent session model** — the default when no model is configured, and a last resort when configured models are unavailable
 
-If the `agentModels.models` list is empty or undefined for a given agent, resolution falls through to the agent definition's model, then to the parent session model.
+The agent definition's `model` field is optional. If the `agentModels.models` list is empty or undefined for a given agent, resolution falls through to that optional field, then to the parent's exact provider/model. Bundled definitions omit the field, so an unconfigured subagent inherits the parent even when single-model mode is off. This includes the default Explore agent when a tool call omits `agent`.
 
 ## Single Model Mode
 
@@ -49,6 +49,8 @@ Any requested model selection — including one identical to the parent's model 
 If nothing requested a model (no override, no `agentModels` entry, no agent-definition model), the child simply runs on the parent model without a warning. If the parent session has no model to inherit, or the parent's model cannot be resolved, the spawn fails loudly instead of silently falling back.
 
 Configure it in `settings.json` (global file, with the standard project-level override in `.dreb/settings.json`), in the TUI via `/settings` → **Single model mode**, in the dashboard Settings page (behavior section), or through the [RPC settings API](rpc.md#set_settings). Per-task `thinking` values still apply and are validated against the parent model.
+
+The default Explore-based tab/session-title route also honors single-model mode: when `tabTitle.model` is unset, it uses the current parent model directly without consulting Explore overrides/frontmatter or probing those models. An explicit `tabTitle.model` pin retains its existing behavior. For saved-session title suggestions, the parent is the utility runtime's current model.
 
 ## Per-request Thinking Overrides
 
@@ -117,4 +119,4 @@ Changes are saved to your global settings immediately.
 }
 ```
 
-This configures the Explore agent to prefer `gpt-4o-mini`, falling back to `claude-haiku` if the first isn't available. All other agents use their default models.
+This configures the Explore agent to prefer `gpt-4o-mini`, falling back to `claude-haiku` if the first isn't available. Other unconfigured agents inherit the parent session's model. Different agent roles do not automatically use different model tiers or families.

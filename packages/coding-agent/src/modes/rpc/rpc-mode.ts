@@ -408,6 +408,7 @@ export async function generateSessionTitleForRpc(
 			getModel: () => session.model,
 			getModelRegistry: () => session.modelRegistry,
 			getProvider: () => session.model?.provider,
+			getSingleModelMode: () => session.settingsManager.getSingleModelMode(),
 			getSessionId: () => header.id,
 			getAgentModelsOverride: (name) => session.settingsManager.getAgentModelsForAgent(name),
 			getRepo: () => (sessionCwd ? basename(sessionCwd) : undefined),
@@ -1187,7 +1188,7 @@ export async function setSettingsForRpc(
 			}
 		}
 		// `model: null` skips validation above: it removes the pinned model so title
-		// generation restores Explore-agent routing.
+		// generation restores the default route (subject to single-model mode).
 		tabTitle = { ...tabTitle };
 	}
 
@@ -1998,6 +1999,7 @@ export async function runRpcMode(
 					getModel: () => session.model,
 					getModelRegistry: () => session.modelRegistry,
 					getProvider: () => session.model?.provider,
+					getSingleModelMode: () => session.settingsManager.getSingleModelMode(),
 					getSessionId: () => session.sessionId,
 					getAgentModelsOverride: (name) => session.settingsManager.getAgentModelsForAgent(name),
 					getBranch: () => getGitBranch(cwd),

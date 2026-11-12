@@ -570,6 +570,24 @@ describe("runRpcMode dashboard dispatcher", () => {
 		}
 	});
 
+	it.each([false, true])("passes live single-model mode to automatic titles (initially %s)", async (initialMode) => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		const getMode = vi.spyOn(session.settingsManager, "getSingleModelMode").mockReturnValue(initialMode);
+		capturedTabTitleDeps.length = 0;
+
+		try {
+			await dispatchRpcCommand(session, { id: "title-single-model-mode", type: "get_state" });
+			const deps = capturedTabTitleDeps.at(-1);
+			expect(deps).toBeDefined();
+			expect(deps?.getSingleModelMode?.()).toBe(initialMode);
+			expect(deps?.getModel()).toBe(session.model);
+			getMode.mockReturnValue(!initialMode);
+			expect(deps?.getSingleModelMode?.()).toBe(!initialMode);
+		} finally {
+			cleanup();
+		}
+	});
+
 	it("builds tab-title metadata from the effective runtime cwd", async () => {
 		const { session, sessionManager, tempDir, cleanup } = createTestSession({ inMemory: true });
 		mkdirSync(join(tempDir, ".git"));

@@ -74,6 +74,8 @@ export interface TabTitleDeps {
 	getModelRegistry: () => ModelRegistry;
 	/** Get the parent provider name. */
 	getProvider: () => string | undefined;
+	/** Read current single-model mode for the unpinned Explore route. */
+	getSingleModelMode?: () => boolean;
 	/** Get the parent session's stable conversation UUID, forwarded to LLM requests (issue 500). */
 	getSessionId?: () => string | undefined;
 	/**
@@ -318,6 +320,10 @@ export class TabTitleGenerator {
 			}
 			return parentModel;
 		}
+
+		// Single-model mode bypasses Explore selection and probes, but does not override
+		// an explicit tabTitle.model pin above. Read at generation time, not construction.
+		if (this.deps.getSingleModelMode?.()) return parentModel;
 
 		// Without a dedicated model, preserve the Explore agent fallback route.
 		const exploreModels = this.getExploreAgentModels();

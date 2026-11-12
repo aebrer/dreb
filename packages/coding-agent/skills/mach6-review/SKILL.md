@@ -110,7 +110,7 @@ Apply three gates:
 
 Rounds 1–2: launch `independent-assessor` alone.
 
-Round 3+: launch `independent-assessor`, `developers-advocate`, and `devils-advocate` together in one parallel `subagent` `tasks` call. This preserves model-family diversity where available. The devil's advocate supplements, never replaces, `test-reviewer` and attacks acceptance evidence. The developer's advocate attacks the practical value of proposed work and cannot generate findings.
+Round 3+: launch `independent-assessor`, `developers-advocate`, and `devils-advocate` together in one parallel `subagent` `tasks` call. Model-family diversity depends on explicitly configured routing; bundled agents inherit the parent model by default, so different roles alone do not provide different model families. The devil's advocate supplements, never replaces, `test-reviewer` and attacks acceptance evidence. The developer's advocate attacks the practical value of proposed work and cannot generate findings.
 
 In round 3+, a candidate is a merge blocker only when both the independent assessor and developer's advocate find material practical impact. Do not vote or average confidence. When they disagree, the parent adjudicates by writing a concrete actor, exact reachable trigger sequence, resulting user harm or attacker capability, existing safeguards, and material outcome of fixing it. Without that concrete trigger-and-outcome sequence, it is not a merge blocker. Use devil's-advocate output to determine the minimal missing acceptance evidence, not to manufacture unrelated findings.
 

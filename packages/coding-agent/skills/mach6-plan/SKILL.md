@@ -53,7 +53,7 @@ Extract planning-relevant guidance: project layers, testing expectations, coding
 
 ## Step 4: Explore the codebase
 
-Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a particularly large codebase requires inspecting many files).
+Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Built-in agents inherit the parent session's model by default; agent definitions and per-agent settings may explicitly configure models or fallback lists. Override only with good reason (e.g. a particularly large codebase requires inspecting many files).
 - **Existing feature evidence**: Locate named related features and quote the exact implementation and test snippets that establish their patterns
 - **Layer inventory**: Enumerate the files, symbols, imports, and calls in an explicitly named existing data flow without deciding the architecture
 - **Integration evidence**: Enumerate concrete call sites, registrations, configuration, and documentation for the relevant symbols

@@ -622,7 +622,7 @@ function probeRegistry() {
 	} as unknown as Parameters<typeof resolveModelForSubagentSpawn>[2];
 }
 
-function makeAgents(model: string | string[]): Map<string, AgentTypeConfig> {
+function makeAgents(model?: string | string[]): Map<string, AgentTypeConfig> {
 	return new Map([
 		[
 			"test-agent",
@@ -1823,6 +1823,164 @@ describe("executeSingle agentModels precedence (issue 219)", () => {
 	});
 });
 
+describe("exact parent model inheritance", () => {
+	const parent = { ...probeModels[0], provider: "openrouter", id: "anthropic/primary-model" };
+	const models = [probeModels[0], parent];
+	const registry = {
+		getAll: () => models,
+		find: (provider: string, id: string) => models.find((m) => m.provider === provider && m.id === id),
+		authStorage: { hasAuth: () => true },
+	} as unknown as NonNullable<Parameters<typeof executeSingle>[8]>;
+
+	test.each([false, true])("keeps slash-containing parent IDs with single-model mode %s", async (singleModelMode) => {
+		mockSpawnSubagentResult({ model: parent.id });
+		const result = await executeSingle(
+			makeAgents(),
+			"test-agent",
+			"inherit",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			parent.provider,
+			registry,
+			undefined,
+			parent.id,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			singleModelMode,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+		expect(args[args.indexOf("--provider") + 1]).toBe(parent.provider);
+		expect(args[args.indexOf("--model") + 1]).toBe(parent.id);
+		expect(result.notes).toBeUndefined();
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+
+	test.each([false, true])(
+		"keeps exact parent identity after explicit fallbacks fail (probe path %s)",
+		async (probe) => {
+			const result = probe
+				? await resolveModelForSubagentSpawn(["missing-model"], parent.provider, registry, parent.id)
+				: resolveModelWithFallbacks(["missing-model"], parent.provider, registry, parent.id);
+			expect(result).toMatchObject({ ok: true, provider: parent.provider, modelId: parent.id });
+			if (result.ok) expect(result.warning).toContain("Falling back to parent model");
+		},
+	);
+
+	test.each(["unavailable", "unauthenticated"])(
+		"rejects an %s parent instead of choosing another model",
+		async (reason) => {
+			const unavailableRegistry = {
+				...registry,
+				getAll: () => (reason === "unavailable" ? [probeModels[0]] : models),
+				authStorage: { hasAuth: () => reason !== "unauthenticated" },
+			} as unknown as typeof registry;
+			const result = await executeSingle(
+				makeAgents(),
+				"test-agent",
+				"inherit",
+				process.cwd(),
+				undefined,
+				undefined,
+				undefined,
+				parent.provider,
+				unavailableRegistry,
+				undefined,
+				parent.id,
+			);
+			expect(result.exitCode).toBe(1);
+			expect(result.errorMessage).toContain(reason === "unavailable" ? "not found" : "No authentication configured");
+			expect(spawn).not.toHaveBeenCalled();
+			expect(completeSimple).not.toHaveBeenCalled();
+		},
+	);
+
+	describe("unconfigured bundled agents through the real tool", () => {
+		let cwd: string;
+		beforeEach(() => {
+			cwd = mkdtempSync(join(tmpdir(), "subagent-inherit-"));
+			const dir = join(cwd, ".dreb", "agents");
+			mkdirSync(dir, { recursive: true });
+			// Project copies of the actual bundled definitions isolate user-level model overrides.
+			for (const file of ["explore.md", "feature-dev.md"]) {
+				writeFileSync(
+					join(dir, file),
+					readFileSync(fileURLToPath(new URL(`../agents/${file}`, import.meta.url)), "utf8"),
+				);
+			}
+		});
+		afterEach(() => rmSync(cwd, { recursive: true, force: true }));
+
+		test.each([
+			["default", undefined],
+			["default", []],
+			["named", undefined],
+			["named", []],
+			["parallel", undefined],
+			["chain", []],
+		] as const)("%s agents inherit with settings %j", async (mode, agentModels) => {
+			const completed: SubagentResult[] = [];
+			const tool = createSubagentToolDefinition(cwd, {
+				parentModel: () => parent.id,
+				parentProvider: () => parent.provider,
+				modelRegistry: registry,
+				singleModelMode: () => false,
+				getAgentModelsForAgent: () => (agentModels ? [...agentModels] : undefined),
+				subagentSessionsDir: join(cwd, "sessions"),
+				onBackgroundComplete: (_id, result) => completed.push(result),
+			});
+			const tasks = [{ task: "first" }, { agent: "feature-dev", task: "second" }];
+			const params =
+				mode === "parallel"
+					? { tasks }
+					: mode === "chain"
+						? { chain: tasks }
+						: { task: "inherit", ...(mode === "named" ? { agent: "feature-dev" } : {}) };
+			const childCount = mode === "parallel" || mode === "chain" ? 2 : 1;
+			for (let i = 0; i < childCount; i++) mockSpawnSubagentResult({ model: parent.id });
+
+			await tool.execute("inherit", params, undefined, undefined, {} as ExtensionContext);
+			await vi.waitFor(() => expect(completed).toHaveLength(mode === "parallel" ? 2 : 1));
+			expect(completed.every((result) => result.exitCode === 0)).toBe(true);
+			expect(spawn).toHaveBeenCalledTimes(childCount);
+			for (const [, args] of vi.mocked(spawn).mock.calls) {
+				expect(args[args.indexOf("--provider") + 1]).toBe(parent.provider);
+				expect(args[args.indexOf("--model") + 1]).toBe(parent.id);
+			}
+			expect(completeSimple).not.toHaveBeenCalled();
+		});
+
+		test("reads the current parent after a model switch", async () => {
+			let currentParent = probeModels[0];
+			const completed: SubagentResult[] = [];
+			const tool = createSubagentToolDefinition(cwd, {
+				parentModel: () => currentParent.id,
+				parentProvider: () => currentParent.provider,
+				modelRegistry: registry,
+				subagentSessionsDir: join(cwd, "sessions"),
+				onBackgroundComplete: (_id, result) => completed.push(result),
+			});
+			for (const [index, nextParent] of [probeModels[0], parent].entries()) {
+				currentParent = nextParent;
+				mockSpawnSubagentResult({ model: nextParent.id });
+				await tool.execute("switch", { task: "inherit" }, undefined, undefined, {} as ExtensionContext);
+				await vi.waitFor(() => expect(completed).toHaveLength(index + 1));
+				const args = vi.mocked(spawn).mock.calls.at(-1)![1];
+				expect(args[args.indexOf("--provider") + 1]).toBe(nextParent.provider);
+				expect(args[args.indexOf("--model") + 1]).toBe(nextParent.id);
+			}
+		});
+	});
+});
+
 describe("executeSingle single-model mode (issue 517)", () => {
 	const noModelAgents = new Map<string, AgentTypeConfig>([
 		["test-agent", { name: "test-agent", description: "Test agent", systemPrompt: "Test system prompt" }],
@@ -2446,6 +2604,14 @@ describe("subagent promptGuidelines", () => {
 		expect(result.config.systemPrompt).toContain("primary agent owns synthesis and final conclusions");
 		expect(result.config.systemPrompt).toContain("Do not diagnose root causes");
 		expect(result.config.systemPrompt).toContain("tell the parent to use `feature-dev`");
+	});
+
+	test("model guidance describes parent inheritance and optional model configuration", () => {
+		const text = (subagentToolDefinition.promptGuidelines ?? []).join("\n");
+		expect(text).toContain("Built-in agents inherit the parent session's model by default");
+		expect(text).toContain("optional `model` field");
+		expect(text).toContain("role does not automatically select a model tier");
+		expect(text).not.toContain("Agent definitions already specify the normal model tier");
 	});
 
 	test("parallel guideline requires one tasks-array call", () => {
