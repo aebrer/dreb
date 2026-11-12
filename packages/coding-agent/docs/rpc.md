@@ -934,7 +934,7 @@ The path uses the same unrestricted, cross-project addressing as [`switch_sessio
 
 #### generate_session_title
 
-Generate a title for a saved session file on request, using the same tab-title generator that names live sessions (see [Tab Title settings](settings.md#tab-title)). The session is not loaded or switched to, and the file is never modified: it is read once (old formats are migrated in memory only) and its current branch is used as the context. The command uses this process's `tabTitle.model` and `tabTitle.maxTitleLength` settings, Explore-agent `agentModels` routing, and current model as the parent fallback; `tabTitle.enabled` and `triggerAfter` do not apply. Global and project settings are reloaded from disk first (like `get_settings`), and so is `models.json` (like `get_available_models`), so changes saved by another process — including a newly added model that is then pinned — apply; a failed reload is an error response. Unlike automatic titling, which falls back to the parent model when `tabTitle.model` names an unknown model, this command fails. The title is returned, not saved — rename the session separately (for example with the dashboard's rename endpoint or `/name` after resuming).
+Generate a title for a saved session file on request, using the same tab-title generator that names live sessions (see [Tab Title settings](settings.md#tab-title)). The session is not loaded or switched to, and the file is never modified: it is read once (old formats are migrated in memory only) and its current branch is used as the context. The command uses this process's `tabTitle.model` and `tabTitle.maxTitleLength` settings. When unpinned, it uses the current model directly in single-model mode; otherwise Explore-agent `agentModels` routing applies, defaulting to the current model when no Explore model is configured; `tabTitle.enabled` and `triggerAfter` do not apply. Global and project settings are reloaded from disk first (like `get_settings`), and so is `models.json` (like `get_available_models`), so changes saved by another process — including a newly added model that is then pinned — apply; a failed reload is an error response. Unlike automatic titling, which falls back to the parent model when `tabTitle.model` names an unknown model, this command fails. The title is returned, not saved — rename the session separately (for example with the dashboard's rename endpoint or `/name` after resuming).
 
 ```json
 {"type": "generate_session_title", "sessionPath": "/path/to/session.jsonl"}
@@ -1408,7 +1408,7 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with global-only control/security-policy exceptions:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, automatic-compaction continuation, `maxConcurrentSubagents`, `enabledModels`, `tabTitle`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session—except `singleModelMode`, which is read at each subagent spawn, so a write takes effect from the next spawn in the writing session (and from session start everywhere else).
+- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, automatic-compaction continuation, `maxConcurrentSubagents`, `enabledModels`, `tabTitle`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session—except `singleModelMode`, which is read at each subagent spawn and unpinned title generation, so a write takes effect from the next such operation in the writing session (other processes observe durable changes when their settings are reloaded or at session start).
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
 - **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
@@ -1483,7 +1483,7 @@ Response:
 
 `subagentArbiter` is absent when unconfigured. It is always the global object; project `.dreb/settings.json` cannot enable, disable, or alter it.
 
-`tabTitle` is the effective merged object and is absent when unconfigured. Its optional `model` is one exact `provider/model`; when absent, title generation preserves the Explore-agent resolution route documented in [settings.md](settings.md#tab-title).
+`tabTitle` is the effective merged object and is absent when unconfigured. Its optional `model` is one exact `provider/model`; when absent, title generation uses the current parent directly in single-model mode, otherwise the Explore-agent resolution route documented in [settings.md](settings.md#tab-title), defaulting to the parent when Explore is unconfigured.
 
 `continueAfterAutoCompaction` defaults to `false`. When true, successful automatic compaction keeps pending or interrupted work moving, but it does not start a fresh model turn after a completed assistant answer with no queued input. It does not make failed, cancelled, or manual compaction continue.
 
@@ -1547,9 +1547,9 @@ Setting per-agent model fallback lists:
 }
 ```
 
-For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry, so that agent uses its agent-definition default unless a project-level override exists.
+For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry. Without a project-level override, the agent uses its optional agent-definition model, then the current parent model. Bundled definitions have no model defaults, so unconfigured agents inherit the parent.
 
-Update one or more tab-title fields. Nested updates are partial, so changing `enabled` or `model` preserves omitted `triggerAfter` and `maxTitleLength` values. A supplied model must be an available exact reference; model IDs may contain `/` after the provider prefix. `model: null` removes the pinned model, restoring Explore-agent routing:
+Update one or more tab-title fields. Nested updates are partial, so changing `enabled` or `model` preserves omitted `triggerAfter` and `maxTitleLength` values. A supplied model must be an available exact reference; model IDs may contain `/` after the provider prefix. `model: null` removes the pinned model, restoring the default route (parent directly in single-model mode, otherwise Explore-agent routing):
 
 ```json
 {"type":"set_settings","settings":{"tabTitle":{"enabled":true,"model":"anthropic/claude-haiku-4-5"}}}
@@ -1654,7 +1654,7 @@ Valid keys and values:
 | `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
 | `enabledModels` | Non-empty ordered array of available exact `provider/model` references, or explicit `null` to remove the global filter and restore implicit all. Duplicate, glob, fuzzy, and thinking-suffix entries are rejected. |
 | `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
-| `tabTitle` | Partial object. Keys: `enabled` boolean, exact available `model` (`null` removes the pinned model and restores Explore-agent routing), positive whole-number `triggerAfter`, positive whole-number `maxTitleLength`. Unknown nested keys and an empty object are rejected. |
+| `tabTitle` | Partial object. Keys: `enabled` boolean, exact available `model` (`null` removes the pin: parent directly in single-model mode, otherwise Explore-agent routing), positive whole-number `triggerAfter`, positive whole-number `maxTitleLength`. Unknown nested keys and an empty object are rejected. |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 

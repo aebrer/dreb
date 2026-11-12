@@ -54,7 +54,7 @@ Update task: read → completed, explore → in_progress.
 
 ### Step 3: Explore the codebase
 
-Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a large repository requires inspecting many files).
+Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Built-in agents inherit the parent session's model by default; agent definitions and per-agent settings may explicitly configure models or fallback lists. Override only with good reason (e.g. a large repository requires inspecting many files).
 - **Relevant code evidence**: Locate named related behavior and quote the exact implementation and test snippets
 - **Flow inventory**: Enumerate files, symbols, imports, calls, and registrations in an explicitly named existing flow without diagnosing it
 - **Prior-work evidence**: Locate related branches, PRs, commits, and documentation and report their exact references. For each referenced issue or PR, report its disposition — adopted / rejected / split / superseded / unknown — and quote the rejection or split discussion where it exists (scope-review verdicts and "split out of scope" decisions are often buried in later thread discussion)

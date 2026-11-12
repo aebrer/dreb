@@ -99,7 +99,9 @@ function savedSession(): Array<Record<string, unknown>> {
 	];
 }
 
-function makeRuntime(overrides: { model?: typeof RUNTIME_MODEL | undefined; agentModels?: string[] } = {}) {
+function makeRuntime(
+	overrides: { model?: typeof RUNTIME_MODEL | undefined; agentModels?: string[]; singleModelMode?: boolean } = {},
+) {
 	const registry = {
 		getApiKey: vi.fn().mockResolvedValue("key"),
 		getAvailable: () => [RUNTIME_MODEL, EXPLORE_MODEL],
@@ -111,6 +113,7 @@ function makeRuntime(overrides: { model?: typeof RUNTIME_MODEL | undefined; agen
 	const settingsManager = {
 		getTabTitleSettings: vi.fn(() => ({ enabled: false, maxTitleLength: 40 })),
 		getAgentModelsForAgent: vi.fn((_name: string) => overrides.agentModels),
+		getSingleModelMode: vi.fn(() => overrides.singleModelMode ?? false),
 		flush: vi.fn(async () => {}),
 		drainErrors: vi.fn(() => []),
 		reload: vi.fn(),
@@ -186,6 +189,25 @@ describe("generateSessionTitleForRpc", () => {
 		expect(mockResolveModel.mock.calls[0][0]).toEqual(["explore-provider/explore-model"]);
 		expect(mockResolveModel.mock.calls[0][1]).toBe("runtime-provider");
 		expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({ provider: "explore-provider", id: "explore-model" });
+	});
+
+	it("uses the utility runtime parent instead of Explore in single-model mode", async () => {
+		mockResolveModel.mockResolvedValue({
+			ok: true,
+			modelId: EXPLORE_MODEL.id,
+			provider: EXPLORE_MODEL.provider,
+			skippedModels: [],
+		});
+		const path = await writeSessionFile(savedSession());
+		const runtime = makeRuntime({ singleModelMode: true, agentModels: ["explore-provider/explore-model"] });
+
+		await expect(generateSessionTitleForRpc(runtime, path)).resolves.toEqual({
+			ok: true,
+			title: "Past session rename",
+		});
+		expect(mockCompleteSimple.mock.calls[0][0]).toBe(RUNTIME_MODEL);
+		expect(mockResolveModel).not.toHaveBeenCalled();
+		expect(runtime.settingsManager.getAgentModelsForAgent).not.toHaveBeenCalled();
 	});
 
 	it("rejects an invalid path without calling the model or touching the file", async () => {
@@ -282,6 +304,35 @@ describe("generateSessionTitleForRpc", () => {
 			await generateSessionTitleForRpc(runtime, path);
 
 			expect(mockResolveModel.mock.calls[0][0]).toEqual(["explore-provider/explore-model"]);
+		});
+
+		it("applies single-model-mode changes saved elsewhere before each request", async () => {
+			const { utility, other } = await sharedSettings();
+			const runtime = { ...makeRuntime(), settingsManager: utility };
+			const path = await writeSessionFile(savedSession());
+			mockResolveModel.mockResolvedValue({
+				ok: true,
+				provider: EXPLORE_MODEL.provider,
+				modelId: EXPLORE_MODEL.id,
+				skippedModels: [],
+			});
+			other.setAgentModelsForAgent("Explore", ["explore-provider/explore-model"]);
+			await other.flush();
+
+			await generateSessionTitleForRpc(runtime, path);
+			expect(mockCompleteSimple.mock.calls[0][0]).toBe(EXPLORE_MODEL);
+
+			other.setSingleModelMode(true);
+			await other.flush();
+			mockResolveModel.mockClear();
+			await generateSessionTitleForRpc(runtime, path);
+			expect(mockCompleteSimple.mock.calls[1][0]).toBe(RUNTIME_MODEL);
+			expect(mockResolveModel).not.toHaveBeenCalled();
+
+			other.setSingleModelMode(false);
+			await other.flush();
+			await generateSessionTitleForRpc(runtime, path);
+			expect(mockCompleteSimple.mock.calls[2][0]).toBe(EXPLORE_MODEL);
 		});
 
 		it("fails loudly instead of titling with stale settings when the reload fails", async () => {

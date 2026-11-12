@@ -534,7 +534,7 @@ export interface TabTitleSettingsDto {
 	maxTitleLength?: number;
 }
 
-/** Partial tab-title update; `model: null` removes the pinned model, restoring Explore-agent routing. */
+/** Partial tab-title update; `model: null` removes the pinned model, restoring the default route (parent in single-model mode, otherwise Explore-agent routing). */
 export type TabTitleSettingsUpdateDto = Omit<TabTitleSettingsDto, "model"> & { model?: string | null };
 
 export interface SettingsDto {

@@ -620,7 +620,104 @@ describe("TabTitleGenerator", () => {
 	});
 
 	describe("model resolution", () => {
-		it("uses a dedicated exact model without invoking Explore resolution", async () => {
+		it.each([
+			["automatic", "settings"],
+			["automatic", "frontmatter"],
+			["on demand", "settings"],
+			["on demand", "frontmatter"],
+		])("%s titles bypass Explore %s in single-model mode", async (mode, source) => {
+			mockParseAgent.mockReturnValue({
+				ok: true,
+				config: { name: "Explore", description: "", model: ["explore-provider/explore-model"], systemPrompt: "" },
+			});
+			const getAgentModelsOverride = vi.fn(() =>
+				source === "settings" ? ["explore-provider/explore-model"] : undefined,
+			);
+			const parent = { ...MOCK_MODEL, id: "explore-provider/shared-model" };
+			const deps = createMockDeps({
+				getModel: () => parent,
+				getSingleModelMode: () => true,
+				getAgentModelsOverride,
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			if (mode === "automatic") {
+				gen.onToolEnd();
+				await vi.waitFor(() => expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug"));
+			} else {
+				await expect(gen.generateNow()).resolves.toBe("Fix auth bug");
+			}
+
+			expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
+			expect(mockCompleteSimple.mock.calls[0][0]).toBe(parent);
+			expect(getAgentModelsOverride).not.toHaveBeenCalled();
+			expect(mockParseAgent).not.toHaveBeenCalled();
+			expect(mockResolveModel).not.toHaveBeenCalled();
+		});
+
+		it.each([undefined, []])(
+			"inherits the parent when Explore has no model and settings are %j",
+			async (override) => {
+				mockParseAgent.mockReturnValue({
+					ok: true,
+					config: { name: "Explore", description: "", systemPrompt: "" },
+				});
+				const deps = createMockDeps({
+					getSingleModelMode: () => false,
+					getAgentModelsOverride: () => override,
+				});
+				await new TabTitleGenerator(undefined, deps).generateNow();
+
+				expect(mockCompleteSimple.mock.calls[0][0]).toBe(MOCK_MODEL);
+				expect(mockResolveModel).not.toHaveBeenCalled();
+			},
+		);
+
+		it("reads single-model mode and the parent model when generation fires", async () => {
+			let singleModelMode = false;
+			let parent = MOCK_MODEL;
+			const deps = createMockDeps({
+				getSingleModelMode: () => singleModelMode,
+				getModel: () => parent,
+				getAgentModelsOverride: () => ["explore-provider/explore-model"],
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+			singleModelMode = true;
+			parent = { ...MOCK_MODEL, provider: "new-provider", id: "new-model" };
+
+			gen.onToolEnd();
+			await vi.waitFor(() => expect(deps.setTitle).toHaveBeenCalled());
+			expect(mockCompleteSimple.mock.calls[0][0]).toBe(parent);
+			expect(mockResolveModel).not.toHaveBeenCalled();
+		});
+
+		it("does not escape to Explore when single-model mode has no parent model", async () => {
+			const deps = createMockDeps({
+				getSingleModelMode: () => true,
+				getModel: () => undefined,
+				getAgentModelsOverride: () => ["explore-provider/explore-model"],
+			});
+			await expect(new TabTitleGenerator(undefined, deps).generateNow()).rejects.toThrow("no model is available");
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+			expect(mockResolveModel).not.toHaveBeenCalled();
+		});
+
+		it("surfaces a parent failure in single-model mode without trying Explore", async () => {
+			mockCompleteSimple.mockResolvedValue({
+				...makeAssistantResponse(""),
+				stopReason: "error",
+				errorMessage: "parent unavailable",
+			} as any);
+			const deps = createMockDeps({
+				getSingleModelMode: () => true,
+				getAgentModelsOverride: () => ["explore-provider/explore-model"],
+			});
+			await expect(new TabTitleGenerator(undefined, deps).generateNow()).rejects.toThrow("parent unavailable");
+			expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
+			expect(mockResolveModel).not.toHaveBeenCalled();
+		});
+
+		it.each([false, true])("preserves a dedicated exact model with single-model mode %s", async (singleModelMode) => {
 			const dedicatedModel = {
 				...MOCK_MODEL,
 				id: "family/title-model",
@@ -634,7 +731,10 @@ describe("TabTitleGenerator", () => {
 					[MOCK_MODEL, dedicatedModel].find((model) => model.provider === provider && model.id === modelId),
 				),
 			};
-			const deps = createMockDeps({ getModelRegistry: () => registry as any });
+			const deps = createMockDeps({
+				getModelRegistry: () => registry as any,
+				getSingleModelMode: () => singleModelMode,
+			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1, model: "dedicated-provider/family/title-model" }, deps);
 
 			gen.onToolEnd();
@@ -766,6 +866,7 @@ describe("TabTitleGenerator", () => {
 			);
 			const deps = createMockDeps({
 				getAgentModelsOverride,
+				getSingleModelMode: () => false,
 				getSessionId: () => "tab-title-session-uuid",
 			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);

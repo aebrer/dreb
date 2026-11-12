@@ -120,7 +120,7 @@ Pre-merge checks, version bump, docs update, merge, tag, and release.
 
 ### feature-dev
 
-Strong general-purpose coding agent optionally used by `mach6-implement` for precisely specified execution. It has full tool access (read, write, edit, grep, find, ls, bash, search) and uses a strong-tier model with a provider fallback list. The parent model retains design ownership and may implement directly; `feature-dev` is most useful for high-volume, repetitive work with settled decision rules.
+Strong general-purpose coding agent optionally used by `mach6-implement` for precisely specified execution. It has full tool access (read, write, edit, grep, find, ls, bash, search) and inherits the parent session's model by default, like the other bundled agents. Configure a model or fallback list explicitly when a different model is needed; choosing an agent role does not automatically select a model tier. The parent model retains design ownership and may implement directly; `feature-dev` is most useful for high-volume, repetitive work with settled decision rules.
 
 ### Review Agents
 

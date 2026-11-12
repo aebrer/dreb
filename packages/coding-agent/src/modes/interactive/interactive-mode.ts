@@ -697,6 +697,7 @@ export class InteractiveMode {
 			getModel: () => this.session.model,
 			getModelRegistry: () => this.session.modelRegistry,
 			getProvider: () => this.session.model?.provider,
+			getSingleModelMode: () => this.settingsManager.getSingleModelMode(),
 			getSessionId: () => this.session.sessionId,
 			getAgentModelsOverride: (name) => this.settingsManager.getAgentModelsForAgent(name),
 			getBranch: () => this.footerDataProvider.getGitBranch(),
