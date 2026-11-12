@@ -890,7 +890,9 @@ export function resolveModelWithFallbacks(
 	parentProvider: string | undefined,
 	registry: ModelRegistry | undefined,
 	parentModel?: string,
-): { ok: true; modelId: string; provider?: string; warning?: string } | { ok: false; error: string } {
+):
+	| { ok: true; modelId: string; provider?: string; model?: Model<Api>; warning?: string }
+	| { ok: false; error: string } {
 	const modelList = Array.isArray(models) ? models : [models];
 	let lastError = "";
 	for (const modelStr of modelList) {
@@ -967,34 +969,45 @@ export function resolveModelStringSingle(
 	return { ok: true, modelId: resolved.model.id, provider: resolved.model.provider };
 }
 
-/** Inherited parent IDs are already resolved identities, not user-entered model patterns. */
+/**
+ * Resolve the parent's current model for a child exactly as the child CLI will resolve
+ * `--provider <provider> --model <id>`. Inherited IDs are identities, not user-entered patterns:
+ * a slash in the ID never selects another provider, and a custom (non-catalog) model the parent
+ * is already running on is inherited too. The returned `model` carries that concrete model,
+ * including custom ones absent from the registry, for thinking validation. If the child would
+ * land on any other model, inheritance fails loudly instead of silently swapping models.
+ */
 function resolveParentModel(
 	parentModel: string,
 	parentProvider: string | undefined,
 	registry: ModelRegistry | undefined,
 	signal?: AbortSignal,
-): ReturnType<typeof resolveModelStringSingle> {
+): { ok: true; modelId: string; provider?: string; model?: Model<Api> } | { ok: false; error: string } {
 	if (signal?.aborted) return { ok: false, error: "Aborted before spawn" };
 	if (!registry) return { ok: true, modelId: parentModel, provider: parentProvider };
 	// Legacy callers may supply only a provider-qualified reference.
 	if (!parentProvider) return resolveModelStringSingle(parentModel, undefined, registry);
 
-	// Do not infer a different provider from a slash in the parent's raw model ID,
-	// or fuzzy-match an unavailable parent to another model.
-	const model = registry.getAll().find((m) => m.provider === parentProvider && m.id === parentModel);
-	if (!model) {
+	const parentRef = `${parentProvider}/${parentModel}`;
+	const resolved = resolveCliModel({ cliProvider: parentProvider, cliModel: parentModel, modelRegistry: registry });
+	if (!resolved.model) {
+		return { ok: false, error: `Parent model "${parentRef}" cannot be inherited: ${resolved.error}` };
+	}
+	if (resolved.model.provider !== parentProvider || resolved.model.id !== parentModel) {
 		return {
 			ok: false,
-			error: `Parent model "${parentProvider}/${parentModel}" not found. Use --list-models to see available models.`,
+			error:
+				`Parent model "${parentRef}" cannot be inherited exactly: a subagent given this provider and model ID ` +
+				`would run "${resolved.model.provider}/${resolved.model.id}" instead.`,
 		};
 	}
-	if (!registry.authStorage.hasAuth(model.provider)) {
+	if (!registry.authStorage.hasAuth(parentProvider)) {
 		return {
 			ok: false,
-			error: `No authentication configured for provider "${model.provider}". Model "${parentModel}" cannot be used.`,
+			error: `No authentication configured for provider "${parentProvider}". Model "${parentModel}" cannot be used.`,
 		};
 	}
-	return { ok: true, modelId: model.id, provider: model.provider };
+	return { ok: true, modelId: parentModel, provider: parentProvider, model: resolved.model };
 }
 
 export interface ProbeModelAvailabilityOptions {
@@ -1120,6 +1133,8 @@ export type SubagentModelResolution =
 			ok: true;
 			modelId: string;
 			provider?: string;
+			/** Concrete model, set for an inherited parent (which may be absent from the registry). */
+			model?: Model<Api>;
 			warning?: string;
 			skippedModels: SkippedFallbackModel[];
 	  }
@@ -1410,7 +1425,9 @@ export async function executeSingle(
 		}
 		effectiveConfig = { ...effectiveConfig, model: parentResolution.modelId };
 		if (parentResolution.provider) resolvedProvider = parentResolution.provider;
-		if (registry && resolvedProvider) resolvedModel = registry.find(resolvedProvider, parentResolution.modelId);
+		resolvedModel =
+			parentResolution.model ??
+			(registry && resolvedProvider ? registry.find(resolvedProvider, parentResolution.modelId) : undefined);
 		if (configuredModelSpec) {
 			warning =
 				`The user has enabled "single model mode" in the settings, so the model selection for this subagent ` +
@@ -1444,7 +1461,9 @@ export async function executeSingle(
 		}
 		effectiveConfig = { ...effectiveConfig, model: resolved.modelId };
 		if (resolved.provider) resolvedProvider = resolved.provider;
-		if (registry && resolvedProvider) resolvedModel = registry.find(resolvedProvider, resolved.modelId);
+		resolvedModel =
+			resolved.model ??
+			(registry && resolvedProvider ? registry.find(resolvedProvider, resolved.modelId) : undefined);
 		warning = resolved.warning;
 	}
 

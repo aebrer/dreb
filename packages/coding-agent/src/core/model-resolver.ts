@@ -420,7 +420,19 @@ export function resolveCliModel(options: {
 	}
 
 	if (cliProvider && provider) {
-		// If both were provided, tolerate --model <provider>/<pattern> by stripping the provider prefix
+		// An explicit provider plus a model string that exactly names one of its IDs is already
+		// an exact identity, even when that ID starts with the provider name (OpenRouter's
+		// "openrouter/auto"). Match it before the prefix tolerance below can reinterpret it as
+		// a different model ("auto"); subagents inherit parents through this exact pair.
+		const providerModels = availableModels.filter((m) => m.provider === provider);
+		const lower = cliModel.toLowerCase();
+		const exact =
+			providerModels.find((m) => m.id === cliModel) ?? providerModels.find((m) => m.id.toLowerCase() === lower);
+		if (exact) {
+			return { model: exact, warning: undefined, thinkingLevel: undefined, error: undefined };
+		}
+
+		// Otherwise tolerate --model <provider>/<pattern> by stripping the provider prefix
 		const prefix = `${provider}/`;
 		if (cliModel.toLowerCase().startsWith(prefix.toLowerCase())) {
 			pattern = cliModel.substring(prefix.length);

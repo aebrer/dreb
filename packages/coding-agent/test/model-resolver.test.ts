@@ -368,6 +368,35 @@ describe("resolveCliModel", () => {
 		expect(result.model?.id).toBe("openai/ghost-model");
 	});
 
+	test("an explicit provider's exact self-prefixed id wins over prefix stripping", () => {
+		// OpenRouter lists both "openrouter/auto" (Auto Router) and a separate "auto" model.
+		const router = (id: string, name: string): Model<"anthropic-messages"> => ({
+			...mockModels[0],
+			id,
+			name,
+			provider: "openrouter",
+		});
+		const registry = {
+			getAll: () => [...allModels, router("auto", "Auto"), router("openrouter/auto", "Auto Router")],
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+		const exact = resolveCliModel({
+			cliProvider: "openrouter",
+			cliModel: "openrouter/auto",
+			modelRegistry: registry,
+		});
+		expect(exact.error).toBeUndefined();
+		expect(exact.isSyntheticFallback).toBeUndefined();
+		expect(exact.model?.provider).toBe("openrouter");
+		expect(exact.model?.id).toBe("openrouter/auto");
+
+		// Without an exact id, a redundant provider prefix is still tolerated.
+		const stripped = resolveCliModel({ cliProvider: "openai", cliModel: "openai/gpt-4o", modelRegistry: registry });
+		expect(stripped.error).toBeUndefined();
+		expect(stripped.model?.provider).toBe("openai");
+		expect(stripped.model?.id).toBe("gpt-4o");
+	});
+
 	test("returns a clear error when there are no models", () => {
 		const registry = {
 			getAll: () => [],

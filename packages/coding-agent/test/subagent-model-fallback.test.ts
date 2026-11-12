@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { getSubagentSessionsDir } from "../src/config.js";
 import type { ExtensionContext } from "../src/core/extensions/types.js";
 import { log } from "../src/core/logger.js";
+import { resolveCliModel } from "../src/core/model-resolver.js";
 import {
 	type AgentTypeConfig,
 	createSubagentToolDefinition,
@@ -484,18 +485,19 @@ describe("model fallback lists", () => {
 		});
 
 		test("if parent model also fails, existing error behavior is preserved", () => {
+			// A retired parent ID that a child would fuzzy-match to "claude-sonnet-4-5" cannot be inherited.
 			const result = resolveModelWithFallbacks(
 				["nonexistent-a", "nonexistent-b"],
 				"anthropic",
 				registry,
-				"also-nonexistent",
+				"claude-sonnet",
 			);
 			expect(result.ok).toBe(false);
 			if (!result.ok) {
 				expect(result.error).toContain("None of the fallback models resolved");
 				expect(result.error).toContain("nonexistent-a");
 				expect(result.error).toContain("nonexistent-b");
-				expect(result.error).toContain("also-nonexistent");
+				expect(result.error).toContain('would run "anthropic/claude-sonnet-4-5" instead');
 			}
 		});
 
@@ -1470,13 +1472,13 @@ describe("spawn-time model availability probing", () => {
 			["primary-model", "fallback-model"],
 			"anthropic",
 			probeRegistry(),
-			"missing-parent",
+			"parent", // retired ID: a child would fuzzy-match it to "parent-model"
 		);
 
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error).toContain("None of the fallback models passed availability checks");
-			expect(result.error).toContain("missing-parent");
+			expect(result.error).toContain('Parent model "anthropic/parent" cannot be inherited exactly');
 			expect(result.skippedModels).toEqual([
 				{ model: "primary-model", reason: "primary down" },
 				{ model: "fallback-model", reason: "fallback down" },
@@ -1664,7 +1666,7 @@ describe("spawn-time model availability probing", () => {
 			"anthropic",
 			probeRegistry(),
 			undefined,
-			"missing-parent",
+			"parent", // retired ID: a child would fuzzy-match it to "parent-model"
 		);
 
 		expect(result.exitCode).toBe(1);
@@ -1824,17 +1826,49 @@ describe("executeSingle agentModels precedence (issue 219)", () => {
 });
 
 describe("exact parent model inheritance", () => {
-	const parent = { ...probeModels[0], provider: "openrouter", id: "anthropic/primary-model" };
-	const models = [probeModels[0], parent];
+	const fixtureModel = (provider: string, id: string): Model<"anthropic-messages"> => ({
+		...probeModels[0],
+		provider,
+		id,
+		name: id,
+	});
+	const parent = fixtureModel("openrouter", "anthropic/primary-model");
+	// Identities a child must not reinterpret: a slash prefix naming another registered provider;
+	// self-prefixed router IDs whose stripped form names, or fuzzy-matches, a different model; and a
+	// bare ID shared by two providers with the parent registered second.
+	const models = [
+		probeModels[0],
+		parent,
+		fixtureModel("openrouter", "auto"),
+		fixtureModel("openrouter", "openrouter/auto"),
+		fixtureModel("openrouter", "vendor/tiny:free"),
+		fixtureModel("openrouter", "openrouter/free"),
+		fixtureModel("provider-a", "shared-model"),
+		fixtureModel("provider-b", "shared-model"),
+	];
 	const registry = {
 		getAll: () => models,
 		find: (provider: string, id: string) => models.find((m) => m.provider === provider && m.id === id),
 		authStorage: { hasAuth: () => true },
 	} as unknown as NonNullable<Parameters<typeof executeSingle>[8]>;
+	const parentIdentities = [
+		["openrouter", "anthropic/primary-model"],
+		["openrouter", "openrouter/auto"],
+		["openrouter", "openrouter/free"],
+		["provider-b", "shared-model"],
+		// A custom ID the main CLI accepts for a known provider, absent from the registry.
+		["openrouter", "vendor/unlisted-model"],
+	] as const;
+	const withSingleModelMode = parentIdentities.flatMap(([provider, id]) =>
+		[false, true].map((mode) => [provider, id, mode] as const),
+	);
 
-	test.each([false, true])("keeps slash-containing parent IDs with single-model mode %s", async (singleModelMode) => {
-		mockSpawnSubagentResult({ model: parent.id });
-		const result = await executeSingle(
+	function inherit(
+		provider: string,
+		id: string,
+		options: { singleModelMode?: boolean; thinking?: "high"; registry?: typeof registry } = {},
+	) {
+		return executeSingle(
 			makeAgents(),
 			"test-agent",
 			"inherit",
@@ -1842,66 +1876,91 @@ describe("exact parent model inheritance", () => {
 			undefined,
 			undefined,
 			undefined,
-			parent.provider,
-			registry,
+			provider,
+			options.registry ?? registry,
 			undefined,
-			parent.id,
-			undefined,
-			undefined,
+			id,
 			undefined,
 			undefined,
 			undefined,
+			options.thinking,
 			undefined,
 			undefined,
-			singleModelMode,
+			undefined,
+			options.singleModelMode,
 		);
+	}
 
-		expect(result.exitCode).toBe(0);
-		const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-		expect(args[args.indexOf("--provider") + 1]).toBe(parent.provider);
-		expect(args[args.indexOf("--model") + 1]).toBe(parent.id);
-		expect(result.notes).toBeUndefined();
-		expect(completeSimple).not.toHaveBeenCalled();
-	});
+	/** What the child process resolves from its spawned CLI arguments, using the production resolver. */
+	function childModel(args: string[]) {
+		return resolveCliModel({
+			cliProvider: args[args.indexOf("--provider") + 1],
+			cliModel: args[args.indexOf("--model") + 1],
+			modelRegistry: registry as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"],
+		}).model;
+	}
+
+	test.each(withSingleModelMode)(
+		"a child resolves exactly %s / %s with single-model mode %s",
+		async (provider, id, singleModelMode) => {
+			mockSpawnSubagentResult({ model: id });
+			const result = await inherit(provider, id, { singleModelMode });
+
+			expect(result.exitCode).toBe(0);
+			const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+			expect(args[args.indexOf("--provider") + 1]).toBe(provider);
+			expect(args[args.indexOf("--model") + 1]).toBe(id);
+			expect(childModel(args)).toMatchObject({ provider, id });
+			expect(result.notes).toBeUndefined();
+			expect(completeSimple).not.toHaveBeenCalled();
+		},
+	);
 
 	test.each([false, true])(
-		"keeps exact parent identity after explicit fallbacks fail (probe path %s)",
-		async (probe) => {
+		"validates thinking against an inherited custom parent model (single-model mode %s)",
+		async (singleModelMode) => {
+			mockSpawnSubagentResult({ model: "vendor/unlisted-model" });
+			const result = await inherit("openrouter", "vendor/unlisted-model", { singleModelMode, thinking: "high" });
+
+			expect(result.exitCode).toBe(0);
+			const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+			expect(args[args.indexOf("--thinking") + 1]).toBe("high");
+		},
+	);
+
+	test.each(
+		parentIdentities.flatMap(([provider, id]) => [false, true].map((probe) => [provider, id, probe] as const)),
+	)(
+		"keeps exact parent identity %s / %s after explicit fallbacks fail (probe path %s)",
+		async (provider, id, probe) => {
 			const result = probe
-				? await resolveModelForSubagentSpawn(["missing-model"], parent.provider, registry, parent.id)
-				: resolveModelWithFallbacks(["missing-model"], parent.provider, registry, parent.id);
-			expect(result).toMatchObject({ ok: true, provider: parent.provider, modelId: parent.id });
+				? await resolveModelForSubagentSpawn(["missing-model"], provider, registry, id)
+				: resolveModelWithFallbacks(["missing-model"], provider, registry, id);
+			expect(result).toMatchObject({ ok: true, provider, modelId: id, model: { provider, id } });
 			if (result.ok) expect(result.warning).toContain("Falling back to parent model");
 		},
 	);
 
-	test.each(["unavailable", "unauthenticated"])(
-		"rejects an %s parent instead of choosing another model",
-		async (reason) => {
-			const unavailableRegistry = {
-				...registry,
-				getAll: () => (reason === "unavailable" ? [probeModels[0]] : models),
-				authStorage: { hasAuth: () => reason !== "unauthenticated" },
-			} as unknown as typeof registry;
-			const result = await executeSingle(
-				makeAgents(),
-				"test-agent",
-				"inherit",
-				process.cwd(),
-				undefined,
-				undefined,
-				undefined,
-				parent.provider,
-				unavailableRegistry,
-				undefined,
-				parent.id,
-			);
+	test.each([
+		["an unknown provider", "retired-provider", "some-model", true, 'Unknown provider "retired-provider"'],
+		["an unauthenticated provider", parent.provider, parent.id, false, "No authentication configured"],
+		[
+			"an ID a child would resolve to another model",
+			"openrouter",
+			"anthropic/primary",
+			true,
+			'would run "openrouter/anthropic/primary-model" instead',
+		],
+	] as const)("rejects a parent on %s instead of spawning", async (_case, provider, id, hasAuth, expected) => {
+		const rejectingRegistry = { ...registry, authStorage: { hasAuth: () => hasAuth } } as unknown as typeof registry;
+		for (const singleModelMode of [false, true]) {
+			const result = await inherit(provider, id, { singleModelMode, registry: rejectingRegistry });
 			expect(result.exitCode).toBe(1);
-			expect(result.errorMessage).toContain(reason === "unavailable" ? "not found" : "No authentication configured");
-			expect(spawn).not.toHaveBeenCalled();
-			expect(completeSimple).not.toHaveBeenCalled();
-		},
-	);
+			expect(result.errorMessage).toContain(expected);
+		}
+		expect(spawn).not.toHaveBeenCalled();
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
 
 	describe("unconfigured bundled agents through the real tool", () => {
 		let cwd: string;
@@ -2200,7 +2259,7 @@ describe("executeSingle single-model mode (issue 517)", () => {
 			parentProvider,
 			probeRegistry(),
 			undefined,
-			"missing-model", // not in the registry
+			"parent", // retired ID: a child would fuzzy-match it to "parent-model"
 			undefined,
 			undefined,
 			undefined,
@@ -2213,7 +2272,7 @@ describe("executeSingle single-model mode (issue 517)", () => {
 
 		expect(result.exitCode).toBe(1);
 		expect(result.errorMessage).toContain("Single model mode:");
-		expect(result.errorMessage).toContain("missing-model");
+		expect(result.errorMessage).toContain('would run "anthropic/parent-model" instead');
 		expect(spawn).not.toHaveBeenCalled();
 	});
 

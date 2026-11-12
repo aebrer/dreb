@@ -36,6 +36,8 @@ When a subagent is launched, its model is resolved in this priority:
 
 The agent definition's `model` field is optional. If the `agentModels.models` list is empty or undefined for a given agent, resolution falls through to that optional field, then to the parent's exact provider/model. Bundled definitions omit the field, so an unconfigured subagent inherits the parent even when single-model mode is off. This includes the default Explore agent when a tool call omits `agent`.
 
+Inheritance passes the parent's exact provider and model ID to the child, including IDs that contain `/` or begin with the provider name (such as OpenRouter's `openrouter/auto`) and custom model IDs the parent was started with that are not in the model catalog. Before spawning, the parent checks that the child will resolve that identical model; if it would resolve anything else (for example, a parent ID since removed from `models.json` that now partially matches another model), or the provider is unknown or unauthenticated, the spawn fails loudly instead of substituting a model. The same applies when the parent is the last-resort fallback and in single-model mode.
+
 ## Single Model Mode
 
 The `singleModelMode` setting (top-level, default `false`) is a global kill-switch for model selection: when enabled, every subagent runs on the **parent session's model** and the resolution order above is skipped entirely. Per-invocation `model` overrides, `agentModels.models` fallback lists, agent-definition `model` fields, spawn-time availability probes, and the optional [Dispatch Arbiter](#dispatch-arbiter) are all bypassed; the child process is spawned directly on the parent's resolved model.
