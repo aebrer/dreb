@@ -407,6 +407,7 @@ md.setText("Updated markdown");
 **Features:**
 - Headings, bold, italic, code blocks, lists, links, blockquotes
 - HTML tags rendered as plain text
+- Control characters are stripped, whether raw or decoded from character references such as `&#27;`, so markdown content can never emit terminal escape sequences (`sanitizeTerminalText()` and `markedTextToTerminal()` are exported for custom marked-based renderers)
 - Optional syntax highlighting via `highlightCode`
 - Padding support
 - Render caching for performance

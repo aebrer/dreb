@@ -234,7 +234,7 @@ const spacer = new Spacer(2);  // 2 empty lines
 
 ### Markdown
 
-Renders markdown with syntax highlighting.
+Renders markdown with syntax highlighting. Control characters in the content, whether raw or decoded from character references such as `&#27;`, are stripped, so untrusted text can never emit terminal escape sequences.
 
 ```typescript
 const md = new Markdown(

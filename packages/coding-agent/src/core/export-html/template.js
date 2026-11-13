@@ -1488,12 +1488,9 @@
       // INITIALIZATION
       // ============================================================
 
-      // Escape HTML tags in text (but not code blocks)
-      function escapeHtmlTags(text) {
-        return text.replace(/<(?=[a-zA-Z\/])/g, '&lt;');
-      }
-
-      // Configure marked with syntax highlighting and HTML escaping for text
+      // Configure marked with syntax highlighting. Plain text keeps marked's own renderer: it
+      // escapes HTML without double-encoding the `&amp;` that marked's lexer already produced, and
+      // renders the inline formatting nested in list-item text.
       marked.use({
         breaks: true,
         gfm: true,
@@ -1518,10 +1515,6 @@
               }
             }
             return `<pre><code class="hljs">${highlighted}</code></pre>`;
-          },
-          // Text content: escape HTML tags
-          text(token) {
-            return escapeHtmlTags(escapeHtml(token.text));
           },
           // Inline code: escape HTML
           codespan(token) {

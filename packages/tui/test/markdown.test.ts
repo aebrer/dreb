@@ -2,7 +2,7 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
-import { Markdown } from "../src/components/markdown.js";
+import { Markdown, type MarkdownTheme } from "../src/components/markdown.js";
 import { type Component, TUI } from "../src/tui.js";
 import { defaultMarkdownTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
@@ -1233,6 +1233,186 @@ bar`,
 				rendered.includes(chalk.strikethrough("done")),
 				`Expected strikethrough in ${JSON.stringify(rendered)}`,
 			);
+		});
+	});
+
+	describe("Character references and terminal safety", () => {
+		// Identity theme: every control character in the output came from the markdown content.
+		const plainTheme: MarkdownTheme = {
+			heading: (text) => text,
+			link: (text) => text,
+			linkUrl: (text) => text,
+			code: (text) => text,
+			codeBlock: (text) => text,
+			codeBlockBorder: (text) => text,
+			quote: (text) => text,
+			quoteBorder: (text) => text,
+			hr: (text) => text,
+			listBullet: (text) => text,
+			bold: (text) => text,
+			italic: (text) => text,
+			strikethrough: (text) => text,
+			underline: (text) => text,
+		};
+		const UNSAFE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+
+		function renderPlain(text: string): string[] {
+			return new Markdown(text, 0, 0, plainTheme).render(200).map((line) => line.trimEnd());
+		}
+
+		function assertTerminalSafe(lines: string[], input: string): void {
+			for (const line of lines) {
+				assert.ok(!UNSAFE.test(line), `Control character from ${JSON.stringify(input)} in ${JSON.stringify(line)}`);
+			}
+		}
+
+		// marked 18 decodes numeric character references in text, so these would otherwise
+		// reach the terminal as ESC/CSI/OSC sequences, a CR, a BEL, or a bidi override.
+		const decodedControls: Array<{ name: string; input: string; expected: string[] }> = [
+			{ name: "CSI erase display", input: "before &#27;[2J after", expected: ["before [2J after"] },
+			{
+				name: "OSC 52 clipboard write",
+				input: "osc &#27;]52;c;aGVsbG8=&#7; end",
+				expected: ["osc ]52;c;aGVsbG8= end"],
+			},
+			{ name: "hex escape with SGR", input: "x &#x1b;[31mRED&#x1B;[0m y", expected: ["x [31mRED[0m y"] },
+			{ name: "C1 CSI", input: "c1 &#155;31m x", expected: ["c1 31m x"] },
+			{ name: "DEL", input: "del &#127; x", expected: ["del  x"] },
+			{ name: "bidi override", input: "bidi &#8238;txet", expected: ["bidi txet"] },
+			{ name: "carriage return", input: "one&#13;two", expected: ["one", "two"] },
+			{ name: "tab", input: "tab&#9;tab", expected: ["tab   tab"] },
+		];
+
+		for (const { name, input, expected } of decodedControls) {
+			it(`strips decoded control characters: ${name}`, () => {
+				const lines = renderPlain(input);
+				assertTerminalSafe(lines, input);
+				assert.deepStrictEqual(lines, expected);
+			});
+		}
+
+		it("strips decoded control characters in every inline context", () => {
+			// ESC c (RIS) resets the whole terminal.
+			const inputs = [
+				"# heading &#27;cRESET",
+				"**bold &#27;cRESET**",
+				"- item &#27;cRESET",
+				"| a |\n|---|\n| cell &#27;cRESET |",
+				"[link &#27;cRESET](https://example.com)",
+				"> quote &#27;cRESET",
+				"~~struck &#27;cRESET~~",
+			];
+			for (const input of inputs) {
+				const lines = renderPlain(input);
+				assertTerminalSafe(lines, input);
+				assert.ok(lines.join("\n").includes(" cRESET"), `Expected visible text for ${JSON.stringify(input)}`);
+			}
+		});
+
+		it("strips raw control characters from every token type", () => {
+			const inputs = [
+				"raw \x1b[2J text",
+				"`code \x1b[31m span`",
+				"```\nfenced \x1b]52;c;aGk=\x07 code\n```",
+				"    indented \x1b[2J code",
+				"inline <b>\x1b[31m</b> html",
+				"<div>\x1b[2J</div>",
+				"[link](https://example.com/\x1b[2J)",
+				"bidi \u202Etxet",
+			];
+			for (const input of inputs) {
+				assertTerminalSafe(renderPlain(input), input);
+			}
+		});
+
+		it("keeps character references inside code spans literal", () => {
+			assert.deepStrictEqual(renderPlain("`&#27;[2J`"), ["&#27;[2J"]);
+		});
+
+		const ampersandCases: Array<{ input: string; expected: string }> = [
+			// marked 18 encodes bare `&` as `&amp;` in any text run with a numeric reference.
+			{ input: "Q&A &#8212; R&D", expected: "Q&A — R&D" },
+			{ input: "Tom &#38; Jerry", expected: "Tom & Jerry" },
+			{ input: "it&#39;s fine & dandy", expected: "it's fine & dandy" },
+			{ input: "Q&A plain R&D", expected: "Q&A plain R&D" },
+			{ input: "write &amp; here", expected: "write & here" },
+		];
+
+		for (const { input, expected } of ampersandCases) {
+			it(`renders ampersands as written: ${input}`, () => {
+				assert.deepStrictEqual(renderPlain(input), [expected]);
+			});
+		}
+
+		it("renders ampersands as written in headings, list items and table cells", () => {
+			assert.deepStrictEqual(renderPlain("## Q&A &#8212; R&D"), ["Q&A — R&D"]);
+			assert.deepStrictEqual(renderPlain("- Q&A &#8212; R&D"), ["- Q&A — R&D"]);
+			assert.ok(renderPlain("| h |\n|---|\n| Q&A &#8212; R&D |").some((line) => line.includes("Q&A — R&D")));
+		});
+	});
+
+	describe("Indented code blocks", () => {
+		const identity = (text: string) => text;
+		const theme: MarkdownTheme = { ...defaultMarkdownTheme, codeBlock: identity, codeBlockBorder: identity };
+
+		function render(text: string, overrides: Partial<MarkdownTheme> = {}): string[] {
+			return new Markdown(text, 0, 0, { ...theme, ...overrides })
+				.render(80)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+		}
+
+		it("does not render the terminating newline as an extra row", () => {
+			assert.deepStrictEqual(render("    code\n"), ["```", "  code", "```"]);
+		});
+
+		it("keeps blank lines inside the block but not after it", () => {
+			assert.deepStrictEqual(render("    a\n\n    b\n"), ["```", "  a", "", "  b", "```"]);
+		});
+
+		it("does not add a trailing row when highlighted", () => {
+			const highlightCode = (code: string) => code.split("\n");
+			assert.deepStrictEqual(render("    code\n", { highlightCode }), ["```", "  code", "```"]);
+		});
+
+		it("does not add a trailing row inside a list item", () => {
+			assert.deepStrictEqual(render("- item\n\n      code1\n      code2\n\n- next"), [
+				"- item",
+				"  ```",
+				"    code1",
+				"    code2",
+				"  ```",
+				"- next",
+			]);
+		});
+	});
+
+	describe("Link reference definitions", () => {
+		function render(text: string): string[] {
+			return new Markdown(text, 0, 0, defaultMarkdownTheme)
+				.render(80)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+		}
+
+		it("adds no blank row before the content that follows a leading definition", () => {
+			assert.deepStrictEqual(render("[ref]: /url\n\n[ref]"), ["ref (/url)"]);
+		});
+
+		it("keeps a single blank row between paragraphs around a definition", () => {
+			assert.deepStrictEqual(render("before\n\n[ref]: /url\n\nafter"), ["before", "", "after"]);
+		});
+
+		it("adds no blank rows for consecutive definitions", () => {
+			assert.deepStrictEqual(render("[a]: /a\n\n[b]: /b\n\n[a] [b]"), ["a (/a) b (/b)"]);
+			assert.deepStrictEqual(render("[a]: /a\n[b]: /b\n\n[a] [b]"), ["a (/a) b (/b)"]);
+		});
+
+		it("keeps a single blank row after a heading followed by a definition", () => {
+			assert.deepStrictEqual(render("# H\n\n[ref]: /url\n\ntext [ref]"), ["H", "", "text ref (/url)"]);
+		});
+
+		it("adds no blank row for a definition inside a blockquote", () => {
+			const lines = render("> q\n>\n> [r]: /u\n>\n> [r]");
+			assert.deepStrictEqual(lines.slice(1, -1), ["q", "", "r (/u)"]);
 		});
 	});
 });

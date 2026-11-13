@@ -15,7 +15,13 @@ export { Editor, type EditorOptions, type EditorTheme } from "./components/edito
 export { Image, type ImageOptions, type ImageTheme } from "./components/image.js";
 export { Input } from "./components/input.js";
 export { Loader } from "./components/loader.js";
-export { type DefaultTextStyle, Markdown, type MarkdownTheme } from "./components/markdown.js";
+export {
+	type DefaultTextStyle,
+	Markdown,
+	type MarkdownTheme,
+	markedTextToTerminal,
+	sanitizeTerminalText,
+} from "./components/markdown.js";
 export {
 	type RankedItem,
 	RankedList,

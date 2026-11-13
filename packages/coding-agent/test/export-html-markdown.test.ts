@@ -107,11 +107,11 @@ const SURFACES: Array<{ name: string; entry: (text: string) => unknown }> = [
 	},
 ];
 
-/** Each input with the HTML GitHub's GFM renderer produces for it. */
+/** Each input with the exported HTML for it, which displays exactly like GitHub's GFM renderer output. */
 const CASES: Array<{ input: string; html: string }> = [
 	{
 		input: REPORTED,
-		html: '<p>Starting from the first ~ in "~7 percent vs ~12 percent", the 7 passes the lookahead, but the next <code>~</code> sits after a space, so nothing ends a valid match there.</p>\n',
+		html: "<p>Starting from the first ~ in &quot;~7 percent vs ~12 percent&quot;, the 7 passes the lookahead, but the next <code>~</code> sits after a space, so nothing ends a valid match there.</p>\n",
 	},
 	{
 		input: "about ~7 percent vs ~12 percent (see `~`)",
@@ -172,6 +172,28 @@ describe("HTML export — markdown strikethrough (GitHub GFM parity)", () => {
 			expect(markdownContent(render(surface.entry("~~real strike~~ and ~single strike~")))).toBe(CASES[4].html);
 		});
 	}
+
+	for (const surface of SURFACES) {
+		test(`${surface.name}: ampersands next to numeric character references are not double-escaped`, () => {
+			// marked 18 decodes `&#8212;` and encodes the bare `&`s in that text run as `&amp;`.
+			expect(markdownContent(render(surface.entry("Q&A &#8212; R&D, Tom &#38; Jerry")))).toBe(
+				"<p>Q&amp;A — R&amp;D, Tom &amp; Jerry</p>\n",
+			);
+		});
+	}
+
+	test("plain text escapes HTML special characters exactly once", () => {
+		expect(markdownContent(render(SURFACES[1].entry("a & b < c > d &amp; e")))).toBe(
+			"<p>a &amp; b &lt; c &gt; d &amp; e</p>\n",
+		);
+	});
+
+	test("renders inline formatting inside tight list items", () => {
+		const html = render(SURFACES[1].entry("- **bold** item\n- `code` and *em*"));
+		expect(html).toContain(
+			"<ul>\n<li><strong>bold</strong> item</li>\n<li><code>code</code> and <em>em</em></li>\n</ul>",
+		);
+	});
 
 	test("inlines the vendored marked bundle verbatim", () => {
 		// String.prototype.replace interprets `$&`-style patterns in replacement
