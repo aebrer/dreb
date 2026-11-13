@@ -21,6 +21,7 @@ What you get in exchange: a skill system, an extension API, custom agent definit
   - [Keyboard Shortcuts](#keyboard-shortcuts)
   - [Message Queue](#message-queue)
 - [Sessions](#sessions)
+  - [HTML Export](#html-export)
   - [Branching](#branching)
   - [Compaction](#compaction)
   - [Tab Title](#tab-title)
@@ -176,6 +177,8 @@ Standard editing keybindings for delete word, undo, etc. See [docs/keybindings.m
 
 Transcript content is optimized for copy/paste: assistant prose, code blocks, tool output, bash output, diffs, and subagent/background-agent results use terminal soft-wrap, so selecting from scrollback preserves long logical lines without app-injected hard newlines. Fixed-width chrome such as tables, boxes, overlays, and the footer remains width-constrained.
 
+Markdown strikethrough in the TUI, dashboard transcript, and HTML export follows GitHub's GFM rules: `~7 percent vs ~12 percent` stays literal, inline code spans cannot supply strike delimiters, and intentional `~~text~~` and `~text~` still strike. TUI markdown and buddy speech strip terminal-driving control characters, including those decoded from numeric character references. See [Markdown rendering](docs/tui.md#markdown) for the component API.
+
 ### Commands
 
 Type `/` in the editor to trigger commands. [Extensions](#extensions) can register custom commands, [skills](#skills) are available as `/skill:name`, and [prompt templates](#prompt-templates) expand via `/templatename`.
@@ -250,6 +253,12 @@ dreb --no-session        # Ephemeral mode (don't save)
 dreb --session <path>    # Use specific session file or ID
 dreb --fork <path>       # Fork specific session file or ID into a new session
 ```
+
+### HTML Export
+
+Use `/export [file]` in a session, or `dreb --export <session.jsonl> [output.html]` from the CLI, to create a self-contained HTML transcript.
+
+**Open only trusted exports.** Message content can include raw HTML, including inside lists. Exports do not sanitize that HTML or enforce a Content Security Policy: embedded handlers can run scripts, and unclosed tags such as `<title>` or `<script>` can hide the remainder of a message. The original JSONL session is unchanged. Terminal control-character stripping does not make an HTML export safe to open.
 
 ### Branching
 

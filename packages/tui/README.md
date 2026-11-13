@@ -406,8 +406,9 @@ md.setText("Updated markdown");
 
 **Features:**
 - Headings, bold, italic, code blocks, lists, links, blockquotes
+- GitHub GFM strikethrough (`~~text~~` and `~text~`); `~7 percent vs ~12 percent` stays literal, and inline code spans cannot supply strike delimiters
 - HTML tags rendered as plain text
-- Control characters are stripped, whether raw or decoded from character references such as `&#27;`, so markdown content can never emit terminal escape sequences (`sanitizeTerminalText()` and `markedTextToTerminal()` are exported for custom marked-based renderers)
+- Terminal-driving control characters are stripped, whether raw or decoded from character references such as `&#27;`; newlines are preserved, CR/CRLF becomes LF, and tabs become three spaces (`sanitizeTerminalText()` and `markedTextToTerminal()` are exported for custom marked-based renderers; see [Markdown rendering](../coding-agent/docs/tui.md#markdown))
 - Optional syntax highlighting via `highlightCode`
 - Padding support
 - Render caching for performance
