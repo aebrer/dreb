@@ -188,6 +188,42 @@ describe("HTML export — markdown strikethrough (GitHub GFM parity)", () => {
 		);
 	});
 
+	// After an inline raw <pre>, <code>, <kbd> or <script> tag, marked lexes text as
+	// already-escaped HTML and would write it out verbatim.
+	const RAW_CODE_TAG_TEXT = {
+		input: "Wrap the guard in <code>if (i<n) return;</code> before the loop.",
+		html: "<p>Wrap the guard in <code>if (i&lt;n) return;</code> before the loop.</p>\n",
+	};
+	const RAW_TAG_TEXT_CASES: Array<{ input: string; html: string }> = [
+		RAW_CODE_TAG_TEXT,
+		{
+			input: "x <code><svg/onload=alert(1)></code>",
+			html: "<p>x <code>&lt;svg/onload=alert(1)&gt;</code></p>\n",
+		},
+		{
+			input: "press <kbd>a<img src=x onerror=alert(1)//</kbd>",
+			html: "<p>press <kbd>a&lt;img src=x onerror=alert(1)//</kbd></p>\n",
+		},
+		{ input: "The <pre> block shows x<y here.", html: "<p>The <pre> block shows x&lt;y here.</p>\n" },
+		{
+			input: "<code>a & b &amp; c &#60; d</code>",
+			html: "<p><code>a &amp; b &amp; c &#60; d</code></p>\n",
+		},
+		{ input: "press <kbd>Ctrl</kbd>+<kbd>C</kbd>", html: "<p>press <kbd>Ctrl</kbd>+<kbd>C</kbd></p>\n" },
+	];
+
+	for (const { input, html } of RAW_TAG_TEXT_CASES) {
+		test(`escapes text inside inline raw tags: ${input}`, () => {
+			expect(markdownContent(render(SURFACES[1].entry(input)))).toBe(html);
+		});
+	}
+
+	for (const surface of SURFACES) {
+		test(`${surface.name}: text inside an inline raw <code> tag is escaped`, () => {
+			expect(markdownContent(render(surface.entry(RAW_CODE_TAG_TEXT.input)))).toBe(RAW_CODE_TAG_TEXT.html);
+		});
+	}
+
 	test("renders inline formatting inside tight list items", () => {
 		const html = render(SURFACES[1].entry("- **bold** item\n- `code` and *em*"));
 		expect(html).toContain(

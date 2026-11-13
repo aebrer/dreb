@@ -1386,6 +1386,31 @@ bar`,
 		});
 	});
 
+	describe("List item continuation lines", () => {
+		function render(text: string): string[] {
+			return new Markdown(text, 0, 0, defaultMarkdownTheme)
+				.render(80)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+		}
+
+		// A continuation indented past the item's content is lexed as indented code and merged
+		// into the item's text, terminating newline included.
+		it("adds no empty row after a deeply indented continuation in a loose list", () => {
+			assert.deepStrictEqual(render("- a\n      b\n\n- c"), ["- a", "  b", "- c"]);
+			assert.deepStrictEqual(render("1. a\n       b\n\n2. c"), ["1. a", "  b", "2. c"]);
+			assert.deepStrictEqual(render("- a\n      b\n      c\n\n- d"), ["- a", "  b", "  c", "- d"]);
+		});
+
+		it("adds no empty row when the continuation ends with inline formatting", () => {
+			assert.deepStrictEqual(render("- a\n      **b**\n\n- c"), ["- a", "  b", "- c"]);
+			assert.deepStrictEqual(render("- a\n      b `c`\n\n- d"), ["- a", "  b c", "- d"]);
+		});
+
+		it("adds no empty row before a nested list that follows the continuation", () => {
+			assert.deepStrictEqual(render("- a\n      b\n  - n\n- c"), ["- a", "  b", "  - n", "- c"]);
+		});
+	});
+
 	describe("Link reference definitions", () => {
 		function render(text: string): string[] {
 			return new Markdown(text, 0, 0, defaultMarkdownTheme)
@@ -1413,6 +1438,19 @@ bar`,
 		it("adds no blank row for a definition inside a blockquote", () => {
 			const lines = render("> q\n>\n> [r]: /u\n>\n> [r]");
 			assert.deepStrictEqual(lines.slice(1, -1), ["q", "", "r (/u)"]);
+		});
+
+		it("adds no trailing blank row for definitions that end the document", () => {
+			assert.deepStrictEqual(render("# H\n\n[r]: /url"), ["H"]);
+			assert.deepStrictEqual(render("# H\n\n[r]: /url\n\n"), ["H"]);
+			assert.deepStrictEqual(render("    code\n\n[r]: /url"), ["```", "  code", "```"]);
+			assert.deepStrictEqual(render("See [docs][1].\n\n[1]: https://example.com\n[2]: https://b.example"), [
+				"See docs (https://example.com).",
+			]);
+		});
+
+		it("keeps the blank row between blocks around a run of definitions", () => {
+			assert.deepStrictEqual(render("before\n\n[a]: /a\n[b]: /b\n\nafter [a]"), ["before", "", "after a (/a)"]);
 		});
 	});
 });

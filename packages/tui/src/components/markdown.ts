@@ -82,17 +82,20 @@ export function markedTextToTerminal(text: string): string {
 
 /**
  * marked ≥18 emits each link reference definition as a `def` token followed by its own `space`
- * token. Definitions render nothing, so drop each one together with that separator; otherwise
- * every hidden definition would leave a stray blank row.
+ * token. Definitions render nothing, so drop each run of them together with that separator;
+ * otherwise every hidden definition would leave a stray blank row. A run that ends the token list
+ * also takes the separator before it, so trailing definitions don't end the output with a blank row.
  */
 function withoutLinkDefinitions(tokens: Token[]): Token[] {
 	const visible: Token[] = [];
 	for (let i = 0; i < tokens.length; i++) {
 		if (tokens[i].type !== "def") {
 			visible.push(tokens[i]);
-		} else if (tokens[i + 1]?.type === "space") {
-			i++;
+			continue;
 		}
+		while (tokens[i + 1]?.type === "def") i++;
+		if (tokens[i + 1]?.type === "space") i++;
+		if (i === tokens.length - 1 && visible.at(-1)?.type === "space") visible.pop();
 	}
 	return visible;
 }
@@ -103,6 +106,19 @@ function withoutLinkDefinitions(tokens: Token[]): Token[] {
  */
 function codeBlockText(token: Tokens.Code): string {
 	return token.codeBlockStyle === "indented" ? token.text.replace(/\n+$/, "") : token.text;
+}
+
+/**
+ * Inline tokens of list-item text or a list-item paragraph, without a trailing line break. Inside a
+ * list item, marked merges a deeper-indented continuation line into the preceding text as indented
+ * code, and since marked 18 that code keeps its terminating newline, which would otherwise render
+ * as an extra empty row.
+ */
+function withoutTrailingNewline(tokens: Token[]): Token[] {
+	const last = tokens.at(-1);
+	if (last?.type !== "text" || last.tokens?.length || !last.text.endsWith("\n")) return tokens;
+	const text = last.text.replace(/\n+$/, "");
+	return text ? [...tokens.slice(0, -1), { ...last, text }] : tokens.slice(0, -1);
 }
 
 export class Markdown implements Component {
@@ -698,12 +714,12 @@ export class Markdown implements Component {
 				// Text content (may have inline tokens)
 				const text =
 					token.tokens && token.tokens.length > 0
-						? this.renderInlineTokens(token.tokens, styleContext)
+						? this.renderInlineTokens(withoutTrailingNewline(token.tokens), styleContext)
 						: token.text || "";
 				lines.push(...this.splitRenderedTextLines(text));
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
-				const text = this.renderInlineTokens(token.tokens || [], styleContext);
+				const text = this.renderInlineTokens(withoutTrailingNewline(token.tokens || []), styleContext);
 				lines.push(...this.splitRenderedTextLines(text));
 			} else if (token.type === "code") {
 				// Code block in list item

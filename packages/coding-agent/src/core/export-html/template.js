@@ -1494,6 +1494,16 @@
       marked.use({
         breaks: true,
         gfm: true,
+        // marked lexes the text after an inline raw <pre>, <code>, <kbd> or <script> tag as
+        // already-escaped HTML (`escaped: true`), and its renderer writes such text out verbatim,
+        // so `<code>if (i<n)</code>` would lose everything after `i` and `<code><svg onload=…>`
+        // would become live markup. Message text is never trusted as HTML here: clear the flag
+        // so marked's renderer escapes that text like any other.
+        walkTokens(token) {
+          if (token.type === 'text' && token.escaped) {
+            token.escaped = false;
+          }
+        },
         renderer: {
           // Code blocks: syntax highlight, no HTML escaping
           code(token) {
