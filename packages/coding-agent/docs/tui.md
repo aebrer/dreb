@@ -234,7 +234,11 @@ const spacer = new Spacer(2);  // 2 empty lines
 
 ### Markdown
 
-Renders markdown with syntax highlighting.
+Renders markdown with syntax highlighting. Terminal-driving control characters in the content, whether raw or decoded from character references such as `&#27;`, are stripped before styling. Newlines are preserved, CR/CRLF becomes LF, and tabs become three spaces.
+
+Strikethrough follows GitHub's GFM rules: `~7 percent vs ~12 percent` stays literal, while `~~text~~` and `~text~` strike. A tilde inside an inline code span is always code, never a strike delimiter. This strike behavior also applies to the dashboard transcript and HTML session export.
+
+For custom marked-based terminal renderers, `@dreb/tui` exports `sanitizeTerminalText()` for source text before lexing and `markedTextToTerminal()` for lexed inline text. The latter removes marked's ampersand encoding and sanitizes again after numeric character references have been decoded. Styling callbacks can still emit their own ANSI sequences.
 
 ```typescript
 const md = new Markdown(

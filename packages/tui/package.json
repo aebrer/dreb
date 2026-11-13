@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/tui",
-	"version": "2.83.0",
+	"version": "2.83.1",
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"type": "module",
 	"main": "dist/index.js",
@@ -42,7 +42,7 @@
 		"@types/mime-types": "^2.1.4",
 		"chalk": "^5.5.0",
 		"get-east-asian-width": "^1.3.0",
-		"marked": "^15.0.12",
+		"marked": "^18.2.0",
 		"mime-types": "^3.0.1"
 	},
 	"optionalDependencies": {

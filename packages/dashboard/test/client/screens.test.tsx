@@ -5759,22 +5759,19 @@ describe("dashboard client regressions", () => {
 
 	it("transcript renders thinking markdown and hides HTML-comment separators", () => {
 		const htmlComment = ["<", "!--", "provider separator", "--", ">"].join("");
-		const el = mount(() => (
-			<Transcript
-				entries={[
-					{
-						kind: "assistant",
-						blocks: [{ kind: "thinking", text: `**Before**\n\n${htmlComment}\n\nafter` }],
-						streaming: false,
-					},
-				]}
-			/>
-		));
+		const thinkingBody = (text: string) =>
+			mount(() => (
+				<Transcript entries={[{ kind: "assistant", blocks: [{ kind: "thinking", text }], streaming: false }]} />
+			)).querySelector(".thinking-body");
 
-		const body = el.querySelector(".thinking-body");
+		const body = thinkingBody(`**Before**\n\n${htmlComment}\n\nafter`);
 		expect(body?.querySelector("strong")?.textContent).toBe("Before");
-		expect(body?.textContent?.replace(/\n{2,}/g, "\n\n")).toBe("Before\n\nafter\n");
 		expect(body?.textContent).not.toContain(htmlComment);
+		// The hidden separator must not add a gap (`.thinking-body` is pre-wrap, so
+		// stray newlines between blocks would show): the two halves render as two
+		// paragraphs, exactly like the same thinking text with no separator.
+		expect([...(body?.querySelectorAll("p") ?? [])].map((p) => p.textContent)).toEqual(["Before", "after"]);
+		expect(body?.innerHTML).toBe(thinkingBody("**Before**\n\nafter")?.innerHTML);
 	});
 
 	it("settings toggles the browser-local expand-thinking preference", async () => {

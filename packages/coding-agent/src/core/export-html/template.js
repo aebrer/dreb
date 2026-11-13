@@ -1488,15 +1488,22 @@
       // INITIALIZATION
       // ============================================================
 
-      // Escape HTML tags in text (but not code blocks)
-      function escapeHtmlTags(text) {
-        return text.replace(/<(?=[a-zA-Z\/])/g, '&lt;');
-      }
-
-      // Configure marked with syntax highlighting and HTML escaping for text
+      // Configure marked with syntax highlighting. Plain text keeps marked's own renderer: it
+      // escapes HTML without double-encoding the `&amp;` that marked's lexer already produced, and
+      // renders the inline formatting nested in list-item text.
       marked.use({
         breaks: true,
         gfm: true,
+        // marked lexes the text after an inline raw <pre>, <code>, <kbd> or <script> tag as
+        // already-escaped HTML (`escaped: true`), and its renderer writes such text out verbatim,
+        // so `<code>if (i<n)</code>` would lose everything after `i` and `<code><svg onload=…>`
+        // would become live markup. Message text is never trusted as HTML here: clear the flag
+        // so marked's renderer escapes that text like any other.
+        walkTokens(token) {
+          if (token.type === 'text' && token.escaped) {
+            token.escaped = false;
+          }
+        },
         renderer: {
           // Code blocks: syntax highlight, no HTML escaping
           code(token) {
@@ -1518,10 +1525,6 @@
               }
             }
             return `<pre><code class="hljs">${highlighted}</code></pre>`;
-          },
-          // Text content: escape HTML tags
-          text(token) {
-            return escapeHtmlTags(escapeHtml(token.text));
           },
           // Inline code: escape HTML
           codespan(token) {

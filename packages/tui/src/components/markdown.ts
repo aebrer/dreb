@@ -1,4 +1,4 @@
-import { marked, type Token } from "marked";
+import { marked, type Token, type Tokens } from "marked";
 import { isImageLine } from "../terminal-image.js";
 import type { Component } from "../tui.js";
 import { applyBackgroundErase, applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
@@ -50,6 +50,75 @@ export interface MarkdownTheme {
 interface InlineStyleContext {
 	applyText: (text: string) => string;
 	stylePrefix: string;
+}
+
+/**
+ * Control characters that must never reach the terminal from markdown content: C0 controls
+ * other than newline (tab and CR are normalized first), DEL, C1 controls, and the bidi
+ * embedding/override/isolate controls. ESC/CSI/OSC sequences built from these could clear the
+ * screen, hide text, move the cursor, or write the clipboard (OSC 52).
+ */
+const TERMINAL_UNSAFE_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+
+/**
+ * Make markdown-derived text safe to write to a terminal: normalize CRLF/CR to LF and tabs to
+ * three spaces, then strip every other control character.
+ */
+export function sanitizeTerminalText(text: string): string {
+	return text.replace(/\r\n?/g, "\n").replace(/\t/g, "   ").replace(TERMINAL_UNSAFE_CHARS, "");
+}
+
+/**
+ * Plain terminal text for a marked inline `text` token's `text`.
+ *
+ * Since marked 18 the lexer decodes numeric character references in a text run (`&#8212;`
+ * becomes `—`, `&#27;` becomes ESC) and, in that same run, encodes every bare `&` (and `&#38;`)
+ * as `&amp;` for its HTML renderer. A terminal is not HTML: turn `&amp;` back into `&`, then
+ * strip the control characters the decoding can produce.
+ */
+export function markedTextToTerminal(text: string): string {
+	return sanitizeTerminalText(text.replace(/&amp;/g, "&"));
+}
+
+/**
+ * marked ≥18 emits each link reference definition as a `def` token followed by its own `space`
+ * token. Definitions render nothing, so drop each run of them together with that separator;
+ * otherwise every hidden definition would leave a stray blank row. A run that ends the token list
+ * also takes the separator before it, so trailing definitions don't end the output with a blank row.
+ */
+function withoutLinkDefinitions(tokens: Token[]): Token[] {
+	const visible: Token[] = [];
+	for (let i = 0; i < tokens.length; i++) {
+		if (tokens[i].type !== "def") {
+			visible.push(tokens[i]);
+			continue;
+		}
+		while (tokens[i + 1]?.type === "def") i++;
+		if (tokens[i + 1]?.type === "space") i++;
+		if (i === tokens.length - 1 && visible.at(-1)?.type === "space") visible.pop();
+	}
+	return visible;
+}
+
+/**
+ * Lines of a code block. marked ≥18 keeps the terminating newline of indented code, which would
+ * otherwise render as an extra empty row; fenced code text is used as-is.
+ */
+function codeBlockText(token: Tokens.Code): string {
+	return token.codeBlockStyle === "indented" ? token.text.replace(/\n+$/, "") : token.text;
+}
+
+/**
+ * Inline tokens of list-item text or a list-item paragraph, without a trailing line break. Inside a
+ * list item, marked merges a deeper-indented continuation line into the preceding text as indented
+ * code, and since marked 18 that code keeps its terminating newline, which would otherwise render
+ * as an extra empty row.
+ */
+function withoutTrailingNewline(tokens: Token[]): Token[] {
+	const last = tokens.at(-1);
+	if (last?.type !== "text" || last.tokens?.length || !last.text.endsWith("\n")) return tokens;
+	const text = last.text.replace(/\n+$/, "");
+	return text ? [...tokens.slice(0, -1), { ...last, text }] : tokens.slice(0, -1);
 }
 
 export class Markdown implements Component {
@@ -112,11 +181,13 @@ export class Markdown implements Component {
 			return result;
 		}
 
-		// Replace tabs with 3 spaces for consistent rendering
-		const normalizedText = this.text.replace(/\t/g, "   ");
+		// Tabs become 3 spaces for consistent rendering, and raw control characters are stripped
+		// so source text can never drive the terminal (text tokens are re-sanitized after marked
+		// decodes their character references).
+		const normalizedText = sanitizeTerminalText(this.text);
 
 		// Parse markdown to HTML-like tokens
-		const tokens = marked.lexer(normalizedText);
+		const tokens = withoutLinkDefinitions(marked.lexer(normalizedText));
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];
@@ -350,16 +421,17 @@ export class Markdown implements Component {
 
 			case "code": {
 				const indent = this.theme.codeBlockIndent ?? "  ";
+				const code = codeBlockText(token as Tokens.Code);
 				lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
 				if (this.theme.highlightCode) {
-					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
+					const highlightedLines = this.theme.highlightCode(code, token.lang);
 					for (const hlLine of highlightedLines) {
 						const codeLine = `${indent}${hlLine}`;
 						lines.push(this.softWrap ? markWrappable(codeLine) : codeLine);
 					}
 				} else {
 					// Split code by newlines and style each line
-					const codeLines = token.text.split("\n");
+					const codeLines = code.split("\n");
 					for (const codeLine of codeLines) {
 						const styledCodeLine = `${indent}${this.theme.codeBlock(codeLine)}`;
 						lines.push(this.softWrap ? markWrappable(styledCodeLine) : styledCodeLine);
@@ -417,7 +489,7 @@ export class Markdown implements Component {
 					applyText: (text: string) => text,
 					stylePrefix: quoteStylePrefix,
 				};
-				const quoteTokens = token.tokens || [];
+				const quoteTokens = withoutLinkDefinitions(token.tokens || []);
 				const renderedQuoteLines: string[] = [];
 				for (let i = 0; i < quoteTokens.length; i++) {
 					const quoteToken = quoteTokens[i];
@@ -499,7 +571,7 @@ export class Markdown implements Component {
 					if (token.tokens && token.tokens.length > 0) {
 						result += this.renderInlineTokens(token.tokens, resolvedStyleContext);
 					} else {
-						result += applyTextWithNewlines(token.text);
+						result += applyTextWithNewlines(markedTextToTerminal(token.text));
 					}
 					break;
 
@@ -642,26 +714,27 @@ export class Markdown implements Component {
 				// Text content (may have inline tokens)
 				const text =
 					token.tokens && token.tokens.length > 0
-						? this.renderInlineTokens(token.tokens, styleContext)
+						? this.renderInlineTokens(withoutTrailingNewline(token.tokens), styleContext)
 						: token.text || "";
 				lines.push(...this.splitRenderedTextLines(text));
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
-				const text = this.renderInlineTokens(token.tokens || [], styleContext);
+				const text = this.renderInlineTokens(withoutTrailingNewline(token.tokens || []), styleContext);
 				lines.push(...this.splitRenderedTextLines(text));
 			} else if (token.type === "code") {
 				// Code block in list item
 				const indent = this.theme.codeBlockIndent ?? "  ";
+				const code = codeBlockText(token as Tokens.Code);
 				lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
 				if (this.theme.highlightCode) {
-					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
+					const highlightedLines = this.theme.highlightCode(code, token.lang);
 					for (const hlLine of highlightedLines) {
 						for (const codeLine of this.splitRenderedTextLines(hlLine)) {
 							lines.push(`${indent}${codeLine}`);
 						}
 					}
 				} else {
-					const codeLines = token.text.split("\n");
+					const codeLines = code.split("\n");
 					for (const codeLine of codeLines) {
 						lines.push(`${indent}${this.theme.codeBlock(codeLine)}`);
 					}

@@ -130,6 +130,53 @@ describe("BuddyComponent", () => {
 			expect(joined).toContain("_maybe_");
 		});
 
+		it("keeps approximate-value tildes literal and code spans intact (GFM strikethrough rules)", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("about ~7 percent vs ~12 percent (see `~`)");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			// The bubble has no strikethrough styling, so a false `del` match used to
+			// silently drop the opening `~` and break the `~` code span.
+			const joined = lines.join("\n");
+			expect(joined).toContain("about ~7 percent vs ~12 percent (see `~`)");
+		});
+
+		it("never writes control characters decoded from character references", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("beep &#27;[2J boop &#27;]52;c;aGk=&#7; **bold &#x1b;c** &#155;31m");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			expect(joined).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+			expect(joined).toContain("beep [2J boop ]52;c;aGk= **bold c** 31m");
+		});
+
+		it("never writes raw control characters from speech text", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("raw \x1b[2J text and `code \x1b[31m`");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			expect(joined).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+			expect(joined).toContain("raw [2J text and `code [31m`");
+		});
+
+		it("renders ampersands as written next to numeric character references", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("Q&A &#8212; R&D");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			expect(lines.join("\n")).toContain("Q&A — R&D");
+		});
+
 		it("word-wraps long speech text", () => {
 			const state = createTestState();
 			const comp = new BuddyComponent(mockUI, state);

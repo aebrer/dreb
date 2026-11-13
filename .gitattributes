@@ -2,3 +2,6 @@
 # their original line endings and trailing spaces; hashes verify these copies.
 packages/dashboard/src/client/assets/fonts/expanded/licenses/** -text whitespace=-blank-at-eol,-blank-at-eof
 packages/dashboard/src/client/assets/fonts/expanded/metadata/*.pb -text whitespace=-blank-at-eol,-blank-at-eof
+# Vendored marked bundle: a byte-for-byte copy of node_modules/marked/lib/marked.umd.js
+# (test/export-html-markdown.test.ts compares them), so never normalize line endings.
+packages/coding-agent/src/core/export-html/vendor/marked.umd.js -text

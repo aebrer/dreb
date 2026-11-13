@@ -83,6 +83,8 @@ dreb ships with 13 standard built-in tools enabled by default: `read`, `write`, 
 
 `find` supports basename globs such as `*.ts` and path globs such as `src/**/*.spec.ts`. Use forward slashes in patterns on every platform, including Windows. In path globs, `*` stays within one directory and `**/` can match zero or more directories; traversal still respects `.gitignore`.
 
+Strikethrough in the TUI Markdown component, dashboard transcript, and HTML session export follows GitHub's GFM rules. Approximation text such as `~7 percent vs ~12 percent` stays literal, and a tilde inside an inline code span never closes a strike. Intentional `~~text~~` and `~text~` still strike. The TUI strips terminal-driving control characters from markdown content; see [Markdown rendering](packages/coding-agent/docs/tui.md#markdown).
+
 Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `/tree`, `/fork`, `/compact`, `/dream`, `/buddy`, `/export`, `/reload`, and `/hotkeys`. The message queue lets you steer a running agent or queue follow-up work without waiting for the current turn to finish.
 
 ### Provider and model routing
@@ -109,7 +111,7 @@ dreb packages make those resources installable and shareable through npm, git, U
 
 ### Sessions, memory, and continuity
 
-Sessions are persistent JSONL files with a tree structure. You can resume recent sessions, browse past sessions, branch in-place with `/tree`, fork sessions into new files, compact long conversations, import/export JSONL, export HTML, or choose a custom session directory.
+Sessions are persistent JSONL files with a tree structure. You can resume recent sessions, browse past sessions, branch in-place with `/tree`, fork sessions into new files, compact long conversations, import/export JSONL, export HTML, or choose a custom session directory. HTML exports render raw message HTML, so open only trusted exports; see [HTML export and its trust boundary](packages/coding-agent/README.md#html-export).
 
 Main-session and subagent transcripts use separate roots. `sessionDir` (or CLI `--session-dir`) selects a flat main-session store; CLI precedence is flag, merged global/project settings, extension hook, then the built-in per-project tree. Dashboard host-wide inventory reads only the global `sessionDir` at startup, so restart Dashboard after changing it. Global-only `subagentSessionDir` controls new child logs; restart-time recovery also reads the legacy `~/.dreb/agent/subagent-sessions` root when different. Absolute paths remain absolute, `~` expands from the home directory, and relative paths use the relevant CLI/Dashboard/AgentSession startup cwd. Changing either root does not migrate existing files or affect credentials or general configuration. See [session settings](packages/coding-agent/docs/settings.md#sessions).
 

@@ -10,7 +10,14 @@
  */
 
 import type { Component, MarkdownTheme as MT, TUI } from "@dreb/tui";
-import { joinColumns, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@dreb/tui";
+import {
+	joinColumns,
+	markedTextToTerminal,
+	sanitizeTerminalText,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@dreb/tui";
 import { marked } from "marked";
 import { applyEyes, getSpeciesFrames, getSpeciesWidth } from "../../../core/buddy/buddy-species.js";
 import type { BuddyState } from "../../../core/buddy/buddy-types.js";
@@ -370,7 +377,9 @@ export class BuddyComponent implements Component {
 	/** Render inline markdown tokens (bold, italic, code) to ANSI-styled text */
 	private renderInlineMarkdown(text: string): string {
 		const mdTheme = getMarkdownTheme();
-		const tokens = marked.lexer(text);
+		// Speech is model output: strip raw control characters before lexing (text tokens are
+		// re-sanitized after marked decodes their character references).
+		const tokens = marked.lexer(sanitizeTerminalText(text));
 
 		// Flatten: we expect a paragraph containing inline tokens
 		const inlineTokens = tokens.flatMap((t: any) =>
@@ -386,7 +395,10 @@ export class BuddyComponent implements Component {
 		for (const token of tokens) {
 			switch (token.type) {
 				case "text":
-					result += token.text ?? this.renderInlineTokens(token.tokens ?? [], mdTheme);
+					result +=
+						typeof token.text === "string"
+							? markedTextToTerminal(token.text)
+							: this.renderInlineTokens(token.tokens ?? [], mdTheme);
 					break;
 				case "strong":
 					result += mdTheme.bold(this.renderInlineTokens(token.tokens ?? [], mdTheme));

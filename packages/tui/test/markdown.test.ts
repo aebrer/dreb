@@ -2,7 +2,7 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
-import { Markdown } from "../src/components/markdown.js";
+import { Markdown, type MarkdownTheme } from "../src/components/markdown.js";
 import { type Component, TUI } from "../src/tui.js";
 import { defaultMarkdownTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
@@ -1138,6 +1138,319 @@ bar`,
 				joinedPlain.includes("<div>") && joinedPlain.includes("</div>"),
 				"Should render HTML in code blocks",
 			);
+		});
+	});
+
+	describe("Spacing after HTML blocks", () => {
+		it("should have one blank line between an HTML block and the following paragraph", () => {
+			const markdown = new Markdown("<div>hi</div>\n\ntext", 0, 0, defaultMarkdownTheme);
+			const plainLines = markdown.render(80).map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+
+			assert.deepStrictEqual(plainLines, ["<div>hi</div>", "", "text"]);
+		});
+	});
+
+	describe("Strikethrough (GitHub GFM parity)", () => {
+		// The reported bug: `~` used as "approximately" turned unrelated text into
+		// strikethrough, and could even close on a `~` inside an inline code span.
+		const REPORTED =
+			'Starting from the first ~ in "~7 percent vs ~12 percent", the 7 passes the lookahead, but the next `~` sits after a space, so nothing ends a valid match there.';
+
+		// Bracket markers make strikethrough and code-span boundaries exact in assertions.
+		const markerTheme = {
+			...defaultMarkdownTheme,
+			strikethrough: (text: string) => `[del]${text}[/del]`,
+			code: (text: string) => `[code]${text}[/code]`,
+		};
+
+		function renderInline(text: string): string {
+			const markdown = new Markdown(text, 0, 0, markerTheme);
+			return markdown
+				.render(400)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd())
+				.join("\n");
+		}
+
+		// Expected output for each input matches GitHub's GFM renderer.
+		const cases: Array<{ name: string; input: string; expected: string }> = [
+			{
+				name: "reported example: no strikethrough, code span intact",
+				input: REPORTED,
+				expected:
+					'Starting from the first ~ in "~7 percent vs ~12 percent", the 7 passes the lookahead, but the next [code]~[/code] sits after a space, so nothing ends a valid match there.',
+			},
+			{
+				name: "approximate values with a code-span tilde",
+				input: "about ~7 percent vs ~12 percent (see `~`)",
+				expected: "about ~7 percent vs ~12 percent (see [code]~[/code])",
+			},
+			{
+				name: "tilde after punctuation and before a word cannot close",
+				input: "(~7 percent) vs (~12 percent)",
+				expected: "(~7 percent) vs (~12 percent)",
+			},
+			{
+				name: "intra-word tildes still strike",
+				input: "range 5~7 and 10~12",
+				expected: "range 5[del]7 and 10[/del]12",
+			},
+			{
+				name: "double and single tilde strikethrough still work",
+				input: "~~real strike~~ and ~single strike~",
+				expected: "[del]real strike[/del] and [del]single strike[/del]",
+			},
+			{
+				name: "double tilde opening after a space still strikes",
+				input: "word ~~real strike~~ here",
+				expected: "word [del]real strike[/del] here",
+			},
+			{
+				name: "single tilde opening after a space still strikes",
+				input: "a ~single~ b",
+				expected: "a [del]single[/del] b",
+			},
+		];
+
+		for (const { name, input, expected } of cases) {
+			it(name, () => {
+				assert.strictEqual(renderInline(input), expected);
+			});
+		}
+
+		it("does not emit the strikethrough SGR for the reported example with the real theme", () => {
+			const markdown = new Markdown(REPORTED, 0, 0, defaultMarkdownTheme);
+			const rendered = markdown.render(400).join("\n");
+
+			assert.ok(!rendered.includes("\x1b[9m"), `Unexpected strikethrough in ${JSON.stringify(rendered)}`);
+			assert.ok(rendered.includes(chalk.yellow("~")), "Expected the `~` code span to be styled as inline code");
+		});
+
+		it("emits the strikethrough SGR for intentional strikethrough with the real theme", () => {
+			const markdown = new Markdown("~~done~~", 0, 0, defaultMarkdownTheme);
+			const rendered = markdown.render(80).join("\n");
+
+			assert.ok(
+				rendered.includes(chalk.strikethrough("done")),
+				`Expected strikethrough in ${JSON.stringify(rendered)}`,
+			);
+		});
+	});
+
+	describe("Character references and terminal safety", () => {
+		// Identity theme: every control character in the output came from the markdown content.
+		const plainTheme: MarkdownTheme = {
+			heading: (text) => text,
+			link: (text) => text,
+			linkUrl: (text) => text,
+			code: (text) => text,
+			codeBlock: (text) => text,
+			codeBlockBorder: (text) => text,
+			quote: (text) => text,
+			quoteBorder: (text) => text,
+			hr: (text) => text,
+			listBullet: (text) => text,
+			bold: (text) => text,
+			italic: (text) => text,
+			strikethrough: (text) => text,
+			underline: (text) => text,
+		};
+		const UNSAFE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+
+		function renderPlain(text: string): string[] {
+			return new Markdown(text, 0, 0, plainTheme).render(200).map((line) => line.trimEnd());
+		}
+
+		function assertTerminalSafe(lines: string[], input: string): void {
+			for (const line of lines) {
+				assert.ok(!UNSAFE.test(line), `Control character from ${JSON.stringify(input)} in ${JSON.stringify(line)}`);
+			}
+		}
+
+		// marked 18 decodes numeric character references in text, so these would otherwise
+		// reach the terminal as ESC/CSI/OSC sequences, a CR, a BEL, or a bidi override.
+		const decodedControls: Array<{ name: string; input: string; expected: string[] }> = [
+			{ name: "CSI erase display", input: "before &#27;[2J after", expected: ["before [2J after"] },
+			{
+				name: "OSC 52 clipboard write",
+				input: "osc &#27;]52;c;aGVsbG8=&#7; end",
+				expected: ["osc ]52;c;aGVsbG8= end"],
+			},
+			{ name: "hex escape with SGR", input: "x &#x1b;[31mRED&#x1B;[0m y", expected: ["x [31mRED[0m y"] },
+			{ name: "C1 CSI", input: "c1 &#155;31m x", expected: ["c1 31m x"] },
+			{ name: "DEL", input: "del &#127; x", expected: ["del  x"] },
+			{ name: "bidi override", input: "bidi &#8238;txet", expected: ["bidi txet"] },
+			{ name: "carriage return", input: "one&#13;two", expected: ["one", "two"] },
+			{ name: "tab", input: "tab&#9;tab", expected: ["tab   tab"] },
+		];
+
+		for (const { name, input, expected } of decodedControls) {
+			it(`strips decoded control characters: ${name}`, () => {
+				const lines = renderPlain(input);
+				assertTerminalSafe(lines, input);
+				assert.deepStrictEqual(lines, expected);
+			});
+		}
+
+		it("strips decoded control characters in every inline context", () => {
+			// ESC c (RIS) resets the whole terminal.
+			const inputs = [
+				"# heading &#27;cRESET",
+				"**bold &#27;cRESET**",
+				"- item &#27;cRESET",
+				"| a |\n|---|\n| cell &#27;cRESET |",
+				"[link &#27;cRESET](https://example.com)",
+				"> quote &#27;cRESET",
+				"~~struck &#27;cRESET~~",
+			];
+			for (const input of inputs) {
+				const lines = renderPlain(input);
+				assertTerminalSafe(lines, input);
+				assert.ok(lines.join("\n").includes(" cRESET"), `Expected visible text for ${JSON.stringify(input)}`);
+			}
+		});
+
+		it("strips raw control characters from every token type", () => {
+			const inputs = [
+				"raw \x1b[2J text",
+				"`code \x1b[31m span`",
+				"```\nfenced \x1b]52;c;aGk=\x07 code\n```",
+				"    indented \x1b[2J code",
+				"inline <b>\x1b[31m</b> html",
+				"<div>\x1b[2J</div>",
+				"[link](https://example.com/\x1b[2J)",
+				"bidi \u202Etxet",
+			];
+			for (const input of inputs) {
+				assertTerminalSafe(renderPlain(input), input);
+			}
+		});
+
+		it("keeps character references inside code spans literal", () => {
+			assert.deepStrictEqual(renderPlain("`&#27;[2J`"), ["&#27;[2J"]);
+		});
+
+		const ampersandCases: Array<{ input: string; expected: string }> = [
+			// marked 18 encodes bare `&` as `&amp;` in any text run with a numeric reference.
+			{ input: "Q&A &#8212; R&D", expected: "Q&A — R&D" },
+			{ input: "Tom &#38; Jerry", expected: "Tom & Jerry" },
+			{ input: "it&#39;s fine & dandy", expected: "it's fine & dandy" },
+			{ input: "Q&A plain R&D", expected: "Q&A plain R&D" },
+			{ input: "write &amp; here", expected: "write & here" },
+		];
+
+		for (const { input, expected } of ampersandCases) {
+			it(`renders ampersands as written: ${input}`, () => {
+				assert.deepStrictEqual(renderPlain(input), [expected]);
+			});
+		}
+
+		it("renders ampersands as written in headings, list items and table cells", () => {
+			assert.deepStrictEqual(renderPlain("## Q&A &#8212; R&D"), ["Q&A — R&D"]);
+			assert.deepStrictEqual(renderPlain("- Q&A &#8212; R&D"), ["- Q&A — R&D"]);
+			assert.ok(renderPlain("| h |\n|---|\n| Q&A &#8212; R&D |").some((line) => line.includes("Q&A — R&D")));
+		});
+	});
+
+	describe("Indented code blocks", () => {
+		const identity = (text: string) => text;
+		const theme: MarkdownTheme = { ...defaultMarkdownTheme, codeBlock: identity, codeBlockBorder: identity };
+
+		function render(text: string, overrides: Partial<MarkdownTheme> = {}): string[] {
+			return new Markdown(text, 0, 0, { ...theme, ...overrides })
+				.render(80)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+		}
+
+		it("does not render the terminating newline as an extra row", () => {
+			assert.deepStrictEqual(render("    code\n"), ["```", "  code", "```"]);
+		});
+
+		it("keeps blank lines inside the block but not after it", () => {
+			assert.deepStrictEqual(render("    a\n\n    b\n"), ["```", "  a", "", "  b", "```"]);
+		});
+
+		it("does not add a trailing row when highlighted", () => {
+			const highlightCode = (code: string) => code.split("\n");
+			assert.deepStrictEqual(render("    code\n", { highlightCode }), ["```", "  code", "```"]);
+		});
+
+		it("does not add a trailing row inside a list item", () => {
+			assert.deepStrictEqual(render("- item\n\n      code1\n      code2\n\n- next"), [
+				"- item",
+				"  ```",
+				"    code1",
+				"    code2",
+				"  ```",
+				"- next",
+			]);
+		});
+	});
+
+	describe("List item continuation lines", () => {
+		function render(text: string): string[] {
+			return new Markdown(text, 0, 0, defaultMarkdownTheme)
+				.render(80)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+		}
+
+		// A continuation indented past the item's content is lexed as indented code and merged
+		// into the item's text, terminating newline included.
+		it("adds no empty row after a deeply indented continuation in a loose list", () => {
+			assert.deepStrictEqual(render("- a\n      b\n\n- c"), ["- a", "  b", "- c"]);
+			assert.deepStrictEqual(render("1. a\n       b\n\n2. c"), ["1. a", "  b", "2. c"]);
+			assert.deepStrictEqual(render("- a\n      b\n      c\n\n- d"), ["- a", "  b", "  c", "- d"]);
+		});
+
+		it("adds no empty row when the continuation ends with inline formatting", () => {
+			assert.deepStrictEqual(render("- a\n      **b**\n\n- c"), ["- a", "  b", "- c"]);
+			assert.deepStrictEqual(render("- a\n      b `c`\n\n- d"), ["- a", "  b c", "- d"]);
+		});
+
+		it("adds no empty row before a nested list that follows the continuation", () => {
+			assert.deepStrictEqual(render("- a\n      b\n  - n\n- c"), ["- a", "  b", "  - n", "- c"]);
+		});
+	});
+
+	describe("Link reference definitions", () => {
+		function render(text: string): string[] {
+			return new Markdown(text, 0, 0, defaultMarkdownTheme)
+				.render(80)
+				.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+		}
+
+		it("adds no blank row before the content that follows a leading definition", () => {
+			assert.deepStrictEqual(render("[ref]: /url\n\n[ref]"), ["ref (/url)"]);
+		});
+
+		it("keeps a single blank row between paragraphs around a definition", () => {
+			assert.deepStrictEqual(render("before\n\n[ref]: /url\n\nafter"), ["before", "", "after"]);
+		});
+
+		it("adds no blank rows for consecutive definitions", () => {
+			assert.deepStrictEqual(render("[a]: /a\n\n[b]: /b\n\n[a] [b]"), ["a (/a) b (/b)"]);
+			assert.deepStrictEqual(render("[a]: /a\n[b]: /b\n\n[a] [b]"), ["a (/a) b (/b)"]);
+		});
+
+		it("keeps a single blank row after a heading followed by a definition", () => {
+			assert.deepStrictEqual(render("# H\n\n[ref]: /url\n\ntext [ref]"), ["H", "", "text ref (/url)"]);
+		});
+
+		it("adds no blank row for a definition inside a blockquote", () => {
+			const lines = render("> q\n>\n> [r]: /u\n>\n> [r]");
+			assert.deepStrictEqual(lines.slice(1, -1), ["q", "", "r (/u)"]);
+		});
+
+		it("adds no trailing blank row for definitions that end the document", () => {
+			assert.deepStrictEqual(render("# H\n\n[r]: /url"), ["H"]);
+			assert.deepStrictEqual(render("# H\n\n[r]: /url\n\n"), ["H"]);
+			assert.deepStrictEqual(render("    code\n\n[r]: /url"), ["```", "  code", "```"]);
+			assert.deepStrictEqual(render("See [docs][1].\n\n[1]: https://example.com\n[2]: https://b.example"), [
+				"See docs (https://example.com).",
+			]);
+		});
+
+		it("keeps the blank row between blocks around a run of definitions", () => {
+			assert.deepStrictEqual(render("before\n\n[a]: /a\n[b]: /b\n\nafter [a]"), ["before", "", "after a (/a)"]);
 		});
 	});
 });

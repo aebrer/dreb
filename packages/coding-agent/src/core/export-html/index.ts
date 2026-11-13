@@ -144,7 +144,9 @@ function generateHtml(sessionData: SessionData, themeName?: string): string {
 	const template = readFileSync(join(templateDir, "template.html"), "utf-8");
 	const templateCss = readFileSync(join(templateDir, "template.css"), "utf-8");
 	const templateJs = readFileSync(join(templateDir, "template.js"), "utf-8");
-	const markedJs = readFileSync(join(templateDir, "vendor", "marked.min.js"), "utf-8");
+	// Byte-for-byte copy of the installed marked package's lib/marked.umd.js;
+	// test/export-html-markdown.test.ts fails if the two drift apart.
+	const markedJs = readFileSync(join(templateDir, "vendor", "marked.umd.js"), "utf-8");
 	const hljsJs = readFileSync(join(templateDir, "vendor", "highlight.min.js"), "utf-8");
 
 	const themeVars = generateThemeVars(themeName);
