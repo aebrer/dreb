@@ -5,6 +5,7 @@
 
 import { createEffect, createMemo, type JSX, Match, onCleanup, onMount, Switch } from "solid-js";
 import { ToastRegion } from "./components/common.js";
+import { CloudWorkspacesScreen } from "./screens/cloud-workspaces.js";
 import { FilesScreen } from "./screens/files.js";
 import { FleetScreen } from "./screens/fleet.js";
 import { MemoriesScreen } from "./screens/memories.js";
@@ -191,6 +192,14 @@ export function App(): JSX.Element {
 				</Match>
 				<Match when={store.route().screen === "memories"}>
 					<MemoriesScreen store={store} />
+				</Match>
+				<Match
+					when={
+						store.route().screen === "settings" &&
+						(store.route() as { target?: string }).target === "cloud-workspaces"
+					}
+				>
+					<CloudWorkspacesScreen store={store} />
 				</Match>
 				<Match when={store.route().screen === "settings"}>
 					<SettingsScreen

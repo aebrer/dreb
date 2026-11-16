@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   publish:
+    # This personal downstream must never publish into upstream-owned @dreb namespaces.
+    if: github.repository == 'aebrer/dreb'
     name: Publish packages
     runs-on: ubuntu-latest
     steps:

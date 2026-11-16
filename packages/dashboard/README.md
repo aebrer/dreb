@@ -1,5 +1,7 @@
 # @dreb/dashboard
 
+> **Personal downstream:** this branch retains cloud workspaces as a fork integration, not an upstream Dashboard feature or a drop-in extension. See the [maintenance/source-launch guide](../../CLOUD-WORKSPACES-MAINTENANCE.md). The npm commands below install upstream packages, not this downstream build.
+
 Web dashboard for [dreb](https://github.com/aebrer/dreb) — a visual, real-time,
 mobile-friendly interface for browsing projects and sessions, controlling
 multiple dreb agents, watching background subagents live, and using dreb from
@@ -34,7 +36,7 @@ Open `http://127.0.0.1:5343`.
 
 Dashboard snapshots main-session storage when the server starts. It reads only the global `sessionDir` from `<agent-dir>/settings.json` (normally `~/.dreb/agent/settings.json`, or the directory selected by `DREB_CODING_AGENT_DIR`); a project `.dreb/settings.json` in the launch directory cannot redirect host-wide inventory. When configured, that directory is treated as a flat JSONL store for Fleet, `/api/sessions`, resync, resume, rename, and delete. Without it, Dashboard scans the built-in nested all-project tree.
 
-Absolute paths remain absolute, `~` expands from the home directory, and a relative global `sessionDir` resolves against Dashboard's startup cwd (an absolute global path is recommended). Restart Dashboard after changing the setting. The separate global-only `subagentSessionDir` controls new child logs in coding-agent runtimes; RPC recovery can also discover matching logs in the legacy root. Neither setting migrates files or changes credential/general configuration paths.
+Absolute paths remain absolute, `~` expands from the home directory, and a relative global `sessionDir` resolves against Dashboard's startup cwd (an absolute global path is recommended). Cloud Workspaces offers an independent, confirmed save/reset of both global log defaults; it never changes active session files or restarts Dashboard. Its `restartRequired` compares the configured main root with the actual active startup snapshot. Restart Dashboard when agents are idle to switch inventory. Old flat-root logs may no longer be listed in the new inventory but remain accessible by exact path. The separate global-only `subagentSessionDir` controls new child logs in coding-agent runtimes; RPC recovery can also discover matching logs in the legacy root. Neither setting migrates files or changes credential/general configuration paths.
 
 ## Screens
 
@@ -121,7 +123,97 @@ Screenshots of each screen are in the [dreb README](https://github.com/aebrer/dr
   current pairing code, the 1–3650 day lifetime used by future pairings
   (180 days by default), and
   paired-device expiry/unpair management.
+- **Cloud Workspaces** — independent `#/settings/cloud-workspaces`, linked as
+  lowercase **cloud workspaces** from Settings → Devices, separately from pairing/access controls.
+  Connect a project with one folder path; manual forms/workspace management stay
+  under closed **advanced setup**. Separately opt into global session-log storage.
+  Refresh local availability, rebind the same ID and confirm local-only
+  unlink/disconnect without terminal or model setup. See [Cloud Workspaces](#cloud-workspaces).
 - **Pairing** — remote first-login rotating-code flow.
+
+### Cloud Workspaces
+
+Open **Settings → Devices → cloud workspaces** (`#/settings/cloud-workspaces`) and enter
+native absolute paths on the **backend host**, not your phone/browser. This
+independent page does not load ordinary Settings/model/version resources and
+needs no model credentials or terminal commands. Ordinary local workflows need
+no registration; projects can remain outside synced roots.
+
+The default form has one input, **Folder path on this computer**. **Connect
+folder** reuses an existing project marker or known already-registered mapping;
+no workspace setup or typed UUID is needed. Only an exact missing-project-marker
+result offers explicit first-device **Set up folder** confirmation. Markerless
+lookups compare the host's canonical directory with captured registered paths,
+retaining known project/workspace IDs across equivalent spellings. Known-ID
+failures never authorize a replacement identity. Consent binds the input and
+canonical host directory (shown when different); setup uses that captured
+directory rather than following a retargeted alias. Initialization is never automatic. On other hosts, wait for marker delivery and connect/link the
+existing identity; never initialize a replacement because a required marker is missing.
+
+Manual **Connect workspace**/**Link project** forms and workspace management stay
+inside closed native **advanced setup**. They retain existing-marker,
+first-marker initialization and known-full-ID markerless modes, with direct-local
+or explicit workspace-relative binding. Any present project marker must agree
+with the supplied UUID. Workspace and project UUID strings may match across their
+separate namespaces; different projects still need distinct project IDs.
+No folders are moved or discovered.
+
+Project paths appear first; full IDs, binding/root relationships and marker
+information are under **technical details**. **Refresh metadata** reports canonical
+available paths and per-location errors. Availability means local
+reachability/metadata validity, not synchronization or code equivalence. Failed
+refreshes keep last-good rows labelled stale; failed writes retain inputs and
+report errors/partial-initialization guidance. Same-ID **Rebind** uses the shared
+SDK `expectedId` guard, never initializes a replacement marker, and preserves
+explicit known-ID markerless project semantics. Confirmed **Unlink/Disconnect**
+removes only local mappings, not markers, folders, cloud content or transcripts.
+Dependent project IDs remain visible but unavailable after disconnect.
+
+Optional log storage uses that **same path input**, independently of project
+linking: choose **Store session logs here**, then explicitly confirm **Save log
+locations**. A logs-only folder need not be connected; projects can remain elsewhere.
+The selected existing root is canonicalized; defaults for **all projects** become
+`<root>/.dreb/sessions` and `<root>/.dreb/subagent-sessions` (`CONFIG_DIR_NAME` aware).
+Only the existing global `sessionDir` and `subagentSessionDir` fields in host-local
+`settings.json` change, preserving all others. Reading the page, connecting or
+editing paths never changes log settings. Confirmed **Use local log defaults**
+removes only those two fields. Mapping and log saves are separate operations,
+not a combined transaction.
+
+Saving/resetting creates no target log directories, markers, registry or logs,
+moves/copies/deletes no existing logs, changes no active session files and performs
+no restart. It changes future process defaults only; CLI/project main-session and
+global-only subagent precedence remain unchanged. Dashboard inventory needs an idle
+restart when its configured main root differs from its startup snapshot. The
+new inventory may omit old flat-root logs; those files remain accessible by exact path.
+
+Every **New Session** and replacement-directory dialog defaults to **local
+directory**, with recent choices unchanged and no registry request. Explicitly
+choose **linked project** in New Session, Fleet historical resume, or closed
+main Session/Subagent parent-resume replacement flows. The selected full ID,
+not its cached displayed path, goes to the backend for resolution immediately
+before canonical directory validation/runtime creation. Changed required markers
+or unavailable mappings fail without launch or fallback. Subagent-view resume
+still opens the captured parent transcript, not a child as a main session.
+
+Metadata operations start no utility/agent runtime, discover no providers, load
+no project context/settings/extensions and change no trust; the existing shell
+retains its normal inventory/SSE. Start/Resume follows normal startup in the
+chosen directory, including project settings, context and extensions. The local
+registry and separate global log configuration honor `DREB_CODING_AGENT_DIR`,
+separately from Dashboard pairing storage. Never sync the registry or entire agent
+directory; keep machine configuration, authentication and trust local. There are
+no new preference keys: only explicit log saves modify the two existing global
+fields. There is no polling or folder browser/native picker.
+
+This does not persist main/subagent project associations, automatically remap
+resume, or deliver portable parent/child/full-history continuation or safe
+cross-device handoff. Exact transcript paths, historical headers/CWDs, effective
+runtime CWD and storage precedence remain distinct. OneDrive transports files,
+not distributed locks, running processes or guaranteed checkpoints. See
+[setup and limits](../coding-agent/docs/cloud-workspaces.md) and the
+[exact REST/DTO contract](../coding-agent/docs/dashboard.md#cloud-workspace-api),
+including exclusive `cwd`/`projectId` runtime creation.
 
 ### Fleet search and filters
 

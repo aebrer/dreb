@@ -95,7 +95,10 @@ describe("resolveConfiguredDirectory", () => {
 	it("resolves relative paths against the explicit base and treats whitespace as unset", () => {
 		const base = join(tmpdir(), "runtime-cwd");
 		expect(resolveConfiguredDirectory("./session-logs", base)).toBe(resolve(base, "session-logs"));
+		expect(resolveConfiguredDirectory(" ./session-logs  ", base)).toBe(resolve(base, "session-logs"));
 		expect(getSubagentSessionsDir("./child-logs", base)).toBe(resolve(base, "child-logs"));
+		expect(resolveConfiguredDirectory(undefined, base)).toBeUndefined();
+		expect(resolveConfiguredDirectory("", base)).toBeUndefined();
 		expect(resolveConfiguredDirectory("   ", base)).toBeUndefined();
 	});
 });
