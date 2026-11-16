@@ -352,6 +352,8 @@ async function main(): Promise<void> {
 		serverVersion,
 		onRestart,
 		listAllSessions,
+		sessionInventoryRoot: customSessionInventoryRoot,
+		sessionStorageBaseCwd: startupCwd,
 		deleteSession: async (path: string) => {
 			const result = await SessionManager.deleteSession(path, {});
 			if (!result.ok) throw new Error(result.error ?? "Unknown deletion error");

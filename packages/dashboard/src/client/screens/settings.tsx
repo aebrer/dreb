@@ -1316,7 +1316,7 @@ export function SettingsScreen(props: {
 									: "exits the server process — only auto-restarts if run under a supervisor (systemd, pm2, …); otherwise the dashboard goes down. kills all running sessions"}
 							</span>
 						</span>
-						<span class="setting-control">
+						<span class="setting-control" style={{ "flex-shrink": 0 }}>
 							<button
 								type="button"
 								class="btn btn-small btn-danger"
@@ -1332,8 +1332,8 @@ export function SettingsScreen(props: {
 					</Show>
 				</section>
 
-				<section class="settings-section">
-					<h2>devices</h2>
+				<section class="settings-section" aria-labelledby="settings-devices-heading">
+					<h2 id="settings-devices-heading">devices</h2>
 					<div class="device-row">
 						<span>
 							this machine <span class="this-device">{auth()?.mode === "local" ? "local" : "host"}</span>
@@ -1419,6 +1419,22 @@ export function SettingsScreen(props: {
 							Tailscale access.
 						</p>
 					</Show>
+					<section class="settings-cloud-workspaces" aria-labelledby="settings-cloud-workspaces-heading">
+						<h3 id="settings-cloud-workspaces-heading">cloud workspaces</h3>
+						<div class="setting-row">
+							<span class="setting-label">
+								<span class="hint">
+									Optional workspace and project folder mappings on this host. Separate from device pairing and
+									access.
+								</span>
+							</span>
+							<span class="setting-control">
+								<a class="btn btn-small" href="#/settings/cloud-workspaces">
+									manage cloud workspaces
+								</a>
+							</span>
+						</div>
+					</section>
 				</section>
 
 				<footer>

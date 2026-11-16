@@ -1,10 +1,8 @@
-import { createSignal, For, type JSX, Show } from "solid-js";
-import type { FleetDto } from "../../shared/protocol.js";
+import { createSignal, type JSX, onCleanup, Show } from "solid-js";
+import type { FleetDto, RuntimeDirectorySelection } from "../../shared/protocol.js";
+import { runtimeDirectoryReady } from "../state/runtime-directory.js";
 import { Modal } from "./common.js";
-
-function shortenPath(path: string): string {
-	return path.replace(/^\/home\/[^/]+/, "~");
-}
+import { ProjectDirectorySelector } from "./project-directory-selector.js";
 
 /** Valid canonical project roots that are safe to offer for runtime creation. */
 export function runtimeProjectChoices(fleet: FleetDto): string[] {
@@ -21,42 +19,60 @@ export function ResumeSessionModal(props: {
 	historicalUnavailable?: boolean;
 	initialCwd?: string;
 	recentProjects: string[];
-	onResume: (cwd: string) => Promise<void>;
+	onResume: (directory: string | RuntimeDirectorySelection) => Promise<void>;
 	onClose: () => void;
 }): JSX.Element {
-	const [cwd, setCwd] = createSignal(props.initialCwd ?? "");
+	const [directory, setDirectory] = createSignal<RuntimeDirectorySelection>({
+		kind: "local",
+		cwd: props.initialCwd ?? "",
+	});
 	const [error, setError] = createSignal<string>();
 	const [busy, setBusy] = createSignal(false);
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 
 	async function resume(): Promise<void> {
-		if (busy() || !cwd().trim()) return;
+		if (disposed || busy() || !runtimeDirectoryReady(directory())) return;
 		setBusy(true);
 		setError(undefined);
 		try {
-			await props.onResume(cwd());
+			const selected = directory();
+			await props.onResume(selected.kind === "local" ? selected.cwd : selected);
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
+			if (!disposed) {
+				setError(err instanceof Error ? err.message : String(err));
+				setBusy(false);
+			}
 		}
 	}
 
 	return (
 		<Modal
 			title="choose runtime directory"
+			manageFocus
+			dismissDisabled={busy()}
 			onDismiss={() => {
 				if (!busy()) props.onClose();
 			}}
 			class="resume-session-modal"
 			actions={
 				<>
-					<button type="button" class="btn btn-small" disabled={busy()} onClick={props.onClose}>
+					<button
+						type="button"
+						class="btn btn-small"
+						disabled={busy()}
+						onClick={() => {
+							if (!busy()) props.onClose();
+						}}
+					>
 						cancel
 					</button>
 					<button
 						type="button"
 						class="btn btn-small btn-primary"
-						disabled={busy() || !cwd().trim()}
+						disabled={busy() || !runtimeDirectoryReady(directory())}
 						onClick={() => void resume()}
 					>
 						{busy() ? "resuming…" : "resume session"}
@@ -73,34 +89,15 @@ export function ResumeSessionModal(props: {
 				<span class="field-label">historical session path</span>
 				<code class="resume-historical-cwd">{props.historicalCwd || "(not recorded)"}</code>
 			</div>
-			<div class="field">
-				<label for="resume-runtime-cwd">runtime project path</label>
-				<input
-					id="resume-runtime-cwd"
-					type="text"
-					value={cwd()}
-					placeholder="/path/to/project"
-					disabled={busy()}
-					onInput={(event) => setCwd(event.currentTarget.value)}
-				/>
-				<p class="muted small">
-					Tools and project context will use this directory. Session history stays unchanged.
-				</p>
-			</div>
-			<Show when={props.recentProjects.length > 0}>
-				<div class="field">
-					<label for="resume-recent-projects">available projects</label>
-					<div class="recent-projects" id="resume-recent-projects">
-						<For each={props.recentProjects}>
-							{(project) => (
-								<button type="button" disabled={busy()} onClick={() => setCwd(project)}>
-									{shortenPath(project)}
-								</button>
-							)}
-						</For>
-					</div>
-				</div>
-			</Show>
+			<ProjectDirectorySelector
+				idPrefix="resume-runtime"
+				selection={directory()}
+				onChange={setDirectory}
+				recentProjects={props.recentProjects}
+				disabled={busy()}
+				localLabel="runtime project path"
+			/>
+			<p class="muted small">Tools and project context will use this directory. Session history stays unchanged.</p>
 			<Show when={error()}>
 				<p class="pair-error" role="alert">
 					{error()}

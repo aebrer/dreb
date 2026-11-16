@@ -218,6 +218,7 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 export type SettingsScope = "global" | "project";
 
 export interface SettingsStorage {
+	/** A write transformation may be reevaluated if another writer creates an initially absent file. */
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
 }
 
@@ -274,7 +275,7 @@ export class FileSettingsStorage implements SettingsStorage {
 				release = this.acquireLockSyncWithRetry(path);
 			}
 			const current = fileExists ? readFileSync(path, "utf-8") : undefined;
-			const next = fn(current);
+			let next = fn(current);
 			if (next !== undefined) {
 				// Only create directory when we actually need to write
 				if (!existsSync(dir)) {
@@ -282,8 +283,11 @@ export class FileSettingsStorage implements SettingsStorage {
 				}
 				if (!release) {
 					release = this.acquireLockSyncWithRetry(path);
+					// Another writer may have created the file since the absent-file probe.
+					// Recompute under the lock instead of publishing our stale initial snapshot.
+					if (existsSync(path)) next = fn(readFileSync(path, "utf-8"));
 				}
-				writeFileSync(path, next, "utf-8");
+				if (next !== undefined) writeFileSync(path, next, "utf-8");
 			}
 		} finally {
 			if (release) {

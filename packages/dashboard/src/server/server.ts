@@ -10,8 +10,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { checkSessionFile } from "@dreb/coding-agent";
+import { CloudSessionStorage, CloudWorkspaceError, CloudWorkspaceRegistry } from "@dreb/coding-agent/cloud-workspaces";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type {
@@ -32,6 +33,12 @@ import {
 	MAX_SESSION_PREVIEW_CHARACTERS,
 } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
+import {
+	CloudRequestError,
+	registerCloudWorkspaceRoutes,
+	runtimeDirectoryRequest,
+	sendCloudError,
+} from "./cloud-workspaces.js";
 import {
 	DASHBOARD_IMAGE_ID_PATTERN,
 	DashboardImageNotFoundError,
@@ -107,6 +114,14 @@ export interface DashboardServerOptions {
 	 * Defaults to the real API; the README screenshot harness injects fictional memory scopes.
 	 */
 	memoryApi?: DashboardMemoryApi;
+	/** Isolated host metadata registry; defaults lazily to the coding-agent directory convention. */
+	cloudWorkspaceRegistry?: CloudWorkspaceRegistry;
+	/** Global-only session storage; isolated profile injected by tests. */
+	cloudSessionStorage?: CloudSessionStorage;
+	/** Resolved main inventory root captured at server startup (undefined = built-in). */
+	sessionInventoryRoot?: string;
+	/** Base used for legacy relative global storage settings, matching startup inventory. */
+	sessionStorageBaseCwd?: string;
 }
 
 /** The Files API surface the server uses: a {@link FileApi} or a test replacement. */
@@ -232,6 +247,20 @@ interface AuthedRequest extends Request {
 
 export function createDashboardServer(options: DashboardServerOptions): DashboardServerApp {
 	const { auth, pool } = options;
+	let cloudRegistry = options.cloudWorkspaceRegistry;
+	const getCloudRegistry = () => {
+		cloudRegistry ??= new CloudWorkspaceRegistry();
+		return cloudRegistry;
+	};
+	let cloudSessionStorage = options.cloudSessionStorage;
+	const getCloudSessionStorage = () => {
+		cloudSessionStorage ??= new CloudSessionStorage({
+			agentDir: dirname(getCloudRegistry().path),
+			baseCwd: options.sessionStorageBaseCwd,
+			activeSessionDir: options.sessionInventoryRoot,
+		});
+		return cloudSessionStorage;
+	};
 	const serverStartedAt = new Date().toISOString();
 	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
 	const log = options.logger ?? ((line: string) => console.log(`[dashboard] ${line}`));
@@ -326,6 +355,8 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	// Authenticate before consuming request bodies. Diagnostics have their own
 	// small parser limit; the larger limit exists only for prompt image payloads.
 	app.use("/api/events/diagnostic", express.json({ limit: MAX_CLIENT_DIAGNOSTIC_BYTES }));
+	app.use("/api/cloud-workspaces", express.json({ limit: 16 * 1024, strict: false }));
+	app.post("/api/runtimes", express.json({ limit: MAX_PROMPT_BODY_BYTES, strict: false }));
 	const jsonBodyParser = express.json({ limit: MAX_PROMPT_BODY_BYTES });
 	app.use((req: Request, res: Response, next: NextFunction) => {
 		// /api/files/upload pipes the raw request stream into the destination
@@ -337,9 +368,19 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		if (uploadPath === "/api/files/upload" || uploadPath === "/api/files/upload/") return next();
 		jsonBodyParser(req, res, next);
 	});
-	app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+	app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+		const directoryRequest =
+			/^\/api\/cloud-workspaces(?:\/|$)/i.test(req.path) ||
+			(req.method === "POST" && /^\/api\/runtimes\/?$/i.test(req.path));
 		if ((err as { type?: string }).type === "entity.too.large") {
-			res.status(413).json({ error: "Request body is too large" });
+			res.status(413).json({
+				error: "Request body is too large",
+				...(directoryRequest ? { code: "INVALID_REQUEST" } : {}),
+			});
+			return;
+		}
+		if (directoryRequest && (err as { type?: string }).type === "entity.parse.failed") {
+			res.status(400).json({ code: "INVALID_REQUEST", error: "Expected valid JSON request metadata." });
 			return;
 		}
 		next(err);
@@ -752,10 +793,14 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		})().catch((err) => res.status(502).json({ error: String(err?.message ?? err) }));
 	});
 
+	// -- metadata-only workspaces (same authentication, no utility runtime) -------
+	registerCloudWorkspaceRoutes(app, getCloudRegistry, log, getCloudSessionStorage);
+
 	// -- runtimes ---------------------------------------------------------------
 	app.post("/api/runtimes", (req, res) => {
 		(async () => {
-			const requestedCwd = typeof req.body?.cwd === "string" ? req.body.cwd : "";
+			const source = runtimeDirectoryRequest(req.body);
+			const requestedCwd = "projectId" in source ? await getCloudRegistry().resolve(source.projectId) : source.cwd;
 			const cwd = await resolveExistingDirectory(requestedCwd);
 			const sessionPath = typeof req.body?.sessionPath === "string" ? req.body.sessionPath : undefined;
 			const handle = await pool.create(cwd, sessionPath);
@@ -763,7 +808,10 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			const firstPrompt = typeof req.body?.firstPrompt === "string" ? req.body.firstPrompt : undefined;
 			if (firstPrompt) await handle.client.prompt(firstPrompt);
 			res.status(201).json(await pool.describe(handle));
-		})().catch((err) => handleMemoryError(res, err));
+		})().catch((err) => {
+			if (err instanceof CloudWorkspaceError || err instanceof CloudRequestError) sendCloudError(res, err);
+			else handleMemoryError(res, err);
+		});
 	});
 
 	app.delete("/api/runtimes/:key", (req, res) => {

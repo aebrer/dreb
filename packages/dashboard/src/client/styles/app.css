@@ -34,6 +34,32 @@
 	}
 }
 
+/* Opted-in launch dialogs: long metadata scrolls without hiding pending/cancel actions.
+   Percentages follow the fixed backdrop's containing block, including installed-PWA sizing. */
+.modal[data-managed-modal] {
+	display: flex;
+	flex-direction: column;
+	max-height: 100%;
+	min-height: 0;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.modal[data-managed-modal] > .modal-title,
+.modal[data-managed-modal] > .modal-actions {
+	flex-shrink: 0;
+}
+
+.modal[data-managed-modal] > .modal-body {
+	min-height: 0;
+	overflow: auto;
+	overscroll-behavior: contain;
+}
+
+.modal[data-managed-modal] > .modal-actions {
+	flex-wrap: wrap;
+}
+
 /* ------------------------------------------------------------- app shell */
 
 html,
@@ -2277,6 +2303,16 @@ details.thinking .thinking-body {
 	border-bottom: var(--hairline);
 	padding-bottom: var(--space-2);
 	margin-bottom: var(--space-3);
+}
+
+.settings-cloud-workspaces {
+	margin-top: var(--space-5);
+	border-top: var(--hairline);
+	padding-top: var(--space-3);
+}
+
+.settings-cloud-workspaces .btn {
+	min-height: 44px;
 }
 
 .setting-row {

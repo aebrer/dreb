@@ -12,6 +12,7 @@ import type {
 	FleetDto,
 	FleetRuntimeSnapshotDto,
 	FleetSnapshotEventDto,
+	RuntimeDirectorySelection,
 	RuntimeInfoDto,
 	SessionStateDto,
 	SessionStatsDto,
@@ -34,13 +35,15 @@ import {
 	updateAttention,
 } from "./reducer.js";
 
+import { createRuntimeInDirectory, runtimeDirectoryReady } from "./runtime-directory.js";
+
 export type Route =
 	| { screen: "fleet" }
 	| { screen: "session"; key: string }
 	| { screen: "subagent"; key: string; agentId: string }
 	| { screen: "files"; path?: string }
 	| { screen: "memories" }
-	| { screen: "settings"; target?: "scoped-models"; cwd?: string }
+	| { screen: "settings"; target?: "scoped-models" | "cloud-workspaces"; cwd?: string }
 	| { screen: "pairing" };
 
 function parseHash(): Route {
@@ -54,6 +57,7 @@ function parseHash(): Route {
 	if (head === "files") return { screen: "files", path: rest.length ? decodeURIComponent(rest.join("/")) : undefined };
 	if (head === "memories") return { screen: "memories" };
 	if (head === "settings") {
+		if (rest[0] === "cloud-workspaces") return { screen: "settings", target: "cloud-workspaces" };
 		if (rest[0] === "scoped-models") {
 			const cwd = new URLSearchParams(query).get("cwd") || undefined;
 			return { screen: "settings", target: "scoped-models", ...(cwd ? { cwd } : {}) };
@@ -81,6 +85,7 @@ export function routeToHash(route: Route): string {
 		case "memories":
 			return "#/memories";
 		case "settings":
+			if (route.target === "cloud-workspaces") return "#/settings/cloud-workspaces";
 			return route.target === "scoped-models"
 				? `#/settings/scoped-models${route.cwd ? `?cwd=${encodeURIComponent(route.cwd)}` : ""}`
 				: "#/settings";
@@ -569,19 +574,16 @@ export function createAppStore() {
 			? fleet().diskSessions.find((candidate) => candidate.path === runtimeSessionFile)?.cwd
 			: undefined;
 		mutateSession(key, (session) => {
-			const previous = session.closed;
-			session.closed = {
-				...(runtime?.cwd || previous?.cwd ? { cwd: previous?.cwd ?? runtime?.cwd } : {}),
-				...(historicalCwd || previous?.historicalCwd
-					? { historicalCwd: previous?.historicalCwd ?? historicalCwd }
-					: {}),
-				...(runtime?.state.sessionFile || previous?.sessionFile
-					? { sessionFile: previous?.sessionFile ?? runtime?.state.sessionFile }
-					: {}),
-				...(previous?.bannerDismissed ? { bannerDismissed: true } : {}),
-				...(previous?.resuming ? { resuming: true } : {}),
-				...(previous?.resumeError ? { resumeError: previous.resumeError } : {}),
-			};
+			// Removal echoes and no-active resync reconcile the same closed lifecycle.
+			// Preserve its identity so a pending resume still owns its completion;
+			// hydration or releasing the view starts a genuinely new lifecycle.
+			session.closed ??= {};
+			const closed = session.closed;
+			if (closed.cwd === undefined && runtime?.cwd) closed.cwd = runtime.cwd;
+			if (closed.historicalCwd === undefined && historicalCwd) closed.historicalCwd = historicalCwd;
+			if (closed.sessionFile === undefined && runtime?.state.sessionFile) {
+				closed.sessionFile = runtime.state.sessionFile;
+			}
 			session.streaming = false;
 			session.compacting = false;
 			session.workingSince = undefined;
@@ -648,11 +650,15 @@ export function createAppStore() {
 		});
 	}
 
-	async function resumeClosedSession(key: string, cwdOverride?: string): Promise<void> {
+	async function resumeClosedSession(key: string, cwdOverride?: string | RuntimeDirectorySelection): Promise<void> {
 		const closed = sessions[key]?.closed;
 		if (!closed || closed.resuming) return;
-		const cwd = cwdOverride ?? closed.cwd;
-		if (!cwd || !closed.sessionFile) {
+		const directory = cwdOverride ?? closed.cwd;
+		if (
+			!directory ||
+			!runtimeDirectoryReady(typeof directory === "string" ? { kind: "local", cwd: directory } : directory) ||
+			!closed.sessionFile
+		) {
 			mutateSession(key, (session) => {
 				if (session.closed) session.closed.resumeError = "This closed session has no captured resume path.";
 			});
@@ -666,10 +672,10 @@ export function createAppStore() {
 		});
 		let runtime: RuntimeInfoDto;
 		try {
-			runtime = await api.createRuntime(cwd, { sessionPath: sessionFile });
+			runtime = await createRuntimeInDirectory(directory, { sessionPath: sessionFile });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			if (!sessions[key]?.closed) return;
+			if (sessions[key]?.closed !== closed) return;
 			mutateSession(key, (session) => {
 				if (!session.closed) return;
 				session.closed.resuming = false;
@@ -678,11 +684,12 @@ export function createAppStore() {
 			});
 			return;
 		}
+		const stillViewing = routeSessionKey(route()) === key && sessions[key]?.closed === closed;
 		upsertRuntime(runtime);
 		// The runtime is authoritative. Do not hold navigation behind the secondary
 		// disk inventory scan; that failure is independently exposed as fleetError.
 		void refreshDiskSessions().catch(() => {});
-		navigate({ screen: "session", key: runtime.key });
+		if (stillViewing) navigate({ screen: "session", key: runtime.key });
 	}
 
 	function refreshFleet(): Promise<boolean> {
