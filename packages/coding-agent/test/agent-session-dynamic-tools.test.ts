@@ -206,6 +206,31 @@ describe("AgentSession dynamic tool registration", () => {
 		session.dispose();
 	});
 
+	it("retains agreed work instructions and keeps human tools disabled after reconfiguration", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const resourceLoader = new DefaultResourceLoader({ cwd: tempDir, agentDir, settingsManager });
+		await resourceLoader.reload();
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			resourceLoader,
+			settingsManager,
+			model: findModel("anthropic", "sonnet")!,
+			sessionManager: SessionManager.inMemory(),
+			automationRole: "worker",
+		});
+		try {
+			const task = "Use judgment about the implementation, but stop if the public API would change.";
+			session.setAgreedAutomationInstructions(task);
+			session.setActiveToolsByName(["read", "ask_user", "edit", "suggest_next"]);
+			expect(session.getActiveToolNames()).toEqual(["read", "edit"]);
+			expect(session.systemPrompt).toContain(task);
+			expect(() => session.setAgreedAutomationInstructions("replace the task")).toThrow("Cannot replace");
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("returns source metadata for SDK custom tools", async () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();

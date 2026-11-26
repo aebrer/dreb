@@ -4014,3 +4014,61 @@ details.thinking .thinking-body {
 	outline: 2px solid var(--text);
 	outline-offset: 2px;
 }
+
+/* Goal setup and the saved decision log. */
+.automate-screen {
+	max-width: 840px;
+	margin: 0 auto;
+	padding: var(--space-5);
+	overflow-wrap: anywhere;
+}
+
+.automate-panel {
+	margin: var(--space-4) 0;
+	padding: var(--space-4);
+	border: var(--hairline);
+	border-radius: var(--radius);
+}
+
+.automation-models {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+	gap: var(--space-3);
+}
+
+.automation-models select {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.automation-chat .entry {
+	padding: var(--space-3);
+	margin-top: var(--space-2);
+}
+
+.automation-instructions {
+	white-space: pre-wrap;
+	margin: var(--space-3) 0;
+}
+
+.automation-runs {
+	list-style: none;
+	padding: 0;
+}
+
+.automation-runs li + li,
+.automation-decisions li + li {
+	border-top: var(--hairline);
+	padding-top: var(--space-3);
+}
+
+@media (max-width: 700px) {
+	.topbar nav {
+		flex-wrap: wrap;
+		gap: 0 var(--space-3);
+	}
+
+	.automate-screen .btn {
+		min-height: 44px;
+	}
+}

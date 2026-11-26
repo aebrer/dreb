@@ -36,6 +36,7 @@ import {
 
 export type Route =
 	| { screen: "fleet" }
+	| { screen: "automate"; id?: string }
 	| { screen: "session"; key: string }
 	| { screen: "subagent"; key: string; agentId: string }
 	| { screen: "files"; path?: string }
@@ -52,6 +53,7 @@ function parseHash(): Route {
 		return { screen: "session", key: rest[0] };
 	}
 	if (head === "files") return { screen: "files", path: rest.length ? decodeURIComponent(rest.join("/")) : undefined };
+	if (head === "automate") return { screen: "automate", ...(rest[0] ? { id: rest[0] } : {}) };
 	if (head === "memories") return { screen: "memories" };
 	if (head === "settings") {
 		if (rest[0] === "scoped-models") {
@@ -72,6 +74,8 @@ export function routeToHash(route: Route): string {
 	switch (route.screen) {
 		case "fleet":
 			return "#/";
+		case "automate":
+			return route.id ? `#/automate/${encodeURIComponent(route.id)}` : "#/automate";
 		case "session":
 			return `#/session/${route.key}`;
 		case "subagent":
@@ -165,6 +169,7 @@ function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[],
 }
 
 export function createAppStore() {
+	const [automationRevision, setAutomationRevision] = createSignal(0);
 	// sessions: reactive source of truth; reducer mutations are applied through
 	// Solid's produce so text deltas touch only the mutated leaf.
 	const [sessions, setSessions] = createStore<Record<string, SessionViewState>>({});
@@ -1008,6 +1013,8 @@ export function createAppStore() {
 			// This is a global event (key=""). It updates cards only and must never
 			// create a synthetic session reducer entry under the empty key.
 			applyFleetSnapshot((envelope.event as unknown as FleetSnapshotEventDto).runtimes, envelope.seq);
+		} else if (type === "automation_changed") {
+			setAutomationRevision((n) => n + 1);
 		} else if (type === "disk_sessions_changed") {
 			// A delete in another dashboard client should converge without bringing
 			// back the expensive full fleet endpoint.
@@ -1394,6 +1401,7 @@ export function createAppStore() {
 	}
 
 	return {
+		automationRevision,
 		sessions,
 		/** Per-session revision counters — bump on every applied envelope (autoscroll dependency). */
 		revisions,

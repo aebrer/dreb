@@ -31,6 +31,7 @@ import { type Browser, type BrowserContext, chromium, type Page, type Request, t
 import { build as buildVite } from "vite";
 import solid from "vite-plugin-solid";
 import { DashboardAuth } from "../../src/server/auth.js";
+import { AutomationStore } from "../../src/server/automation-store.js";
 import { RuntimePool } from "../../src/server/runtime-pool.js";
 import { createDashboardServer, type DashboardServerApp } from "../../src/server/server.js";
 import { createFixtureFileApi, createFixtureMemoryApi } from "./fixture-host-apis.js";
@@ -239,7 +240,28 @@ async function startDashboard(
 	poolNow = NOW_MS;
 
 	const available = new Set(FIXTURE_DIRECTORIES);
+	const automationStore = new AutomationStore();
+	automationStore.save({
+		id: "46536499-dca7-4c38-a6aa-361020cb70f6",
+		cwd: scenario.live[0].session.cwd,
+		createdAt: new Date(NOW_MS - 5 * 60_000).toISOString(),
+		status: "stopped",
+		instructions: "Fix the parser tests without changing the public API. Stop at 9am.",
+		workerModel: { provider: "example", id: "builder" },
+		guardModel: { provider: "example", id: "reviewer" },
+		decisions: [
+			{
+				action: "stop",
+				at: new Date(NOW_MS).toISOString(),
+				reason: "stop condition met",
+				report: "A regression test is still failing.",
+			},
+		],
+		outcome: "stop condition met",
+		finalReport: "A regression test is still failing.",
+	});
 	const app: DashboardServerApp = createDashboardServer({
+		automationStore,
 		auth: new DashboardAuth(),
 		pool,
 		staticDir: clientDir,
@@ -294,6 +316,8 @@ function routeHash(shot: ShotDefinition, runtimeKeys: Map<string, string>): stri
 	switch (shot.route.screen) {
 		case "fleet":
 			return "#/";
+		case "automate":
+			return "#/automate";
 		case "session":
 			return `#/session/${key(shot.route.runtime)}`;
 		case "subagent":

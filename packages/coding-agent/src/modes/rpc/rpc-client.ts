@@ -311,7 +311,7 @@ export class RpcClient {
 
 		this.process = null;
 		this._dead = true;
-		this.pendingRequests.clear();
+		this.failPendingRequests("RPC process stopped");
 	}
 
 	/**
@@ -355,6 +355,11 @@ export class RpcClient {
 	 */
 	async prompt(message: string, images?: ImageContent[]): Promise<void> {
 		await this.send({ type: "prompt", message, images });
+	}
+
+	/** Runs one automation turn through recovery and persistence; no wall-clock deadline. */
+	async automationTurn(message: string, guardFeedback = false): Promise<import("./rpc-types.js").RpcAutomationResult> {
+		return this.getData(await this.send({ type: "automation_turn", message, guardFeedback }, null));
 	}
 
 	/**
@@ -975,7 +980,7 @@ export class RpcClient {
 		}
 	}
 
-	private async send(command: RpcCommandBody, timeoutMs = 30000): Promise<RpcResponse> {
+	private async send(command: RpcCommandBody, timeoutMs: number | null = 30000): Promise<RpcResponse> {
 		if (this._dead || !this.process?.stdin) {
 			// Surface the real spawn cause (e.g. uid/gid EPERM) if one was captured,
 			// rather than a generic message that hides why the process is gone.
@@ -988,10 +993,13 @@ export class RpcClient {
 		const fullCommand = { ...command, id } as RpcCommand;
 
 		return new Promise((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				this.pendingRequests.delete(id);
-				reject(new Error(`Timeout waiting for response to ${command.type}. Stderr: ${this.stderr}`));
-			}, timeoutMs);
+			const timeout =
+				timeoutMs === null
+					? undefined
+					: setTimeout(() => {
+							this.pendingRequests.delete(id);
+							reject(new Error(`Timeout waiting for response to ${command.type}. Stderr: ${this.stderr}`));
+						}, timeoutMs);
 
 			this.pendingRequests.set(id, {
 				resolve: (response) => {

@@ -5,6 +5,7 @@
 import type { ThinkingLevel } from "@dreb/agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR } from "../config.js";
+import type { AutomationRole } from "../core/automation.js";
 import { log } from "../core/logger.js";
 import { allTools, type ToolName } from "../core/tools/index.js";
 
@@ -23,6 +24,7 @@ export interface Args {
 	version?: boolean;
 	mode?: Mode;
 	ui?: string;
+	automationRole?: AutomationRole;
 	rpcFullMessageUpdates?: boolean;
 	noSession?: boolean;
 	session?: string;
@@ -95,6 +97,10 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			}
 		} else if (arg === "--ui" && i + 1 < args.length) {
 			result.ui = args[++i];
+		} else if (arg === "--automation-role") {
+			const role = args[++i];
+			if (role !== "setup" && role !== "worker" && role !== "guard") throw new Error("Invalid automation role");
+			result.automationRole = role;
 		} else if (arg === "--rpc-full-message-updates") {
 			result.rpcFullMessageUpdates = true;
 		} else if (arg === "--continue" || arg === "-c") {

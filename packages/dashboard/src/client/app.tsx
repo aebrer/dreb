@@ -3,7 +3,7 @@
  * global toast region and the browser tab attention badge.
  */
 
-import { createEffect, createMemo, type JSX, Match, onCleanup, onMount, Switch } from "solid-js";
+import { createEffect, createMemo, type JSX, lazy, Match, onCleanup, onMount, Switch } from "solid-js";
 import { ToastRegion } from "./components/common.js";
 import { FilesScreen } from "./screens/files.js";
 import { FleetScreen } from "./screens/fleet.js";
@@ -14,6 +14,8 @@ import { SettingsScreen } from "./screens/settings.js";
 import { SubagentScreen } from "./screens/subagent.js";
 import { pendingQuestionsReason, resolveUiRequest } from "./state/reducer.js";
 import { createAppStore } from "./state/store.js";
+
+const AutomateScreen = lazy(async () => ({ default: (await import("./screens/automate.js")).AutomateScreen }));
 
 const SERVICE_WORKER_READY_TIMEOUT_MS = 5000;
 
@@ -185,6 +187,9 @@ export function App(): JSX.Element {
 				</Match>
 				<Match when={subagentRoute()} keyed>
 					{(route) => <SubagentScreen store={store} sessionKey={route.key} agentId={route.agentId} />}
+				</Match>
+				<Match when={store.route().screen === "automate"}>
+					<AutomateScreen store={store} />
 				</Match>
 				<Match when={store.route().screen === "files"}>
 					<FilesScreen store={store} initialPath={(store.route() as { path?: string }).path} />

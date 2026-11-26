@@ -58,6 +58,7 @@ Screenshots of each screen are in the [dreb README](https://github.com/aebrer/dr
   activity/subagent text, and past-session labels wrap within cards or rows
   rather than spilling off-screen. Accessible table headings, keyboard sorting
   buttons, and 44px touch targets are preserved. `+ new session` anywhere.
+- **Automate** — agree on a goal in chat and start it unattended with independently chosen orchestrator and guard models. The guard follows the agreed instructions to stop or continue, and Automate keeps the decisions, report, and saved work session. See [Goal automation](../coding-agent/docs/dashboard.md#goal-automation).
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
   inline provider/API failures with partial output preserved, compaction summaries,

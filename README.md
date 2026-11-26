@@ -165,6 +165,12 @@ Fleet home offers browser-local sorting through **integrated clickable headers**
 
 **Live subagent observability and steering.** Background subagents are first-class: the parent session has a bounded, scrollable panel listing every retained agent newest-first with full running/done counts, fleet cards show live counts, and each agent has a drill-in transcript that streams in real time and survives browser reloads. While a child is running, that view can queue the user's own steering messages directly to that child, showing its pending queue and effective one-at-a-time or all-at-once delivery mode, and its ■ stop cancels just that child — gracefully, so a hung tool like a long bash command is killed rather than orphaned — while the parent and other subagents keep running; stopped agents show as cancelled, and completed history remains read-only. The panel uses the task tracker's native collapse pattern and starts collapsed on mobile. When the Dispatch Arbiter is enabled, those views also show its host-validated changed, unchanged, or failed pre-spawn decision and the final routed agent/model/thinking—never raw arbiter output.
 
+**Automate** runs a goal unattended. Agree on the task, delegated decisions, and when to stop in chat. A separate task guard checks the work and decides whether to continue; the dashboard keeps each decision and the saved session. [Goal automation](packages/coding-agent/docs/dashboard.md#goal-automation).
+
+<p align="center">
+  <img src="packages/dashboard/docs/screenshots/automate-desktop-dark.png" alt="dreb dashboard Automate view showing the latest decision for a saved goal run" width="80%">
+</p>
+
 <p align="center">
   <img src="packages/dashboard/docs/screenshots/subagent-desktop-dark.png" alt="dreb dashboard subagent drill-in in dark mode: a running background agent's transcript with its own steering composer and stop control" width="80%">
 </p>

@@ -66,6 +66,7 @@ import {
 	steerBackgroundAgent,
 } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
+import { runAutomationTurn } from "./automation-turn.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import { createDashboardRpcEventProjector, projectRpcMessageUpdates } from "./rpc-event-projection.js";
 import type {
@@ -1937,7 +1938,7 @@ export async function runRpcMode(
 
 	// Set up extensions with RPC-based UI context
 	await session.bindExtensions({
-		uiContext: createExtensionUIContext(),
+		uiContext: session.automationRole ? undefined : createExtensionUIContext(),
 		commandContextActions: {
 			waitForIdle: () => session.agent.waitForIdle(),
 			newSession: async (options) => {
@@ -1986,7 +1987,7 @@ export async function runRpcMode(
 	const cwd = session.cwd;
 	const tabTitleSettings = session.settingsManager.getTabTitleSettings();
 	const tabTitleGenerator =
-		!session.sessionName && tabTitleSettings?.enabled !== false
+		!session.automationRole && !session.sessionName && tabTitleSettings?.enabled !== false
 			? new TabTitleGenerator(tabTitleSettings, {
 					setTitle: () => {},
 					setSessionName: (name) => {
@@ -2054,11 +2055,33 @@ export async function runRpcMode(
 		output(eventProjector ? eventProjector(event as unknown as Record<string, unknown>) : event);
 	});
 
+	let automationTurnActive = false;
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
 
 		switch (command.type) {
+			case "automation_turn": {
+				if (!session.automationRole || (command.guardFeedback && session.automationRole !== "worker")) {
+					return error(id, command.type, "This session does not support the requested automation turn");
+				}
+				if (automationTurnActive || typeof command.message !== "string" || !command.message.trim()) {
+					return error(id, command.type, "Automation requires one nonempty instruction at a time");
+				}
+				automationTurnActive = true;
+				try {
+					if (session.automationRole === "worker" && !command.guardFeedback) {
+						session.setAgreedAutomationInstructions(command.message);
+					}
+					return success(
+						id,
+						command.type,
+						await runAutomationTurn(session, command.message, command.guardFeedback === true),
+					);
+				} finally {
+					automationTurnActive = false;
+				}
+			}
 			// =================================================================
 			// Prompting
 			// =================================================================

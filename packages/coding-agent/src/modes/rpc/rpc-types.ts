@@ -21,7 +21,13 @@ import type { SourceInfo } from "../../core/source-info.js";
 // RPC Commands (stdin)
 // ============================================================================
 
+export interface RpcAutomationResult {
+	text: string;
+	evidence: Array<{ role: string; text: string }>;
+}
+
 export type RpcCommand =
+	| { id?: string; type: "automation_turn"; message: string; guardFeedback?: boolean }
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
@@ -306,6 +312,7 @@ export interface RpcSessionState {
 
 // Success responses with data
 export type RpcResponse =
+	| { id?: string; type: "response"; command: "automation_turn"; success: true; data: RpcAutomationResult }
 	// Prompting (async - events follow)
 	| { id?: string; type: "response"; command: "prompt"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }

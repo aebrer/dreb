@@ -38,6 +38,7 @@ import {
 import { getDocsPath, getSubagentSessionsDir } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { sleep } from "../utils/sleep.js";
+import { type AutomationRole, allowsAutomationTool } from "./automation.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
 import {
 	type CompactionResult,
@@ -252,6 +253,7 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** UI type for system prompt context (e.g. "tui", "telegram", "rpc") */
 	uiType?: string;
+	automationRole?: AutomationRole;
 	/** Optional performance tracker override, primarily for isolated tests. */
 	performanceTracker?: PerformanceTracker;
 	/** Inject the headless arbiter completion seam for deterministic, offline integration tests. */
@@ -269,6 +271,8 @@ export interface ExtensionBindings {
 export interface PromptOptions {
 	/** Whether to expand file-based prompt templates (default: true) */
 	expandPromptTemplates?: boolean;
+	/** Internal automation messages are literal, not interactive input for extension hooks. */
+	literalAutomationInput?: boolean;
 	/** Image attachments */
 	images?: ImageContent[];
 	/** When streaming, how to queue the message: "steer" (interrupt) or "followUp" (wait). Required if streaming. */
@@ -444,6 +448,8 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 	private _uiType?: string;
+	readonly automationRole?: AutomationRole;
+	private _agreedAutomationInstructions?: string;
 	private readonly _maxConcurrentSubagents: number;
 	private readonly _subagentsDisabledBySetting: boolean;
 	/**
@@ -498,6 +504,7 @@ export class AgentSession {
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._uiType = config.uiType;
+		this.automationRole = config.automationRole;
 		const configuredMaxConcurrentSubagents =
 			config.maxConcurrentSubagents ?? this.settingsManager.getMaxConcurrentSubagents();
 		if (!Number.isSafeInteger(configuredMaxConcurrentSubagents) || configuredMaxConcurrentSubagents < 0) {
@@ -1677,6 +1684,7 @@ export class AgentSession {
 		const validToolNames: string[] = [];
 		for (const name of toolNames) {
 			if (this._subagentsDisabledBySetting && name === "subagent") continue;
+			if (!allowsAutomationTool(this.automationRole, name)) continue;
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
 				tools.push(tool);
@@ -1802,6 +1810,16 @@ export class AgentSession {
 		return modelsJsonSettings ?? settingsJsonSettings;
 	}
 
+	/** Keep the confirmed task available even when old conversational turns are compacted. */
+	setAgreedAutomationInstructions(instructions: string): void {
+		if (this.automationRole !== "worker" || this._agreedAutomationInstructions !== undefined) {
+			throw new Error("Cannot replace agreed automation instructions in an existing session");
+		}
+		this._agreedAutomationInstructions = instructions;
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
+	}
+
 	private _rebuildSystemPrompt(toolNames: string[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
@@ -1825,6 +1843,9 @@ export class AgentSession {
 		const appendPromptParts = [...loaderAppendSystemPrompt];
 		if (modelPromptSettings?.appendSystemPrompt) {
 			appendPromptParts.push(modelPromptSettings.appendSystemPrompt);
+		}
+		if (this._agreedAutomationInstructions !== undefined) {
+			appendPromptParts.push(`User-agreed automation instructions:\n${this._agreedAutomationInstructions}`);
 		}
 		const appendSystemPrompt = appendPromptParts.length > 0 ? appendPromptParts.join("\n\n") : undefined;
 		const loadedSkills = this._getFilteredSkills();
@@ -1877,7 +1898,7 @@ export class AgentSession {
 		// Emit input event for extension interception (before skill/template expansion)
 		let currentText = text;
 		let currentImages = options?.images;
-		if (this._extensionRunner?.hasHandlers("input")) {
+		if (!options?.literalAutomationInput && this._extensionRunner?.hasHandlers("input")) {
 			const inputResult = await this._extensionRunner.emitInput(
 				currentText,
 				currentImages,
@@ -3835,6 +3856,26 @@ export class AgentSession {
 			const pending = this._retryPromise ?? this._recoveryPromise;
 			if (!pending) return;
 			await pending;
+		}
+	}
+
+	/** Wait for persistence, recovery, and child-result wakeups before handing work to a guard. */
+	async waitForAutomationSettled(): Promise<void> {
+		for (;;) {
+			await this.agent.waitForIdle();
+			const queued = this._agentEventQueue;
+			await queued;
+			await this._waitForAutomaticFollowUps();
+			if (this.isStreaming || queued !== this._agentEventQueue) continue;
+			if (getRunningBackgroundAgents().length === 0) return;
+			await new Promise<void>((resolve) => {
+				const dispose = this.subscribe((event) => {
+					if (event.type === "background_agent_end") {
+						dispose();
+						resolve();
+					}
+				});
+			});
 		}
 	}
 

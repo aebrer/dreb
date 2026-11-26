@@ -17,8 +17,9 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from "n
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveConfiguredDirectory, SessionManager, SettingsManager } from "@dreb/coding-agent";
+import { getAgentDir, resolveConfiguredDirectory, SessionManager, SettingsManager } from "@dreb/coding-agent";
 import { DashboardAuth } from "./server/auth.js";
+import { AutomationStore } from "./server/automation-store.js";
 import { DashboardImageService } from "./server/dashboard-images.js";
 import { ImagePreviewWorker } from "./server/image-preview.js";
 import { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairing-storage.js";
@@ -347,6 +348,7 @@ async function main(): Promise<void> {
 	const app = createDashboardServer({
 		auth,
 		pool,
+		automationStore: new AutomationStore(join(getAgentDir(), "dashboard-automation")),
 		imageService,
 		staticDir: existsSync(staticDir) ? staticDir : undefined,
 		serverVersion,

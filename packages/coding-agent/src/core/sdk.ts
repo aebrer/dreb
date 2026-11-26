@@ -83,6 +83,7 @@ export interface CreateAgentSessionOptions {
 	settingsManager?: SettingsManager;
 	/** UI type for system prompt context (e.g. "tui", "telegram", "rpc") */
 	uiType?: string;
+	automationRole?: import("./automation.js").AutomationRole;
 }
 
 /** Result from createAgentSession */
@@ -438,6 +439,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		maxConcurrentSubagents: settingsManager.getMaxConcurrentSubagents(),
 		extensionRunnerRef,
 		uiType: options.uiType,
+		automationRole: options.automationRole,
 	});
 	sessionRef.current = session;
 	const extensionsResult = resourceLoader.getExtensions();

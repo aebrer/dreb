@@ -371,6 +371,32 @@ export class RuntimePool {
 		this.fleetSnapshotTimer.unref?.();
 	}
 
+	/** Automation children are owned by the run controller, not by Fleet or browser sessions. */
+	createAutomationClient(
+		cwd: string,
+		role: "setup" | "worker" | "guard",
+		model: { provider: string; id: string },
+		sessionDirectory?: string,
+	): RpcClient {
+		if (this.closing) throw new Error("Runtime pool is closing");
+		return this.clientFactory({
+			cliPath: this.cliPath,
+			cwd,
+			args: [
+				"--ui",
+				"dashboard",
+				...this.baseArgs,
+				"--automation-role",
+				role,
+				"--provider",
+				model.provider,
+				"--model",
+				model.id,
+				...(role === "worker" ? (sessionDirectory ? ["--session-dir", sessionDirectory] : []) : ["--no-session"]),
+			],
+		});
+	}
+
 	/** Spawn a new runtime in `cwd`, optionally opening an existing session file. */
 	async create(cwd: string, sessionPath?: string): Promise<RuntimeHandle> {
 		if (this.closing) throw new Error("Runtime pool is closing");

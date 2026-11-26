@@ -51,7 +51,10 @@ export function ModeBadge(props: { store: AppStore }): JSX.Element {
 	);
 }
 
-export function Topbar(props: { store: AppStore; active: "fleet" | "files" | "memories" | "settings" }): JSX.Element {
+export function Topbar(props: {
+	store: AppStore;
+	active: "fleet" | "automate" | "files" | "memories" | "settings";
+}): JSX.Element {
 	const attentionCount = () =>
 		Object.values(props.store.sessions).filter((s) => s.needsAttention).length +
 		props.store.fleet().runtimes.filter((r) => r.needsAttention).length;
@@ -64,6 +67,9 @@ export function Topbar(props: { store: AppStore; active: "fleet" | "files" | "me
 				<nav>
 					<a href="#/" aria-current={props.active === "fleet" ? "page" : undefined}>
 						fleet{attentionCount() > 0 ? " ◆" : ""}
+					</a>
+					<a href="#/automate" aria-current={props.active === "automate" ? "page" : undefined}>
+						automate
 					</a>
 					<a href="#/files" aria-current={props.active === "files" ? "page" : undefined}>
 						files

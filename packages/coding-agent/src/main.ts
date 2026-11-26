@@ -23,6 +23,7 @@ import {
 	VERSION,
 } from "./config.js";
 import { AuthStorage } from "./core/auth-storage.js";
+import { automationRoleInstructions } from "./core/automation.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { LoadExtensionsResult } from "./core/extensions/index.js";
 import { migrateKeybindingsConfigFile } from "./core/keybindings.js";
@@ -550,7 +551,13 @@ export function buildSessionOptions(
 	// Model from CLI
 	// - supports --provider <name> --model <pattern>
 	// - supports --model <provider>/<pattern>
-	if (parsed.model) {
+	if (parsed.automationRole && (parsed.provider || parsed.model)) {
+		options.model = modelRegistry.getAvailable().find((m) => m.provider === parsed.provider && m.id === parsed.model);
+		if (!options.model) {
+			log.error(`Selected automation model is unavailable: ${parsed.provider}/${parsed.model}`);
+			process.exit(1);
+		}
+	} else if (parsed.model) {
 		const resolved = resolveCliModel({
 			cliProvider: parsed.provider,
 			cliModel: parsed.model,
@@ -750,6 +757,9 @@ export async function main(args: string[]) {
 		noThemes: firstPass.noThemes,
 		systemPrompt: firstPass.systemPrompt,
 		appendSystemPrompt: firstPass.appendSystemPrompt,
+		appendSystemPromptOverride: firstPass.automationRole
+			? (base) => [...base, automationRoleInstructions(firstPass.automationRole!)]
+			: undefined,
 	});
 	time("createResourceLoader");
 	await resourceLoader.reload();
@@ -832,6 +842,10 @@ export async function main(args: string[]) {
 	migrateKeybindingsConfigFile(agentDir);
 	time("migrateKeybindingsConfigFile");
 
+	if (parsed.automationRole && parsed.mode !== "rpc") {
+		log.error("--automation-role requires --mode rpc");
+		process.exit(1);
+	}
 	const rpcFullMessageUpdatesError = validateRpcFullMessageUpdates(parsed);
 	if (rpcFullMessageUpdatesError) {
 		log.error(chalk.red(`Error: ${rpcFullMessageUpdatesError}`));
@@ -929,6 +943,7 @@ export async function main(args: string[]) {
 	sessionOptions.resourceLoader = resourceLoader;
 
 	// Set UI type: explicit --ui flag > mode-based default
+	sessionOptions.automationRole = parsed.automationRole;
 	if (parsed.ui) {
 		sessionOptions.uiType = parsed.ui;
 	} else if (mode === "rpc") {

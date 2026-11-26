@@ -4,6 +4,14 @@
  */
 
 import type {
+	AutomationLaunch,
+	AutomationModel,
+	AutomationRunDetail,
+	AutomationRunSummary,
+	AutomationSetupMessage,
+	AutomationSetupReply,
+} from "../shared/automation.js";
+import type {
 	AgentTypeDto,
 	AuthStatusDto,
 	BackgroundAgentDto,
@@ -102,6 +110,17 @@ export function dashboardImageUrl(
 }
 
 export const api = {
+	automationModels: (cwd: string) =>
+		request<{ cwd: string; models: ModelInfoDto[] }>(`/api/automation/models?${new URLSearchParams({ cwd })}`),
+	automationSetup: (cwd: string, model: AutomationModel, messages: AutomationSetupMessage[]) =>
+		request<AutomationSetupReply>("/api/automation/setup", json({ cwd, model, messages })),
+	launchAutomation: (input: AutomationLaunch) => request<{ id: string }>("/api/automation/runs", json(input)),
+	automationRuns: () => request<{ runs: AutomationRunSummary[] }>("/api/automation/runs"),
+	automationRun: (id: string) => request<AutomationRunDetail>(`/api/automation/runs/${encodeURIComponent(id)}`),
+	automationTranscript: (id: string) =>
+		request<{ messages: unknown[] }>(`/api/automation/runs/${encodeURIComponent(id)}/messages`),
+	stopAutomation: (id: string) =>
+		request<{ ok: true }>(`/api/automation/runs/${encodeURIComponent(id)}/stop`, { method: "POST" }),
 	auth: (signal?: AbortSignal) => request<AuthStatusResponse>("/api/auth", { signal }),
 	connectionDiagnostic: (summary: ClientConnectionDiagnosticDto) =>
 		request<{ ok: true }>("/api/events/diagnostic", json(summary)),

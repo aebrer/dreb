@@ -27,6 +27,7 @@ const VIEWPORTS: Record<ViewportName, ViewportSpec> = {
 
 export type ShotRoute =
 	| { screen: "fleet" }
+	| { screen: "automate" }
 	| { screen: "session"; runtime: LiveRuntimeScenario["slug"] }
 	| { screen: "subagent"; runtime: LiveRuntimeScenario["slug"]; agentId: string }
 	| { screen: "files"; path: string }
@@ -82,6 +83,14 @@ const SESSION_READY = [CONNECTED, ".entry.user", "details.tool", "textarea"];
 const SESSION_LIVE = ['.working:has-text("bash")'];
 
 export const SHOTS: ShotDefinition[] = [
+	{
+		name: "automate-desktop-dark",
+		alt: "dreb dashboard Automate view showing the latest decision for a saved goal run",
+		viewport: "desktop",
+		colorMode: "dark",
+		route: { screen: "automate" },
+		ready: [CONNECTED, '.automation-runs li:has-text("stop condition met")'],
+	},
 	{
 		name: "fleet-desktop-dark",
 		alt: "dreb dashboard Fleet view in dark mode: live session cards (running, needs attention, idle) with subagents, tasks, model, context, and cost, above past sessions grouped by project",

@@ -100,6 +100,8 @@ Dashboard theme cards keep IBM Plex Mono for Theme default previews, while the f
 
 **Bun users:** Bun's lockfile can cache stale `@dreb/*` versions after upgrades, causing missing-export errors. Fix with `bun pm cache rm && bunx --force dreb`.
 
+Use **Automate** in the dashboard to hand off a task to run unattended. Agree on the instructions in chat, choose the orchestrator and task guard models, then start the run. See [Goal automation](docs/dashboard.md#goal-automation) for when reviews happen and how to find saved results.
+
 ### Troubleshooting
 
 - **`EBADDEVENGINES` from `npm install` or `npm run` in a source checkout** — Your Node or npm is not the project toolchain. Switch to Node.js 26 LTS and its bundled npm (`nvm install` in the repo reads `.nvmrc`).

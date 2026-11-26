@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDashboardSessionLister } from "../src/index.js";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
+import { AutomationStore } from "../src/server/automation-store.js";
 import { DashboardImageService } from "../src/server/dashboard-images.js";
 import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
 import { FilePairingStorage } from "../src/server/pairing-storage.js";
@@ -31,6 +32,7 @@ afterEach(async () => {
 });
 
 interface TestServerOptions {
+	automationStore?: AutomationStore;
 	auth?: DashboardAuth;
 	listAllSessions?: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession?: (path: string) => Promise<unknown>;
@@ -133,6 +135,7 @@ async function startServer(options: TestServerOptions = {}) {
 		fleetSnapshotDebounceMs: options.fleetSnapshotDebounceMs,
 	});
 	const app = createDashboardServer({
+		automationStore: options.automationStore,
 		auth: options.auth ?? new DashboardAuth(),
 		pool,
 		listAllSessions: options.listAllSessions ?? (async () => []),
@@ -3078,4 +3081,56 @@ describe("parseDeviceCookie", () => {
 		expect(parseDeviceCookie("other=x")).toBeUndefined();
 		expect(parseDeviceCookie(undefined)).toBeUndefined();
 	});
+});
+
+it("serves automation history and the exact saved session under its run ID", async () => {
+	const store = new AutomationStore();
+	const cwd = await createTempProject();
+	const sessionFile = join(cwd, "work.jsonl");
+	const sessionId = "kept-work";
+	await writeFile(
+		sessionFile,
+		`${JSON.stringify({ type: "session", version: 3, id: sessionId, cwd, timestamp: "2026-01-02T09:00:00Z" })}\n${JSON.stringify({ type: "message", id: "1", parentId: null, timestamp: "2026-01-02T09:00:00Z", message: { role: "user", content: [{ type: "text", text: "saved work" }], timestamp: 1 } })}\n`,
+	);
+	const id = "run-id";
+	store.save({
+		id,
+		cwd,
+		status: "stopped",
+		instructions: "Stop at 9am",
+		createdAt: "2026-01-02T09:00:00Z",
+		decisions: [],
+		sessionFile,
+		sessionId,
+		workerModel: { provider: "one", id: "work" },
+		guardModel: { provider: "two", id: "judge" },
+		finalReport: "done",
+	});
+	const { base, clients } = await startServer({ automationStore: store });
+	const res = await fetch(`${base}/api/automation/runs/${id}`);
+	const detail = await res.json();
+	expect(detail).toMatchObject({ id, hasSession: true, finalReport: "done" });
+	expect(detail).not.toHaveProperty("sessionFile");
+	const transcript = await fetch(`${base}/api/automation/runs/${id}/messages`);
+	expect(transcript.status).toBe(200);
+	await expect(transcript.json()).resolves.toMatchObject({
+		messages: [{ role: "user", content: [{ text: "saved work" }] }],
+	});
+	const notFound = await fetch(`${base}/api/automation/runs/absent/messages`);
+	expect(notFound.status).toBe(404);
+	expect(clients).toEqual([]);
+});
+
+it("denies automation reads and launches before any RPC client is created", async () => {
+	const auth = new DashboardAuth();
+	vi.spyOn(auth, "authenticate").mockResolvedValue({
+		allowed: false,
+		reason: "pair first",
+		status: 401,
+		needsPairing: true,
+	});
+	const { base, clients } = await startServer({ auth });
+	expect((await fetch(`${base}/API/automation/runs`)).status).toBe(401);
+	expect((await fetch(`${base}/api/automation/runs`, { method: "POST" })).status).toBe(401);
+	expect(clients).toEqual([]);
 });

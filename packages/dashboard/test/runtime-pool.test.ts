@@ -234,6 +234,54 @@ function makePool() {
 }
 
 describe("RuntimePool", () => {
+	it("starts exact automation-role clients without adding them to Fleet", async () => {
+		const factory = vi.fn(
+			(_options: { cliPath: string; cwd: string; args: string[] }) => makeFakeClient() as unknown as RpcClient,
+		);
+		const pool = new RuntimePool({ clientFactory: factory });
+		const path = "/project";
+		const model = { provider: "one", id: "one/custom" };
+		pool.createAutomationClient(path, "worker", model, "/automation/sessions");
+		pool.createAutomationClient(path, "guard", model, "/automation/sessions");
+		expect(factory).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				cwd: path,
+				args: [
+					"--ui",
+					"dashboard",
+					"--automation-role",
+					"worker",
+					"--provider",
+					"one",
+					"--model",
+					"one/custom",
+					"--session-dir",
+					"/automation/sessions",
+				],
+			}),
+		);
+		expect(factory).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				cwd: path,
+				args: [
+					"--ui",
+					"dashboard",
+					"--automation-role",
+					"guard",
+					"--provider",
+					"one",
+					"--model",
+					"one/custom",
+					"--no-session",
+				],
+			}),
+		);
+		expect(pool.list()).toEqual([]);
+		await pool.stopAll();
+	});
+
 	it("creates runtimes with unique keys and starts their clients", async () => {
 		const { pool, clients } = makePool();
 		const a = await pool.create("/tmp");

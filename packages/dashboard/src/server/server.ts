@@ -32,6 +32,9 @@ import {
 	MAX_SESSION_PREVIEW_CHARACTERS,
 } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
+import { automationRoutes } from "./automation-routes.js";
+import { AutomationRunner } from "./automation-runner.js";
+import { AutomationStore } from "./automation-store.js";
 import {
 	DASHBOARD_IMAGE_ID_PATTERN,
 	DashboardImageNotFoundError,
@@ -65,6 +68,7 @@ export interface DashboardSessionInfoSource {
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
 	pool: RuntimePool;
+	automationStore?: AutomationStore;
 	/** Directory of built client assets; omit to skip static serving (tests). */
 	staticDir?: string;
 	/** Session listing (cross-project) — injected so tests can stub it. */
@@ -244,6 +248,14 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
 		);
 	const hub = options.eventHub ?? new EventHub();
+	const automationStore = options.automationStore ?? new AutomationStore();
+	const automation = new AutomationRunner(
+		automationStore,
+		(cwd, role, model) => pool.createAutomationClient(cwd, role, model, automationStore.sessionDirectory),
+		(id) => hub.publish("", { type: "automation_changed", id }),
+		undefined,
+		log,
+	);
 	const images = options.imageService ?? new DashboardImageService(new ImagePreviewWorker());
 	hub.setEventProjector((key, event) => (key ? images.projectEvent(event, { runtimeKey: key }) : event));
 	pool.onEvent((key, event) => {
@@ -261,7 +273,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const app = express() as DashboardServerApp;
 	let closePromise: Promise<void> | undefined;
 	app.closeDashboard = () => {
-		closePromise ??= images.close();
+		closePromise ??= automation.close().finally(() => images.close());
 		return closePromise;
 	};
 	app.disable("x-powered-by");
@@ -752,6 +764,13 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		})().catch((err) => res.status(502).json({ error: String(err?.message ?? err) }));
 	});
 
+	app.use(
+		"/api/automation",
+		automationRoutes(automation, pool, (id, messages) =>
+			images.project(messages, { runtimeKey: `automation-${id}` }),
+		),
+	);
+
 	// -- runtimes ---------------------------------------------------------------
 	app.post("/api/runtimes", (req, res) => {
 		(async () => {
@@ -863,11 +882,17 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			return;
 		}
 		const handle = pool.get(key);
-		if (!handle) {
+		if (handle) {
+			void sendImage(req, res, { runtimeKey: key }, variant, () => handle.client.getMessages());
+		} else if (key.startsWith("automation-") && automation.detail(key.slice(11))?.hasSession) {
+			void sendImage(req, res, { runtimeKey: key }, variant, async () => {
+				const messages = automation.transcript(key.slice(11));
+				if (!messages) throw new DashboardImageNotFoundError("This automation has no saved transcript");
+				return messages;
+			});
+		} else {
 			res.status(404).json({ error: `No runtime ${key}` });
-			return;
 		}
-		void sendImage(req, res, { runtimeKey: key }, variant, () => handle.client.getMessages());
 	});
 
 	app.get("/api/runtimes/:key/subagents/:agentId/images/:id/:variant", (req, res) => {

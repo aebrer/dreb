@@ -73,6 +73,10 @@ In particular, Node `readline` is not protocol-compliant for RPC mode because it
 
 ### Prompting
 
+#### automation_turn
+
+Dashboard goal automation opts into an internal RPC role (`--automation-role setup|worker|guard`). `automation_turn` takes literal `message` text and returns the final `text` and bounded `evidence` after work and automatic continuations settle. It rejects errors and aborted turns rather than treating them as work ready for guard review. In worker mode the first message is the immutable agreed instructions; subsequent turns use `guardFeedback: true`, which stores the input as guard feedback, not as a user message or command. Unlike `prompt`, this RPC does not acknowledge before settlement. It has no time-based stop policy of its own. Ordinary RPC sessions do not accept the command.
+
 #### prompt
 
 Send a user prompt to the agent. Returns immediately; events stream asynchronously.

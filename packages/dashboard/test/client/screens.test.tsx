@@ -20,6 +20,13 @@ vi.mock("../../src/client/api.js", () => ({
 		return `${base}/${id}/${variant}`;
 	},
 	api: {
+		automationRuns: vi.fn(async () => ({ runs: [] })),
+		automationModels: vi.fn(),
+		automationSetup: vi.fn(),
+		launchAutomation: vi.fn(),
+		automationRun: vi.fn(),
+		automationTranscript: vi.fn(),
+		stopAutomation: vi.fn(),
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		extensionUiResponse: vi.fn(async () => ({ ok: true })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
@@ -271,6 +278,7 @@ import {
 	type TranscriptRenderItem,
 	transcriptRenderItems,
 } from "../../src/client/components/transcript.js";
+import { AutomateScreen } from "../../src/client/screens/automate.js";
 import { FilesScreen } from "../../src/client/screens/files.js";
 import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
 import { MemoriesScreen } from "../../src/client/screens/memories.js";
@@ -10015,5 +10023,88 @@ describe("dashboard client regressions", () => {
 		]);
 		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
 		expect(el.querySelectorAll("img.tool-image")).toHaveLength(2);
+	});
+});
+
+describe("Automate", () => {
+	it("launches only the agreed chat proposal, preserves the route, and passes both exact models", async () => {
+		const instructions = "Keep the API unchanged; stop if a re-export would be needed.";
+		const model = (provider: string, id: string) => ({
+			provider,
+			id,
+			name: id,
+			contextWindow: 1000,
+			reasoning: false,
+		});
+		const worker = model("one", "work");
+		const guard = model("two", "review/a");
+		vi.mocked(api.automationModels).mockResolvedValue({ cwd: "/canonical/project", models: [worker, guard] });
+		vi.mocked(api.automationSetup)
+			.mockResolvedValueOnce({ message: "How should I check it?", instructions: null })
+			.mockResolvedValueOnce({ message: "Here are the instructions.", instructions });
+		vi.mocked(api.launchAutomation).mockResolvedValue({ id: "run-1" }).mockClear();
+		const store = createAppStore();
+		store.navigate({ screen: "automate" });
+		const ui = mount(() => <AutomateScreen store={store} />);
+		const button = (label: string) =>
+			[...ui.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
+		const field = (selector: string, value: string, event = "input") => {
+			const node = ui.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(selector)!;
+			node.value = value;
+			node.dispatchEvent(new Event(event, { bubbles: true }));
+		};
+		button("New goal")!.click();
+		field("#automation-project", "/project");
+		button("Use project")!.click();
+		await vi.waitFor(() => expect(ui.querySelector("#automation-worker-model")).not.toBeNull());
+		field("#automation-worker-model", JSON.stringify([worker.provider, worker.id]), "change");
+		field("#automation-guard-model", JSON.stringify([guard.provider, guard.id]), "change");
+		field("#automation-message", "I want a fix that doesn't change the API.");
+		button("Send")!.click();
+		await vi.waitFor(() => expect(ui.textContent).toContain("How should I check it?"));
+		expect(button("Start goal")).toBeUndefined();
+		field("#automation-message", "Check the public exports.");
+		button("Send")!.click();
+		await vi.waitFor(() => expect(ui.textContent).toContain(instructions));
+		expect(api.launchAutomation).not.toHaveBeenCalled();
+		button("Start goal")!.click();
+		await vi.waitFor(() =>
+			expect(api.launchAutomation).toHaveBeenCalledWith({
+				cwd: "/canonical/project",
+				workerModel: worker,
+				guardModel: guard,
+				instructions,
+			}),
+		);
+		expect(store.route()).toEqual({ screen: "automate" });
+	});
+
+	it("shows the saved report and opens the transcript without starting a model", async () => {
+		vi.mocked(api.automationRun).mockResolvedValue({
+			id: "run-2",
+			cwd: "/project",
+			status: "stopped",
+			createdAt: "2026-01-02T09:04:00Z",
+			instructions: "Stop at 9am",
+			taskPreview: "Stop at 9am",
+			hasSession: true,
+			workerModel: { provider: "one", id: "work" },
+			guardModel: { provider: "two", id: "judge" },
+			decisions: [
+				{ action: "stop", reason: "stop condition met", report: "Awaiting one test", at: "2026-01-02T09:04:00Z" },
+			],
+			finalReport: "Awaiting one test",
+			outcome: "stop condition met",
+		});
+		vi.mocked(api.automationTranscript).mockResolvedValue({
+			messages: [{ role: "user", content: "Original work session text" }],
+		});
+		const store = createAppStore();
+		store.navigate({ screen: "automate", id: "run-2" });
+		const ui = mount(() => <AutomateScreen store={store} />);
+		await vi.waitFor(() => expect(ui.textContent).toContain("stop condition met"));
+		[...ui.querySelectorAll("button")].find((node) => node.textContent?.trim() === "View saved session")!.click();
+		await vi.waitFor(() => expect(ui.textContent).toContain("Original work session text"));
+		expect(api.automationTranscript).toHaveBeenCalledWith("run-2");
 	});
 });

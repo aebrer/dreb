@@ -3019,3 +3019,15 @@ describe("fleet snapshot and inventory store foundation", () => {
 		expect(store.fleetStatsError()).toBeUndefined();
 	});
 });
+
+it("applies automation notifications without creating a session record", async () => {
+	const store = await makeStartedStore();
+	try {
+		const before = store.automationRevision();
+		emit("", { type: "automation_changed", id: "run-1" });
+		expect(store.automationRevision()).toBe(before + 1);
+		expect(store.sessions[""]).toBeUndefined();
+	} finally {
+		store.stop();
+	}
+});
