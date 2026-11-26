@@ -7,6 +7,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { isLiveApiEnabled } from "./live-api.js";
 import { resolveApiKey } from "./oauth.js";
 
@@ -174,14 +175,12 @@ describe("AI Providers Abort Tests", () => {
 	);
 
 	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider Abort", () => {
-		const llm = getModel("mistral", "devstral-medium-latest");
-
 		it("should abort mid-stream", { retry: 3 }, async () => {
-			await testAbortSignal(llm);
+			await testAbortSignal(getMistralTestModel());
 		});
 
 		it("should handle immediate abort", { retry: 3 }, async () => {
-			await testImmediateAbort(llm);
+			await testImmediateAbort(getMistralTestModel());
 		});
 	});
 

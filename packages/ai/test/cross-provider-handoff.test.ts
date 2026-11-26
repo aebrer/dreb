@@ -29,6 +29,7 @@ import { getModel } from "../src/models.js";
 import { completeSimple, getEnvApiKey } from "../src/stream.js";
 import type { Api, AssistantMessage, Message, Model, Tool, ToolResultMessage } from "../src/types.js";
 import { hasAzureOpenAICredentials } from "./azure-utils.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { isLiveApiEnabled } from "./live-api.js";
 import { resolveApiKey } from "./oauth.js";
 
@@ -51,7 +52,7 @@ interface ProviderModelPair {
 	apiOverride?: Api;
 }
 
-const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
+const PROVIDER_MODEL_PAIRS: Array<Omit<ProviderModelPair, "model"> & { model: string | (() => Model<Api>) }> = [
 	// Anthropic
 	{ provider: "anthropic", model: "claude-sonnet-4-5", label: "anthropic-claude-sonnet-4-5" },
 	// Google
@@ -92,7 +93,7 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	// Kimi For Coding
 	{ provider: "kimi-coding", model: "kimi-k2-thinking", label: "kimi-coding-k2-thinking" },
 	// Mistral
-	{ provider: "mistral", model: "devstral-medium-latest", label: "mistral-devstral-medium" },
+	{ provider: "mistral", model: getMistralTestModel, label: "mistral-conversations" },
 	// MiniMax
 	{ provider: "minimax", model: "MiniMax-M2.7", label: "minimax-m2.7" },
 	// OpenCode Zen
@@ -296,12 +297,16 @@ describe.skipIf(!isLiveApiEnabled() || !hasAnyApiKey())("Cross-Provider Handoff"
 
 		console.log("\n=== Generating Fixtures ===\n");
 
-		for (const pair of PROVIDER_MODEL_PAIRS) {
-			const apiKey = await getApiKey(pair.provider);
+		for (const candidate of PROVIDER_MODEL_PAIRS) {
+			const apiKey = await getApiKey(candidate.provider);
 			if (!apiKey) {
-				console.log(`[${pair.label}] Skipping - no auth for ${pair.provider}`);
+				console.log(`[${candidate.label}] Skipping - no auth for ${candidate.provider}`);
 				continue;
 			}
+			const pair: ProviderModelPair = {
+				...candidate,
+				model: typeof candidate.model === "string" ? candidate.model : candidate.model().id,
+			};
 
 			console.log(`[${pair.label}] Generating fixture...`);
 			const result = await generateContext(pair, apiKey);

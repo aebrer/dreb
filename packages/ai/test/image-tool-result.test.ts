@@ -11,6 +11,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
@@ -287,15 +288,13 @@ describe("Tool Results with Images", () => {
 		},
 	);
 
-	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider (pixtral-12b)", () => {
-		const llm = getModel("mistral", "pixtral-12b");
-
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
 		it("should handle tool result with only image", { retry: 5, timeout: 30000 }, async () => {
-			await handleToolWithImageResult(llm);
+			await handleToolWithImageResult(getMistralTestModel("image"));
 		});
 
 		it("should handle tool result with text and image", { retry: 5, timeout: 30000 }, async () => {
-			await handleToolWithTextAndImageResult(llm);
+			await handleToolWithTextAndImageResult(getMistralTestModel("image"));
 		});
 	});
 

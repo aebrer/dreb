@@ -14,6 +14,7 @@ import { StringEnum } from "../src/utils/typebox-helpers.js";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { ZAI_GLM_5_EXTENDED } from "./fixtures/zai-models.js";
 import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
@@ -795,53 +796,45 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)(
-		"Mistral Provider (devstral-medium-latest)",
-		() => {
-			const llm = getModel("mistral", "devstral-medium-latest");
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
+		it("should complete basic text generation", { retry: 3 }, async () => {
+			await basicTextGeneration(getMistralTestModel());
+		});
 
+		it("should handle tool calling", { retry: 3 }, async () => {
+			await handleToolCall(getMistralTestModel());
+		});
+
+		it("should handle streaming", { retry: 3 }, async () => {
+			await handleStreaming(getMistralTestModel());
+		});
+
+		it("should handle thinking mode", { retry: 3 }, async () => {
+			await handleThinking(getMistralTestModel("reasoning"), { reasoningEffort: "medium" });
+		});
+
+		it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
+			await multiTurn(getMistralTestModel("reasoning"), { reasoningEffort: "medium" });
+		});
+	});
+
+	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)(
+		"Mistral Provider (image-capable model)",
+		() => {
 			it("should complete basic text generation", { retry: 3 }, async () => {
-				await basicTextGeneration(llm);
+				await basicTextGeneration(getMistralTestModel("image"));
 			});
 
 			it("should handle tool calling", { retry: 3 }, async () => {
-				await handleToolCall(llm);
+				await handleToolCall(getMistralTestModel("image"));
 			});
 
 			it("should handle streaming", { retry: 3 }, async () => {
-				await handleStreaming(llm);
-			});
-
-			it("should handle thinking mode", { retry: 3 }, async () => {
-				const llm = getModel("mistral", "magistral-medium-latest");
-				await handleThinking(llm, { reasoningEffort: "medium" });
-			});
-
-			it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
-				await multiTurn(llm, { reasoningEffort: "medium" });
-			});
-		},
-	);
-
-	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)(
-		"Mistral Provider (pixtral-12b with image support)",
-		() => {
-			const llm = getModel("mistral", "pixtral-12b");
-
-			it("should complete basic text generation", { retry: 3 }, async () => {
-				await basicTextGeneration(llm);
-			});
-
-			it("should handle tool calling", { retry: 3 }, async () => {
-				await handleToolCall(llm);
-			});
-
-			it("should handle streaming", { retry: 3 }, async () => {
-				await handleStreaming(llm);
+				await handleStreaming(getMistralTestModel("image"));
 			});
 
 			it("should handle image input", { retry: 3 }, async () => {
-				await handleImage(llm);
+				await handleImage(getMistralTestModel("image"));
 			});
 		},
 	);
