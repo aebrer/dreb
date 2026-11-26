@@ -1049,7 +1049,7 @@ describe("app store integration", () => {
 		button.click();
 		button.click();
 		await vi.waitFor(() => expect(el.querySelector("textarea")).not.toBeNull());
-		expect(window.location.hash).toBe("#/session/setup-key");
+		expect(window.location.hash).toBe("#/automate/setup/setup-key");
 		expect(api.setupAutomation).toHaveBeenCalledTimes(1);
 		expect(api.createRuntime).not.toHaveBeenCalled();
 	});

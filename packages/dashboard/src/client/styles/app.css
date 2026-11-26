@@ -3051,6 +3051,15 @@ details.thinking .thinking-body {
 	color: var(--text);
 }
 
+.ask-question-body pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.ask-question-body pre code {
+	white-space: inherit;
+}
+
 .ask-options {
 	/* Contain the absolutely positioned legend and hidden radios inside the
 	   transcript scroller so focusing them cannot scroll the document. */

@@ -36,7 +36,7 @@ function toolCall(id: string, name: string, args: object) {
 function stream(delta: ReturnType<typeof toolCall> | { content: string }) {
 	const chunk = (part: object, finish: string | null) =>
 		`data: ${JSON.stringify({ id: "chatcmpl-smoke", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta: part, finish_reason: finish }] })}\n\n`;
-	return chunk(delta, null) + chunk({}, "tool_calls" in delta ? "tool_calls" : "stop") + "data: [DONE]\n\n";
+	return `${chunk(delta, null)}${chunk({}, "tool_calls" in delta ? "tool_calls" : "stop")}data: [DONE]\n\n`;
 }
 
 function scriptedModel(draft: AutomationDraft) {
@@ -216,24 +216,26 @@ it("runs a revised, explicitly approved automation through the compiled dashboar
 	const list = () => api<{ runs: AutomationRun[] }>("/api/automations");
 	const { key } = await api<{ key: string }>("/api/automations/setup", {});
 	expect(key).toBeTruthy();
+	expect(await api("/api/automations")).toMatchObject({ setups: [{ key }] });
+	expect(await api("/api/fleet/live")).toMatchObject({ runtimes: [] });
 	const runtime = `/api/runtimes/${encodeURIComponent(key)}`;
 	await api(`${runtime}/prompt`, { message: request });
 	async function selection(title: string) {
 		return until(title, async () => {
 			const { pendingExtensionUiRequests } = await api<RuntimeHydrationDto>(`${runtime}/hydrate`);
 			return pendingExtensionUiRequests?.find(
-				(dialog) => dialog.method === "select" && dialog.title.includes(title),
+				(dialog) => dialog.method === "ask" && dialog.questions?.[0]?.question.includes(title),
 			);
 		});
 	}
 	const answer = (id: string, value: string) =>
-		api(`${runtime}/extension-ui-response`, { type: "extension_ui_response", id, value });
+		api(`${runtime}/extension-ui-response`, { type: "extension_ui_response", id, answers: [{ selected: [value] }] });
 	const first = await selection(request);
-	expect(first.options).toContain("Request changes");
+	expect(first.questions?.[0]?.options).toContain("Request changes");
 	await answer(first.id, "Request changes");
 	const revised = await selection(instructions);
 	expect(revised.id).not.toBe(first.id);
-	expect(revised.options).toContain("Approve");
+	expect(revised.questions?.[0]?.options).toContain("Approve");
 	expect((await list()).runs).toEqual([]);
 	expect(spawnClient).toHaveBeenCalledTimes(1);
 	await answer(revised.id, "Approve");

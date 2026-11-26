@@ -66,7 +66,7 @@ export interface DashboardSessionInfoSource {
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
 	pool: RuntimePool;
-	automationSetupDir?: string;
+	automationSetupDir?: string | (() => string | undefined);
 	automationHistoryFile?: string;
 	automationSessionDir?: string;
 	/** Directory of built client assets; omit to skip static serving (tests). */
@@ -657,7 +657,12 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	const getLiveFleet = async (): Promise<FleetDto> => ({
-		runtimes: await Promise.all(pool.list().map((handle) => pool.describe(handle))),
+		runtimes: await Promise.all(
+			pool
+				.list()
+				.filter((handle) => handle.automationOwner === undefined)
+				.map((handle) => pool.describe(handle)),
+		),
 		diskSessions: [],
 		diskSessionsComplete: false,
 	});
@@ -725,7 +730,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			let barrierSeq: number;
 			if (activeKey) {
 				const handle = pool.get(activeKey);
-				if (!handle) {
+				if (!handle || (handle.automationOwner && handle.automationOwner !== owner(req))) {
 					const body: DashboardResyncDto = { fleet: await getFleet(), barrierSeq: hub.currentSequence };
 					res.json(body);
 					return;
@@ -760,13 +765,14 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		})().catch((err) => res.status(502).json({ error: String(err?.message ?? err) }));
 	});
 
-	const setupOwners = new Map<string, string>();
 	function owner(req: AuthedRequest): string {
 		const decision = req.authDecision;
 		if (!decision?.allowed) throw new Error("Not authenticated");
 		return decision.mode === "remote" ? `remote:${decision.identity.loginName}` : "local";
 	}
-	app.get("/api/automations", (req, res) => res.json({ runs: runs.list(owner(req)) }));
+	app.get("/api/automations", (req, res) =>
+		res.json({ runs: runs.list(owner(req)), setups: pool.automationSetups(owner(req)) }),
+	);
 	app.post("/api/automations/:id/stop", (req, res) => {
 		if (!runs.get(owner(req), req.params.id)) {
 			res.status(404).json({ error: "Unknown automation" });
@@ -798,13 +804,16 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 	app.post("/api/automations/setup", async (req, res) => {
 		try {
-			const cwd = await resolveExistingDirectory(options.automationSetupDir ?? homedir());
-			const h = await pool.create(cwd, undefined, { sessionDir: options.automationSessionDir });
+			const configured =
+				typeof options.automationSetupDir === "function"
+					? options.automationSetupDir()
+					: options.automationSetupDir;
+			const cwd = await resolveExistingDirectory(configured ?? homedir());
+			const who = owner(req);
+			const h = await pool.create(cwd, undefined, { sessionDir: options.automationSessionDir, owner: who });
 			try {
 				await h.client.configureAutomation({ role: "setup" });
-				const who = owner(req);
 				const info = await pool.describe(h);
-				setupOwners.set(h.key, who);
 				h.client.onEvent((event) => {
 					if (event.type !== "automation_approved" || pool.get(h.key) !== h) return;
 					try {
@@ -830,7 +839,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		}
 	});
 	app.use("/api/runtimes/:key", (req, res, next) => {
-		const who = setupOwners.get(String(req.params.key));
+		const who = pool.get(String(req.params.key))?.automationOwner;
 		if (who && who !== owner(req)) {
 			res.status(404).json({ error: "Unknown setup session" });
 			return;

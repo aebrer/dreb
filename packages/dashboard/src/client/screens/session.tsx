@@ -875,6 +875,10 @@ function ImportModal(props: {
 export function SessionScreen(props: { store: AppStore; sessionKey: string }): JSX.Element {
 	const session = (): SessionViewState | undefined => props.store.sessions[props.sessionKey];
 	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
+	const automationSetup = () => {
+		const route = props.store.route();
+		return route.screen === "session" && route.automationSetup === true;
+	};
 	const availableThinkingLevels = createMemo(() => runtime()?.state.availableThinkingLevels ?? ["off"]);
 
 	const [composerText, setComposerText] = createSignal(getComposerDraft(props.sessionKey) ?? "");
@@ -1820,8 +1824,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				});
 			}
 			actions.push({
-				label: "Return to fleet",
-				run: () => props.store.navigate({ screen: "fleet" }),
+				label: automationSetup() ? "Return to Automate" : "Return to fleet",
+				run: () => props.store.navigate({ screen: automationSetup() ? "automate" : "fleet" }),
 				disabled: closedState.resuming,
 			});
 			items.push({
@@ -1882,8 +1886,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			<header class="session-bar" classList={{ collapsed: topChromeCollapsed() }}>
 				<div class="session-bar-inner session-bar-main">
 					<div class="session-navigation">
-						<a class="back" href="#/">
-							← fleet
+						<a class="back" href={automationSetup() ? "#/automate" : "#/"}>
+							{automationSetup() ? "← automate" : "← fleet"}
 						</a>
 					</div>
 					<span class="title">{headerTitle()}</span>

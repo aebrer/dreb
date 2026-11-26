@@ -678,6 +678,8 @@ export interface RpcSettingsSnapshot {
 	agentModels?: Record<string, string[]>;
 	/** Global-only fail-closed Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings;
+	/** Global-only path for new Dashboard automation setup sessions. Absent means the host home directory. */
+	automationSetupDir?: string;
 	/** Effective automatic tab-title configuration. */
 	tabTitle?: TabTitleSettings;
 	/** Raw effective persisted model patterns. Absent means the future-inclusive all-model scope. */
@@ -751,6 +753,8 @@ export interface RpcSettingsUpdate {
 	agentModels?: Record<string, string[]>;
 	/** Ordered exact model references; null removes the filter and restores implicit all. */
 	enabledModels?: string[] | null;
+	/** Updates the global setup path; null or a blank string restores the host home directory. */
+	automationSetupDir?: string | null;
 	/** Replaces the complete global-only arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings | null;
 	/** Partial global automatic tab-title configuration update. `model: null` removes the pinned model, restoring the default route (parent in single-model mode, otherwise Explore-agent routing). */

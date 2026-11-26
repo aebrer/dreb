@@ -398,7 +398,11 @@ describe("screenshot harness (offline smoke)", () => {
 			);
 			const { key } = await setup.json();
 			expect(typeof key).toBe("string");
-			await page.waitForURL(`${dashboard.baseUrl}/#/session/${key}`);
+			await page.waitForURL(`${dashboard.baseUrl}/#/automate/setup/${key}`);
+			await page.getByRole("link", { name: "← automate" }).click();
+			await page.getByRole("heading", { name: "Setup chats" }).waitFor();
+			await page.getByRole("link", { name: "Open setup chat" }).click();
+			await page.waitForURL(`${dashboard.baseUrl}/#/automate/setup/${key}`);
 			const turns = dashboard.setupTurns(key);
 			const composer = page.locator(".composer textarea");
 			const working = page.locator(".working");
@@ -436,6 +440,27 @@ describe("screenshot harness (offline smoke)", () => {
 			turns.delta("Ready to continue.");
 			turns.finish("stop");
 			await assistant.getByText("Ready to continue.", { exact: true }).waitFor();
+			await idle();
+
+			await page.setViewportSize({ width: 320, height: 640 });
+			await send("Show the full automation draft.");
+			const longDraft = [
+				"```",
+				"Instructions:",
+				...Array.from({ length: 50 }, (_, i) => `Step ${i + 1}: ${"long-without-spaces".repeat(15)}`),
+				"END OF DRAFT",
+				"```",
+			].join("\n");
+			turns.approvalQuestion(longDraft);
+			const wizard = page.getByRole("region", { name: "Automation draft" });
+			await wizard.getByText(/END OF DRAFT/).waitFor();
+			expect(await page.getByRole("dialog").count()).toBe(0);
+			await wizard.getByText("Approve", { exact: true }).scrollIntoViewIfNeeded();
+			expect(await wizard.getByText("Approve", { exact: true }).isVisible()).toBe(true);
+			expect(await page.evaluate<boolean>("document.documentElement.scrollWidth <= innerWidth")).toBe(true);
+			await clickRequest("POST", `/api/runtimes/${key}/abort`, () =>
+				wizard.getByRole("button", { name: /stop agent/i }).click(),
+			);
 			await idle();
 		});
 	}, 120_000);

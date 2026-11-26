@@ -124,7 +124,11 @@ export const api = {
 		const suffix = query.size ? `?${query}` : "";
 		return request<DashboardResyncDto>(`/api/resync${suffix}`, { signal });
 	},
-	automations: (signal?: AbortSignal) => request<{ runs: AutomationRun[] }>("/api/automations", { signal }),
+	automations: (signal?: AbortSignal) =>
+		request<{ runs: AutomationRun[]; setups?: import("../shared/protocol.js").FleetRuntimeSnapshotDto[] }>(
+			"/api/automations",
+			{ signal },
+		),
 	setupAutomation: () => request<RuntimeInfoDto>("/api/automations/setup", json({})),
 	stopAutomation: (id: string) => request<unknown>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
 	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>

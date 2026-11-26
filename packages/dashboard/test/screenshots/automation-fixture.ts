@@ -87,6 +87,17 @@ export class SetupTurns {
 		this.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta } });
 	}
 
+	approvalQuestion(question: string): void {
+		if (!this.streaming) throw new Error("Expected an active setup turn");
+		this.emit({
+			type: "extension_ui_request",
+			method: "ask",
+			id: "setup-draft",
+			title: "Automation draft",
+			questions: [{ question, options: ["Approve", "Request changes"], allowFreeText: false }],
+		});
+	}
+
 	finish(reason: "stop" | "error" | "aborted", errorMessage?: string): void {
 		if (!this.reply) throw new Error("No pending fixture reply");
 		if (!this.text) this.emit({ type: "message_start", message: this.reply });

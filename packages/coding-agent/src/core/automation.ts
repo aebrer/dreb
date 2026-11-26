@@ -123,10 +123,33 @@ export class Automation {
 				}
 				if (!active()) return stale();
 				if (!ctx.hasUI) throw new Error("Approval requires an interactive selection");
-				const title = `Working directory: ${draft.cwd}\nOrchestrator: ${JSON.stringify(draft.orchestrator)}\nGuard: ${JSON.stringify(draft.guard)}\n\nInstructions:\n${draft.instructions}`;
-				const choice = await ctx.ui.select(title, ["Approve", "Request changes"], { signal });
+				const text = `Working directory: ${draft.cwd}\nOrchestrator: ${JSON.stringify(draft.orchestrator)}\nGuard: ${JSON.stringify(draft.guard)}\n\nInstructions:\n${draft.instructions}`;
+				// Fence the literal draft so Markdown cannot hide or reinterpret any of it.
+				let fenceLength = 3;
+				for (const match of text.matchAll(/`+/g)) fenceLength = Math.max(fenceLength, match[0].length + 1);
+				const fence = "`".repeat(fenceLength);
+				const result = await ctx.ui.ask(
+					{
+						title: "Automation draft",
+						questions: [
+							{
+								question: `${fence}\n${text}\n${fence}`,
+								options: ["Approve", "Request changes"],
+								allowFreeText: false,
+							},
+						],
+					},
+					{ signal },
+				);
 				if (!active()) return stale();
-				if (choice !== "Approve")
+				const answer = result?.answers[0];
+				if (
+					!answer ||
+					answer.skipped ||
+					answer.customText ||
+					answer.selected.length !== 1 ||
+					answer.selected[0] !== "Approve"
+				)
 					return textResult("Not approved. Propose a fresh complete draft for any revision.");
 				this.approved = true;
 				this.onApproved(draft);

@@ -38,7 +38,7 @@ export type Route =
 	| { screen: "fleet" }
 	| { screen: "automate" }
 	| { screen: "automation"; runId: string; ref: string }
-	| { screen: "session"; key: string }
+	| { screen: "session"; key: string; automationSetup?: boolean }
 	| { screen: "subagent"; key: string; agentId: string }
 	| { screen: "files"; path?: string }
 	| { screen: "memories" }
@@ -53,7 +53,10 @@ function parseHash(): Route {
 		if (rest[1] === "subagent" && rest[2]) return { screen: "subagent", key: rest[0], agentId: rest[2] };
 		return { screen: "session", key: rest[0] };
 	}
-	if (head === "automate") return { screen: "automate" };
+	if (head === "automate") {
+		if (rest[0] === "setup" && rest[1]) return { screen: "session", key: rest[1], automationSetup: true };
+		return { screen: "automate" };
+	}
 	if (head === "automation" && rest.length === 2 && rest[0] && /^(setup|work|guard-\d+|report)$/.test(rest[1])) {
 		try {
 			return { screen: "automation", runId: decodeURIComponent(rest[0]), ref: rest[1] };
@@ -87,7 +90,7 @@ export function routeToHash(route: Route): string {
 		case "automation":
 			return `#/automation/${encodeURIComponent(route.runId)}/${encodeURIComponent(route.ref)}`;
 		case "session":
-			return `#/session/${route.key}`;
+			return route.automationSetup ? `#/automate/setup/${route.key}` : `#/session/${route.key}`;
 		case "subagent":
 			return `#/session/${route.key}/subagent/${route.agentId}`;
 		case "files":

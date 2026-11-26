@@ -157,7 +157,7 @@ networking window above.
 
 ### Automate
 
-1. Choose **Automate → New automation**. This opens a setup chat in the normal Session view, in the host user's home directory by default. To start setup elsewhere, set `automationSetupDir` in the global `~/.dreb/agent/settings.json` and restart the dashboard. There is no directory picker. The job's work directory is agreed separately in chat and must be an existing absolute path.
+1. Choose **Automate → New automation**. This opens a setup chat in the normal Session view, in the host user's home directory by default. To start setup elsewhere, use **Settings → Dashboard → Automation setup directory**. The setting applies to new chats without a restart; clearing it restores the home directory. There is no directory picker. The job's work directory is agreed separately in chat and must be an existing absolute path.
 2. Describe the work, what counts as done, when to stop, and which decisions the guard may make without you. Pin an exact provider/model and tool list separately for the orchestrator (worker) and guard (reviewer). You can remove tools from either list. If a model or tool is unavailable, it is not silently replaced.
 3. Review the complete draft: instructions, work directory, both models and both tool lists. Choose **Approve** to start or **Request changes** to keep chatting and review a fresh complete draft. Typing “yes” does not start work. There are no scheduled or event triggers and no TUI launch command.
 
@@ -345,7 +345,7 @@ from other sessions use a separate fixed top-center toast stack. Runtime closure
 never creates a redundant Fleet toast.
 
 Creating a session from Fleet or Files leaves you on the current screen; the new
-runtime appears in Fleet. **New automation** opens its setup chat directly. If the runtime behind an open main-session or
+runtime appears in Fleet. **New automation** opens its setup chat directly; open setup chats are listed in Automate, not Fleet. If the runtime behind an open main-session or
 subagent page closes, that page retains its browser-held transcript as a
 read-only snapshot with **Resume session** (when an exact session path was
 captured) and **Return to fleet** actions. It is not a live runtime: composers,

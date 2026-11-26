@@ -706,6 +706,18 @@ export class SettingsManager {
 		return this.globalSettings.subagentSessionDir;
 	}
 
+	/** Project settings cannot redirect the Dashboard's automation setup sessions. */
+	getGlobalAutomationSetupDir(): string | undefined {
+		const directory = this.globalSettings.automationSetupDir;
+		return typeof directory === "string" ? directory.trim() || undefined : undefined;
+	}
+
+	setGlobalAutomationSetupDir(directory: string | undefined): void {
+		this.globalSettings.automationSetupDir = directory?.trim() || undefined;
+		this.markModified("automationSetupDir");
+		this.save();
+	}
+
 	getDefaultProvider(): string | undefined {
 		return this.settings.defaultProvider;
 	}

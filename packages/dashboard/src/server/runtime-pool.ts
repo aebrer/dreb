@@ -58,6 +58,8 @@ export interface DashboardRuntimeSnapshot {
 
 export interface RuntimeHandle {
 	key: string;
+	/** Interactive setup belongs to Automate, not the ordinary Fleet inventory. */
+	automationOwner?: string;
 	cwd: string;
 	client: RpcClient;
 	/** Session start time (ms epoch) — stable tiebreak for deterministic fleet ordering. */
@@ -191,7 +193,15 @@ export class RuntimePool {
 	 * insertion order is retained intentionally; the UI owns presentation order.
 	 */
 	fleetSnapshot(): FleetRuntimeSnapshotDto[] {
-		return [...this.runtimes.values()].map((handle) => this.describeFleetRuntime(handle));
+		return this.list()
+			.filter((handle) => handle.automationOwner === undefined)
+			.map((handle) => this.describeFleetRuntime(handle));
+	}
+
+	automationSetups(owner: string): FleetRuntimeSnapshotDto[] {
+		return this.list()
+			.filter((handle) => handle.automationOwner === owner)
+			.map((handle) => this.describeFleetRuntime(handle));
 	}
 
 	list(): RuntimeHandle[] {
@@ -399,7 +409,11 @@ export class RuntimePool {
 	}
 
 	/** Spawn a new runtime in `cwd`, optionally opening an existing session file. */
-	async create(cwd: string, sessionPath?: string, automation?: { sessionDir?: string }): Promise<RuntimeHandle> {
+	async create(
+		cwd: string,
+		sessionPath?: string,
+		automation?: { sessionDir?: string; owner: string },
+	): Promise<RuntimeHandle> {
 		if (this.closing) throw new Error("Runtime pool is closing");
 		const key = randomBytes(6).toString("hex");
 		const args = ["--ui", "dashboard", ...this.baseArgs];
@@ -417,6 +431,7 @@ export class RuntimePool {
 			lastActivity: this.now(),
 			attention: new Map(),
 			settingsRevision: 0,
+			automationOwner: automation?.owner,
 			sessionFileFallback: sessionPath,
 			backgroundAgents: new Map(),
 		};

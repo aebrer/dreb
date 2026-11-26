@@ -86,14 +86,14 @@ async function fixture() {
 		guard: { provider: "faux", model: "guard/v2", tools: ["read", "web_fetch"] },
 	};
 	const approved = vi.fn<(draft: AutomationDraft) => void>();
-	const select = vi.fn<ExtensionUIContext["select"]>();
-	await session.bindExtensions({ uiContext: { ...session.extensionRunner!.getUIContext(), select } });
+	const ask = vi.fn<ExtensionUIContext["ask"]>();
+	await session.bindExtensions({ uiContext: { ...session.extensionRunner!.getUIContext(), ask } });
 	const call = (name: string, args: Record<string, unknown>, signal?: AbortSignal) => {
 		const tool = agent.state.tools.find((entry) => entry.name === name)!;
 		return tool.execute("call", args, signal);
 	};
 	const propose = (args = draft, signal?: AbortSignal) => call("propose_automation", args, signal);
-	return { session, draft, approved, select, call, propose, registry, writeModels, hook, override };
+	return { session, draft, approved, ask, call, propose, registry, writeModels, hook, override };
 }
 
 async function setup() {
@@ -104,7 +104,7 @@ async function setup() {
 
 describe("automation role sessions", () => {
 	it("lists exact options; only a dialog can approve the revised instructions and independent removals", async () => {
-		const { session, draft, approved, select, call, propose, hook } = await setup();
+		const { session, draft, approved, ask, call, propose, hook } = await setup();
 		expect(session.automationRole).toBe("setup");
 		expect(session.systemPrompt.endsWith(setupPrompt)).toBe(true);
 		expect(session.getActiveToolNames()).toEqual([
@@ -140,28 +140,30 @@ describe("automation role sessions", () => {
 			"Done.",
 		]);
 		session.agent.streamFn = scripted.streamFn;
-		select.mockResolvedValueOnce("Request changes").mockResolvedValueOnce("Approve");
+		ask.mockResolvedValueOnce({ answers: [{ selected: ["Request changes"] }] }).mockResolvedValueOnce({
+			answers: [{ selected: ["Approve"] }],
+		});
 		await session.prompt("Draft the job");
 		await session.prompt('The note quotes "Approve".');
 		await session.prompt("Approve if you remove write and edit");
 		expect(approved).not.toHaveBeenCalled();
 		await session.prompt("Remove all guard tools too and show the revised draft");
-		const [shown, choices] = select.mock.calls[1];
-		expect(choices).toEqual(["Approve", "Request changes"]);
+		const [shown] = ask.mock.calls[1];
+		expect(shown.questions[0]).toMatchObject({ options: ["Approve", "Request changes"], allowFreeText: false });
 		for (const verbatim of [
 			revised.instructions,
 			revised.cwd,
 			JSON.stringify(revised.orchestrator),
 			JSON.stringify(revised.guard),
 		])
-			expect(shown).toContain(verbatim);
+			expect(shown.questions[0].question).toContain(verbatim);
 		expect(approved.mock.calls).toEqual([[revised]]);
 		expect(session.messages).toContainEqual(
 			expect.objectContaining({ role: "toolResult", content: [{ type: "text", text: "Approval sent." }] }),
 		);
 		await propose();
 		expect(approved).toHaveBeenCalledTimes(1);
-		expect(select).toHaveBeenCalledTimes(2);
+		expect(ask).toHaveBeenCalledTimes(2);
 		expect(hook).not.toHaveBeenCalled();
 	});
 
@@ -193,7 +195,7 @@ describe("automation role sessions", () => {
 	});
 
 	it("rejects invalid drafts before opening any dialog", async () => {
-		const { draft, propose, select, approved, registry } = await setup();
+		const { draft, propose, ask, approved, registry } = await setup();
 		for (const invalid of [
 			{ instructions: " \t" },
 			{ cwd: "." },
@@ -208,17 +210,17 @@ describe("automation role sessions", () => {
 			await expect(propose({ ...draft, ...invalid })).rejects.toThrow();
 		vi.spyOn(registry, "getApiKey").mockResolvedValue(undefined);
 		await expect(propose()).rejects.toThrow(/credentials/);
-		expect(select).not.toHaveBeenCalled();
+		expect(ask).not.toHaveBeenCalled();
 		expect(approved).not.toHaveBeenCalled();
 	});
 
 	it.each(["invalidate", "session", "abort", "signal", "revision"])(
 		"discards stale selection after %s",
 		async (reason) => {
-			const { session, draft, propose, select, approved, registry } = await setup();
+			const { session, draft, propose, ask, approved, registry } = await setup();
 			const entered = Promise.withResolvers<void>();
-			const dialog = Promise.withResolvers<string>();
-			select.mockImplementationOnce(() => {
+			const dialog = Promise.withResolvers<{ answers: [{ selected: string[] }] }>();
+			ask.mockImplementationOnce(() => {
 				entered.resolve();
 				return dialog.promise;
 			});
@@ -245,7 +247,7 @@ describe("automation role sessions", () => {
 					revision = propose({ ...draft, instructions: "Supersede now, not after credentials resolve" });
 					break;
 			}
-			dialog.resolve("Approve");
+			dialog.resolve({ answers: [{ selected: ["Approve"] }] });
 			await old;
 			expect(approved).not.toHaveBeenCalled();
 			validating.resolve("offline");

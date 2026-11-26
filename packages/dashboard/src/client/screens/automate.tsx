@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import type { AutomationRun } from "../../shared/automation.js";
+import type { FleetRuntimeSnapshotDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { BannerRegion, FleetCard, StatusChip, Topbar } from "../components/common.js";
 import { MarkdownBody, Transcript } from "../components/transcript.js";
@@ -109,6 +110,7 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 	const [inventoryError, setInventoryError] = createSignal("");
 	const [loaded, setLoaded] = createSignal(false);
 	const [runs, setRuns] = createStore<AutomationRun[]>([]);
+	const [setups, setSetups] = createStore<FleetRuntimeSnapshotDto[]>([]);
 	const [now, setNow] = createSignal(Date.now());
 	const controller = new AbortController();
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -128,6 +130,15 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 						(a, b) =>
 							compareText(a.draft.cwd, b.draft.cwd) || a.startedAt - b.startedAt || compareText(a.id, b.id),
 					),
+				),
+			);
+			setSetups(
+				reconcile(
+					(result.setups ?? []).toSorted(
+						(a, b) =>
+							compareText(a.cwd, b.cwd) || compareText(a.createdAt, b.createdAt) || compareText(a.key, b.key),
+					),
+					{ key: "key" },
 				),
 			);
 			setNow(Date.now());
@@ -155,8 +166,7 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 		try {
 			const runtime = await api.setupAutomation();
 			if (controller.signal.aborted) return;
-			props.store.upsertRuntime(runtime);
-			props.store.navigate({ screen: "session", key: runtime.key });
+			props.store.navigate({ screen: "session", key: runtime.key, automationSetup: true });
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -181,6 +191,48 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 					when={loaded()}
 					fallback={<p class="muted">{inventoryError() ? "Inventory unavailable." : "Loading automations…"}</p>}
 				>
+					<Show when={setups.length > 0}>
+						<section class="live-sessions" aria-label="Setup chats">
+							<h2>Setup chats</h2>
+							<div class="session-grid">
+								<For each={setups}>
+									{(setup) => {
+										const tone = () =>
+											setup.error
+												? "error"
+												: setup.needsAttention
+													? "attention"
+													: setup.state.isStreaming || setup.state.isRetrying || setup.state.isCompacting
+														? "running"
+														: "idle";
+										return (
+											<FleetCard status={tone()}>
+												<div class="session-title">
+													<span class="name">{setup.state.sessionName ?? "Automation setup"}</span>
+													<StatusChip status={tone()} />
+												</div>
+												<span class="session-project" title={setup.cwd}>
+													{setup.cwd}
+												</span>
+												<div class="session-actions">
+													<a
+														class="btn btn-small"
+														href={routeToHash({
+															screen: "session",
+															key: setup.key,
+															automationSetup: true,
+														})}
+													>
+														Open setup chat
+													</a>
+												</div>
+											</FleetCard>
+										);
+									}}
+								</For>
+							</div>
+						</section>
+					</Show>
 					<section class="live-sessions" aria-label="Running automations">
 						<h2>Running automations</h2>
 						<div class="session-grid">

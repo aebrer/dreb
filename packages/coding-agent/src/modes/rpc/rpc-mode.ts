@@ -475,6 +475,7 @@ type SettingsReader = Pick<
 	| "getSingleModelMode"
 	| "getAgentModels"
 	| "getGlobalSubagentArbiterSettings"
+	| "getGlobalAutomationSetupDir"
 	| "getTabTitleSettings"
 	| "getEnabledModels"
 	| "hasProjectEnabledModelsOverride"
@@ -512,6 +513,7 @@ type SettingsWriter = SettingsRefresher &
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
 		| "setGlobalSubagentArbiterSettings"
+		| "setGlobalAutomationSetupDir"
 		| "setGlobalTabTitleSettings"
 		| "setEnabledModels"
 	>;
@@ -519,8 +521,8 @@ type SettingsWriter = SettingsRefresher &
 /**
  * Handle the `get_settings` RPC command: snapshot the persistent default settings.
  *
- * Most fields read the SettingsManager's merged (global + project) view. Context trust
- * fields intentionally read global settings only, so projects cannot expand the policy.
+ * Most fields read the SettingsManager's merged (global + project) view. Context trust,
+ * Dispatch Arbiter, and the Dashboard automation setup directory read global settings only.
  * These seed fresh runtimes, NOT the live session state (`get_state` reports that). Extracted
  * (like {@link deleteSessionForRpc}) so it is unit-testable without a live RPC session.
  */
@@ -554,6 +556,7 @@ export function getSettingsForRpc(
 		singleModelMode: settingsManager.getSingleModelMode(),
 		agentModels: settingsManager.getAgentModels(),
 		subagentArbiter: settingsManager.getGlobalSubagentArbiterSettings(),
+		automationSetupDir: settingsManager.getGlobalAutomationSetupDir(),
 		tabTitle: settingsManager.getTabTitleSettings(),
 		enabledModels,
 		resolvedScopedModels: scopeResolution.models.map(({ model, thinkingLevel }) => ({
@@ -678,6 +681,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"agentModels",
 	"enabledModels",
 	"subagentArbiter",
+	"automationSetupDir",
 	"tabTitle",
 ] as const;
 
@@ -972,6 +976,11 @@ export async function setSettingsForRpc(
 	const hasAnySetting = SETTINGS_UPDATE_KEYS.some((key) => update[key] !== undefined);
 	if (!hasAnySetting) {
 		return { ok: false, error: "set_settings requires at least one setting to change" };
+	}
+
+	const automationSetupDir = update.automationSetupDir;
+	if (automationSetupDir !== undefined && automationSetupDir !== null && typeof automationSetupDir !== "string") {
+		return { ok: false, error: "Invalid automationSetupDir: must be a string or null" };
 	}
 
 	if (update.defaultThinkingLevel !== undefined) {
@@ -1301,6 +1310,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.subagentArbiter !== undefined) {
 				settingsManager.setGlobalSubagentArbiterSettings(subagentArbiter);
+			}
+			if (automationSetupDir !== undefined) {
+				settingsManager.setGlobalAutomationSetupDir(automationSetupDir ?? undefined);
 			}
 			if (tabTitle !== undefined) {
 				settingsManager.setGlobalTabTitleSettings(tabTitle);
