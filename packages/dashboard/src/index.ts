@@ -348,6 +348,12 @@ async function main(): Promise<void> {
 		auth,
 		pool,
 		imageService,
+		automationSetupDir: resolveConfiguredDirectory(
+			settingsManager.getGlobalSettings().automationSetupDir ?? "~",
+			startupCwd,
+		),
+		automationHistoryFile: join(agentDir, "automation", "history.json"),
+		automationSessionDir: join(agentDir, "automation", "sessions"),
 		staticDir: existsSync(staticDir) ? staticDir : undefined,
 		serverVersion,
 		onRestart,

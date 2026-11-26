@@ -21,6 +21,10 @@ vi.mock("../../src/client/api.js", () => ({
 	},
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
+		automations: vi.fn(async () => ({ runs: [] })),
+		setupAutomation: vi.fn(),
+		stopAutomation: vi.fn(),
+		automationTranscript: vi.fn(),
 		extensionUiResponse: vi.fn(async () => ({ ok: true })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
 		sessions: vi.fn(async () => ({ sessions: [] })),
@@ -271,6 +275,7 @@ import {
 	type TranscriptRenderItem,
 	transcriptRenderItems,
 } from "../../src/client/components/transcript.js";
+import { AutomateScreen } from "../../src/client/screens/automate.js";
 import { FilesScreen } from "../../src/client/screens/files.js";
 import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
 import { MemoriesScreen } from "../../src/client/screens/memories.js";
@@ -312,6 +317,7 @@ import {
 	type UserEntry,
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
+import type { AutomationRun } from "../../src/shared/automation.js";
 import {
 	type CommandDto,
 	type FleetDto,
@@ -755,6 +761,112 @@ function toolEntryFromEvents(params: {
 	return entry;
 }
 
+describe("automation inventory and saved records", () => {
+	afterEach(() => {
+		vi.mocked(api.automations).mockReset().mockResolvedValue({ runs: [] });
+		vi.mocked(api.automationTranscript).mockReset();
+	});
+
+	function run(id: string, cwd: string, startedAt: number, status: AutomationRun["status"]): AutomationRun {
+		const model = { provider: "test", model: "offline", tools: [] };
+		return {
+			id,
+			draft: { cwd, instructions: id, orchestrator: model, guard: model },
+			status,
+			startedAt,
+			compactions: 2,
+			decisions: [{ action: "continue", report: "more evidence needed", at: startedAt }],
+			setupFile: "setup.jsonl",
+			workFile: "work.jsonl",
+			guardFiles: ["guard-a.jsonl", "guard-b.jsonl"],
+		};
+	}
+
+	it("serializes inventory polls, keeps cwd/start/id order, and groups past runs by cwd", async () => {
+		vi.useFakeTimers();
+		const live = [
+			run("z", "/z", 0, "working"),
+			run("c", "/a", 2, "reviewing"),
+			run("b", "/a", 1, "working"),
+			run("a", "/a", 1, "working"),
+		];
+		const past = [
+			run("old-z", "/z", 0, "failed"),
+			run("old-a", "/a", 0, "interrupted"),
+			run("old-b", "/a", 1, "stopped"),
+		];
+		const first = Promise.withResolvers<{ runs: AutomationRun[] }>();
+		const inventory = vi.mocked(api.automations).mockClear().mockReturnValueOnce(first.promise);
+		inventory.mockResolvedValueOnce({ runs: [...past, ...live].reverse().map((r) => ({ ...r, compactions: 4 })) });
+		const store = makeStore();
+		const { container: el, dispose } = mountDisposable(() => <AutomateScreen store={store} />);
+		try {
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(inventory).toHaveBeenCalledTimes(1);
+			first.resolve({ runs: [...live, ...past] });
+			await vi.advanceTimersByTimeAsync(0);
+			const names = (parent: ParentNode) =>
+				Array.from(parent.querySelectorAll(".session-title .name"), (e) => e.textContent);
+			const active = el.querySelector(".live-sessions")!;
+			expect(names(active)).toEqual(["a", "b", "c", "z"]);
+			expect(
+				Array.from(el.querySelectorAll(".past-sessions section"), (group) => [
+					group.querySelector("h3")?.textContent,
+					names(group),
+				]),
+			).toEqual([
+				["/a", ["old-a", "old-b"]],
+				["/z", ["old-z"]],
+			]);
+			const card = active.querySelector("article")!;
+			expect(card.textContent).toContain("Compactions: 2 · Guard decisions: 1");
+			expect(card.textContent).toContain("Latest: continue — more evidence needed");
+			card.querySelector("button")!.click();
+			expect(api.stopAutomation).toHaveBeenCalledWith("a");
+			await vi.advanceTimersToNextTimerAsync();
+			expect(active.querySelector("article")).toBe(card);
+			expect(card.textContent).toContain("Compactions: 4");
+			expect(names(active)).toEqual(["a", "b", "c", "z"]);
+		} finally {
+			dispose();
+			store.stop();
+		}
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(inventory).toHaveBeenCalledTimes(2);
+		expect(inventory.mock.calls[1][0]?.aborted).toBe(true);
+	});
+
+	it("opens each saved transcript and the run report without creating or hydrating a runtime", async () => {
+		const saved = { ...run("run/one", "/project", 0, "stopped"), endedAt: 62_000, report: "Saved final report body" };
+		vi.mocked(api.automations).mockResolvedValue({ runs: [saved] });
+		vi.mocked(api.automationTranscript)
+			.mockClear()
+			.mockImplementation(async (_, ref) => ({ messages: [{ role: "user", content: `Saved ${ref} body` }] }));
+		vi.mocked(api.setupAutomation).mockClear();
+		vi.mocked(api.createRuntime).mockClear();
+		vi.mocked(api.hydrate).mockClear();
+		window.location.hash = "#automate";
+		const el = mount(() => <App />);
+		for (const ref of ["setup", "work", "guard-0", "guard-1", "report"]) {
+			await vi.waitFor(() => expect(el.querySelector("article")?.textContent).toContain("Elapsed: 1m 2s"));
+			el.querySelector<HTMLAnchorElement>(`article a[href="#/automation/run%2Fone/${ref}"]`)!.click();
+			await vi.waitFor(() =>
+				expect(el.querySelector("main")?.textContent).toContain(
+					ref === "report" ? saved.report : `Saved ${ref} body`,
+				),
+			);
+			expect(el.querySelector("textarea")).toBeNull();
+			el.querySelector<HTMLAnchorElement>('main a[href="#/automate"]')!.click();
+		}
+		expect(vi.mocked(api.automationTranscript).mock.calls.map(([id, ref]) => [id, ref])).toEqual(
+			["setup", "work", "guard-0", "guard-1"].map((ref) => [saved.id, ref]),
+		);
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(api.setupAutomation).not.toHaveBeenCalled();
+		expect(api.hydrate).not.toHaveBeenCalled();
+	});
+});
+
 describe("app store integration", () => {
 	it("topbar announces retrying live state with text, not color alone", async () => {
 		let captured: EventStreamHandlers | undefined;
@@ -924,6 +1036,22 @@ describe("app store integration", () => {
 		banner(`toast:${toast.id}`)?.querySelector<HTMLButtonElement>(".banner-dismiss")?.click();
 		expect(store.sessions[runtime.key]?.toasts).toHaveLength(0);
 		expect(banner(`toast:${toast.id}`)).toBeNull();
+	});
+
+	it("navigates from Fleet to Automate and opens the regular Session only on New automation", async () => {
+		window.location.hash = "#/";
+		vi.mocked(api.setupAutomation).mockResolvedValueOnce(runtimeInfo("setup-key", "/home/test"));
+		const el = mount(() => <App />);
+		el.querySelector<HTMLAnchorElement>('nav a[href="#/automate"]')!.click();
+		await vi.waitFor(() => expect(el.querySelector("h1")?.textContent).toBe("automate"));
+		expect(api.setupAutomation).not.toHaveBeenCalled();
+		const button = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "New automation")!;
+		button.click();
+		button.click();
+		await vi.waitFor(() => expect(el.querySelector("textarea")).not.toBeNull());
+		expect(window.location.hash).toBe("#/session/setup-key");
+		expect(api.setupAutomation).toHaveBeenCalledTimes(1);
+		expect(api.createRuntime).not.toHaveBeenCalled();
 	});
 
 	it("viewed session toasts render as banners instead of app-global toasts", async () => {

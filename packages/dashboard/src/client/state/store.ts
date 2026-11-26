@@ -36,6 +36,8 @@ import {
 
 export type Route =
 	| { screen: "fleet" }
+	| { screen: "automate" }
+	| { screen: "automation"; runId: string; ref: string }
 	| { screen: "session"; key: string }
 	| { screen: "subagent"; key: string; agentId: string }
 	| { screen: "files"; path?: string }
@@ -50,6 +52,14 @@ function parseHash(): Route {
 	if (head === "session" && rest[0]) {
 		if (rest[1] === "subagent" && rest[2]) return { screen: "subagent", key: rest[0], agentId: rest[2] };
 		return { screen: "session", key: rest[0] };
+	}
+	if (head === "automate") return { screen: "automate" };
+	if (head === "automation" && rest.length === 2 && rest[0] && /^(setup|work|guard-\d+|report)$/.test(rest[1])) {
+		try {
+			return { screen: "automation", runId: decodeURIComponent(rest[0]), ref: rest[1] };
+		} catch {
+			return { screen: "automate" };
+		}
 	}
 	if (head === "files") return { screen: "files", path: rest.length ? decodeURIComponent(rest.join("/")) : undefined };
 	if (head === "memories") return { screen: "memories" };
@@ -72,6 +82,10 @@ export function routeToHash(route: Route): string {
 	switch (route.screen) {
 		case "fleet":
 			return "#/";
+		case "automate":
+			return "#/automate";
+		case "automation":
+			return `#/automation/${encodeURIComponent(route.runId)}/${encodeURIComponent(route.ref)}`;
 		case "session":
 			return `#/session/${route.key}`;
 		case "subagent":

@@ -38,6 +38,7 @@ import {
 import { getDocsPath, getSubagentSessionsDir } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { sleep } from "../utils/sleep.js";
+import { Automation, type AutomationDraft, type AutomationRoleOptions, resolveAutomationModel } from "./automation.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
 import {
 	type CompactionResult,
@@ -57,6 +58,7 @@ import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import {
 	type ContextUsage,
+	createExtensionRuntime,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
 	ExtensionRunner,
@@ -1591,6 +1593,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this.invalidateAutomationDraft();
 		this._disconnectFromAgent();
 		if (this._ownsPerformanceTracker) {
 			this.performanceTracker.dispose();
@@ -1675,7 +1678,7 @@ export class AgentSession {
 	setActiveToolsByName(toolNames: string[]): void {
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
-		for (const name of toolNames) {
+		for (const name of this._automation?.toolNames ?? toolNames) {
 			if (this._subagentsDisabledBySetting && name === "subagent") continue;
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
@@ -1831,7 +1834,7 @@ export class AgentSession {
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 		const memoryIndexes = this._resourceLoader.getMemoryIndexes();
 
-		return buildSystemPrompt({
+		const base = buildSystemPrompt({
 			cwd: this._cwd,
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
@@ -1846,11 +1849,157 @@ export class AgentSession {
 			currentModel: this.model ? { provider: this.model.provider, id: this.model.id } : undefined,
 			subagentsDisabled: this._subagentsDisabledBySetting,
 		});
+		return this._automation ? `${base}\n\n${this._automation.prompt}` : base;
 	}
 
 	// =========================================================================
 	// Prompting
 	// =========================================================================
+
+	private _automation?: Automation;
+	private _configuringAutomation = false;
+	private _promptsInFlight = 0;
+
+	get automationRole(): AutomationRoleOptions["role"] | undefined {
+		return this._automation?.role;
+	}
+
+	invalidateAutomationDraft(): void {
+		this._automation?.invalidateDraft();
+	}
+
+	private _assertFreshForAutomation(): void {
+		if (
+			this.messages.length ||
+			this._promptsInFlight ||
+			this.isStreaming ||
+			this.isRetrying ||
+			this.isCompacting ||
+			this.isBashRunning ||
+			this._automationTurnInFlight ||
+			this._agentEventsInFlight ||
+			this._recoveryPromise ||
+			this.pendingMessageCount ||
+			this._pendingNextTurnMessages.length ||
+			this._pendingBashMessages.length
+		) {
+			throw new Error("Automation requires a fresh idle session");
+		}
+		this._assertNoOutstandingAutomationWork();
+	}
+
+	async configureAutomation(
+		options: AutomationRoleOptions,
+		onApproved: (draft: AutomationDraft) => void,
+	): Promise<void> {
+		if (this._automation || this._configuringAutomation)
+			throw new Error("Automation already configured or configuring");
+		this._assertFreshForAutomation();
+		this._configuringAutomation = true;
+		try {
+			const automation = new Automation(options, this._modelRegistry, () => this.sessionId, onApproved);
+			const sessionId = this.sessionId;
+			if (options.role !== "setup") {
+				const model = await resolveAutomationModel(this._modelRegistry, options);
+				this._assertFreshForAutomation();
+				if (sessionId !== this.sessionId) throw new Error("Session changed during automation configuration");
+				this._validateModelPromptSettings(model);
+				const level = clampThinkingLevel(model, this._getThinkingLevelForModelSwitch());
+				this.agent.setModel(this._applyContextTier(model));
+				this._refreshThinkingDisplay(model);
+				this.sessionManager.appendModelChange(model.provider, model.id);
+				this.agent.setThinkingLevel(level);
+				this.sessionManager.appendThinkingLevelChange(level);
+			}
+			this._automation = automation;
+			this._buildRuntime({});
+		} finally {
+			this._configuringAutomation = false;
+		}
+	}
+
+	private _automationTurnInFlight = false;
+
+	/** Run a foreground automation command through the last automatic continuation. */
+	async automationTurn(message: string, feedback = false): Promise<string> {
+		if (
+			this._automationTurnInFlight ||
+			this.isStreaming ||
+			this.isCompacting ||
+			this.isRetrying ||
+			this._recoveryPromise ||
+			this._agentEventsInFlight
+		) {
+			throw new Error("Cannot start automation turn while a turn is in progress");
+		}
+		this._assertNoOutstandingAutomationWork();
+
+		let assistant: AssistantMessage | undefined;
+		let failure: string | undefined;
+		const unsubscribe = this.subscribe((event) => {
+			if (event.type === "agent_end") {
+				// This run's messages, not history: compaction may rebuild history, and
+				// an aborted/failed run must never return a previous run's answer.
+				assistant = this._findLastAssistantInMessages(event.messages);
+				// An exception before message_end (e.g. resolving credentials) can
+				// arm the retry promise from agent_end's synthetic error alone. With
+				// no processed assistant, no retry handler will run to release it.
+				if (!this._lastAssistantMessage) this._resolveRetry();
+				// Ordinary prompt tracks recovery after errors. For this command, also
+				// cover the timer gap if threshold compaction schedules a continuation
+				// after a successful run. agent_end's finally owns resolution in both cases.
+				this._recoveryPromise ??= new Promise((resolve) => {
+					this._recoveryResolve = resolve;
+				});
+			} else if (event.type === "auto_compaction_end") {
+				if (event.aborted || event.errorMessage !== undefined || !event.result) {
+					failure = event.errorMessage || (event.aborted ? "Compaction aborted" : "Compaction produced no result");
+				}
+				if (event.willRetry) assistant = undefined;
+			}
+		});
+		this._automationTurnInFlight = true;
+		try {
+			if (feedback) {
+				await this.sendCustomMessage(
+					{ customType: "automation-guard-feedback", content: message, display: true },
+					{ triggerTurn: true },
+				);
+			} else {
+				await this.prompt(message, { source: "rpc", expandPromptTemplates: false });
+			}
+			// Processing agent_end can itself start more work. Drain to a fixed
+			// point, including a wakeup that began while draining the previous run.
+			do {
+				await this.agent.waitForIdle();
+				await this._agentEventQueue;
+				await this._waitForAutomaticFollowUps();
+			} while (this.isStreaming || this._agentEventsInFlight || this._recoveryPromise || this.isRetrying);
+
+			if (failure) throw new Error(failure);
+			if (assistant?.stopReason === "error" || assistant?.stopReason === "aborted") {
+				throw new Error(assistant.errorMessage || `Automation turn ${assistant.stopReason}`);
+			}
+			this._assertNoOutstandingAutomationWork();
+			const text = assistant?.content
+				.filter((block) => block.type === "text")
+				.map((block) => block.text)
+				.join("");
+			if (!text?.trim() || assistant?.stopReason === "toolUse")
+				throw new Error("Automation turn produced no final assistant text");
+			return text;
+		} finally {
+			unsubscribe();
+			this._automationTurnInFlight = false;
+		}
+	}
+
+	private _assertNoOutstandingAutomationWork(): void {
+		if (getRunningBackgroundAgents().length || this._pendingCancellationNotices.length) {
+			throw new Error("Automation turn has outstanding background work");
+		}
+		if (this.agent.hasQueuedMessages()) throw new Error("Automation turn has undelivered queued messages");
+	}
 
 	/**
 	 * Send a prompt to the agent.
@@ -1862,6 +2011,17 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		if (this._configuringAutomation) throw new Error("Automation configuration is in progress");
+		// isStreaming is still false during asynchronous credential checks and input hooks.
+		this._promptsInFlight++;
+		try {
+			await this._prompt(text, options);
+		} finally {
+			this._promptsInFlight--;
+		}
+	}
+
+	private async _prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 
 		// Handle extension commands first (execute immediately, even during streaming)
@@ -2308,6 +2468,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this.invalidateAutomationDraft();
 		this.abortRetry();
 		// Like abortRetry(), release prompt() callers waiting for automatic context recovery.
 		this._resolveRecovery();
@@ -3450,13 +3611,15 @@ export class AgentSession {
 		const previousActiveToolNames = this.getActiveToolNames();
 
 		const registeredTools = this._extensionRunner?.getAllRegisteredTools() ?? [];
-		const allCustomTools = [
-			...registeredTools,
-			...this._customTools.map((definition) => ({
-				definition,
-				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
-			})),
-		];
+		const allCustomTools = this._automation
+			? []
+			: [
+					...registeredTools,
+					...this._customTools.map((definition) => ({
+						definition,
+						sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
+					})),
+				];
 		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
 			Array.from(this._baseToolDefinitions.entries()).map(([name, definition]) => [
 				name,
@@ -3534,14 +3697,11 @@ export class AgentSession {
 		);
 	}
 
-	private _buildRuntime(options: {
-		activeToolNames?: string[];
-		flagValues?: Map<string, boolean | string>;
-		includeAllExtensionTools?: boolean;
-	}): void {
+	private _getBaseToolDefinitions() {
 		const autoResizeImages = this.settingsManager.getImageAutoResize();
+		if (this._automation) return this._automation.createToolDefinitions(this._cwd, autoResizeImages);
 		const shellCommandPrefix = this.settingsManager.getShellCommandPrefix();
-		const baseToolDefinitions = this._baseToolsOverride
+		return this._baseToolsOverride
 			? Object.fromEntries(
 					Object.entries(this._baseToolsOverride).map(([name, tool]) => [
 						name,
@@ -3612,12 +3772,21 @@ export class AgentSession {
 						},
 					},
 				});
+	}
 
+	private _buildRuntime(options: {
+		activeToolNames?: string[];
+		flagValues?: Map<string, boolean | string>;
+		includeAllExtensionTools?: boolean;
+	}): void {
 		this._baseToolDefinitions = new Map(
-			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
+			Object.entries(this._getBaseToolDefinitions()).map(([name, tool]) => [name, tool as ToolDefinition]),
 		);
 
-		const extensionsResult = this._resourceLoader.getExtensions();
+		// Automation needs ctx.ui but must never execute extension tools, commands or event handlers.
+		const extensionsResult = this._automation
+			? { extensions: [], runtime: createExtensionRuntime() }
+			: this._resourceLoader.getExtensions();
 		if (options.flagValues) {
 			for (const [name, value] of options.flagValues) {
 				extensionsResult.runtime.flagValues.set(name, value);
@@ -3682,6 +3851,18 @@ export class AgentSession {
 		}
 		if (this.model) {
 			this._validateModelPromptSettings(this.model);
+		}
+
+		if (this._automation) {
+			// The general resource reload imports extensions. Refresh model metadata and the
+			// restricted runtime only; keep the approved tool list and one-shot callback.
+			this.invalidateAutomationDraft();
+			if (this.model && this.automationRole !== "setup") {
+				await resolveAutomationModel(this._modelRegistry, { provider: this.model.provider, model: this.model.id });
+			}
+			this._refreshCurrentModelFromRegistry();
+			this._buildRuntime({});
+			return;
 		}
 
 		const previousFlagValues = this._extensionRunner?.getFlagValues();
@@ -3872,6 +4053,8 @@ export class AgentSession {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean; operations?: BashOperations },
 	): Promise<BashResult> {
+		if (this._automation || this._configuringAutomation)
+			throw new Error("Bash is unavailable in automation sessions");
 		this._bashAbortController = new AbortController();
 
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)

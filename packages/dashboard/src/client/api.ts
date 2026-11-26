@@ -3,6 +3,7 @@
  * non-OK response throws with the server's error message (no silent fallback).
  */
 
+import type { AutomationRun } from "../shared/automation.js";
 import type {
 	AgentTypeDto,
 	AuthStatusDto,
@@ -123,6 +124,14 @@ export const api = {
 		const suffix = query.size ? `?${query}` : "";
 		return request<DashboardResyncDto>(`/api/resync${suffix}`, { signal });
 	},
+	automations: (signal?: AbortSignal) => request<{ runs: AutomationRun[] }>("/api/automations", { signal }),
+	setupAutomation: () => request<RuntimeInfoDto>("/api/automations/setup", json({})),
+	stopAutomation: (id: string) => request<unknown>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
+	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>
+		request<{ messages: unknown[] }>(
+			`/api/automations/${encodeURIComponent(id)}/transcripts/${encodeURIComponent(ref)}`,
+			{ signal },
+		),
 	createRuntime: (cwd: string, opts: { sessionPath?: string; firstPrompt?: string } = {}) =>
 		request<RuntimeInfoDto>("/api/runtimes", json({ cwd, ...opts })),
 	stopRuntime: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}`, { method: "DELETE" }),

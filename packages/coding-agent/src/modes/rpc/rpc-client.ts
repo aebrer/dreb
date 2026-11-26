@@ -310,8 +310,7 @@ export class RpcClient {
 		});
 
 		this.process = null;
-		this._dead = true;
-		this.pendingRequests.clear();
+		this.failPendingRequests("RPC process stopped");
 	}
 
 	/**
@@ -355,6 +354,16 @@ export class RpcClient {
 	 */
 	async prompt(message: string, images?: ImageContent[]): Promise<void> {
 		await this.send({ type: "prompt", message, images });
+	}
+
+	async configureAutomation(options: import("../../core/automation.js").AutomationRoleOptions): Promise<void> {
+		await this.send({ type: "configure_automation", options });
+	}
+
+	/** Run one automation turn and return the settled assistant text. */
+	async automationTurn(message: string, feedback?: boolean): Promise<string> {
+		const response = await this.send({ type: "automation_turn", message, feedback }, null);
+		return this.getData<{ text: string }>(response).text;
 	}
 
 	/**
@@ -975,7 +984,7 @@ export class RpcClient {
 		}
 	}
 
-	private async send(command: RpcCommandBody, timeoutMs = 30000): Promise<RpcResponse> {
+	private async send(command: RpcCommandBody, timeoutMs: number | null = 30000): Promise<RpcResponse> {
 		if (this._dead || !this.process?.stdin) {
 			// Surface the real spawn cause (e.g. uid/gid EPERM) if one was captured,
 			// rather than a generic message that hides why the process is gone.
@@ -988,10 +997,13 @@ export class RpcClient {
 		const fullCommand = { ...command, id } as RpcCommand;
 
 		return new Promise((resolve, reject) => {
-			const timeout = setTimeout(() => {
-				this.pendingRequests.delete(id);
-				reject(new Error(`Timeout waiting for response to ${command.type}. Stderr: ${this.stderr}`));
-			}, timeoutMs);
+			const timeout =
+				timeoutMs === null
+					? undefined
+					: setTimeout(() => {
+							this.pendingRequests.delete(id);
+							reject(new Error(`Timeout waiting for response to ${command.type}. Stderr: ${this.stderr}`));
+						}, timeoutMs);
 
 			this.pendingRequests.set(id, {
 				resolve: (response) => {

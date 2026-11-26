@@ -117,6 +117,25 @@ describe("dashboardImageUrl", () => {
 	});
 });
 
+describe("automation transport", () => {
+	it("reads saved records by encoded id/ref, and POSTs empty objects for setup and stop", async () => {
+		const fetchMock = vi.fn(async () => Response.json({}));
+		vi.stubGlobal("fetch", fetchMock);
+		const signal = new AbortController().signal;
+		await api.automations(signal);
+		await api.automationTranscript("run/one", "guard-0", signal);
+		await api.setupAutomation();
+		await api.stopAutomation("run/one");
+		const post = { method: "POST", headers: { "content-type": "application/json" }, body: "{}" };
+		expect(fetchMock.mock.calls).toEqual([
+			["/api/automations", { signal }],
+			["/api/automations/run%2Fone/transcripts/guard-0", { signal }],
+			["/api/automations/setup", post],
+			["/api/automations/run%2Fone/stop", post],
+		]);
+	});
+});
+
 describe("subagent stop transport", () => {
 	it("POSTs to the selected subagent's encoded abort route and surfaces server errors", async () => {
 		const fetchMock = vi

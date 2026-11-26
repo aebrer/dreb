@@ -20,7 +20,7 @@
  * unexpected request, a missing selector, or a leak — fails the run.
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,13 +33,21 @@ import solid from "vite-plugin-solid";
 import { DashboardAuth } from "../../src/server/auth.js";
 import { RuntimePool } from "../../src/server/runtime-pool.js";
 import { createDashboardServer, type DashboardServerApp } from "../../src/server/server.js";
+import { automationHistory, type SetupTurns } from "./automation-fixture.js";
 import { createFixtureFileApi, createFixtureMemoryApi } from "./fixture-host-apis.js";
 import { createFixtureRpcClient, FixtureFailures, fixtureControls } from "./fixture-rpc-client.js";
 import { captureHostIdentity, findLeaks, type HostIdentity, type LeakNeedle, leakNeedles } from "./leak-guard.js";
 import { collectRenderedSurface, fontsReady, loadFontFamily, seedAppearance, twoFrames } from "./page-scripts.js";
-import { buildScenario, FIXTURE_DIRECTORIES, FIXTURE_HOME, NOW_MS, type Scenario } from "./scenario.js";
+import {
+	buildScenario,
+	emptySetupScenario,
+	FIXTURE_DIRECTORIES,
+	FIXTURE_HOME,
+	NOW_MS,
+	type Scenario,
+} from "./scenario.js";
 import { toJsonl } from "./session-builder.js";
-import { type ShotDefinition, shotViewport } from "./shots.js";
+import { type ShotDefinition, selectShots, shotViewport } from "./shots.js";
 
 const DASHBOARD_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLIENT_ROOT = join(DASHBOARD_ROOT, "src/client");
@@ -119,7 +127,7 @@ async function dashboardVersion(): Promise<string> {
 }
 
 async function createSandbox(): Promise<Sandbox> {
-	const root = await mkdtemp(join(tmpdir(), "dreb-screenshots-"));
+	const root = await mkdtemp(join(await realpath(tmpdir()), "dreb-screenshots-"));
 	const sandbox: Sandbox = {
 		root,
 		home: join(root, "home"),
@@ -186,6 +194,7 @@ function isolateEnvironment(sandbox: Sandbox): () => void {
 interface RunningDashboard {
 	baseUrl: string;
 	runtimeKeys: Map<string, string>;
+	setupTurns(key: string): SetupTurns;
 	/** Stream every runtime's scenario live events to connected browsers. */
 	emitLiveEvents(): void;
 	failures: FixtureFailures;
@@ -198,6 +207,7 @@ async function startDashboard(
 	sandbox: Sandbox,
 	clientDir: string,
 	paths: Map<string, string>,
+	seedInventory: boolean,
 ): Promise<RunningDashboard> {
 	const failures = new FixtureFailures();
 	const serverErrors: string[] = [];
@@ -208,14 +218,29 @@ async function startDashboard(
 		return path;
 	};
 	const runtimesBySessionFile = new Map(scenario.live.map((runtime) => [sessionFile(runtime.session.id), runtime]));
+	const automationSetupDir = join(sandbox.root, "automation-setup");
+	await mkdir(automationSetupDir);
+	const setup = emptySetupScenario(automationSetupDir);
+	const setupPath = join(automationSetupDir, setup.session.fileName);
+	await writeFile(setupPath, toJsonl(setup.session));
+	const automationHistoryFile = join(sandbox.agentDir, "automation-history.json");
+	await writeFile(automationHistoryFile, JSON.stringify(seedInventory ? automationHistory(setupPath) : []));
 	let poolNow = NOW_MS;
 	const pool = new RuntimePool({
 		cliPath: "/screenshot-fixture/cli.js",
 		now: () => poolNow,
 		// The pool logs only degraded reads (unavailable state, stats, agents); each is a capture failure.
 		logger: (line) => serverErrors.push(`runtime pool: ${line}`),
-		clientFactory: ({ args }): RpcClient => {
+		clientFactory: ({ cwd, args }): RpcClient => {
 			const sessionIndex = args.indexOf("--session");
+			if (cwd === automationSetupDir && sessionIndex === -1) {
+				return createFixtureRpcClient({
+					scenario,
+					version,
+					failures,
+					binding: { scenario: setup, paths: { sessionFile: () => setupPath } },
+				});
+			}
 			const binding =
 				sessionIndex === -1
 					? undefined
@@ -238,11 +263,13 @@ async function startDashboard(
 	}
 	poolNow = NOW_MS;
 
-	const available = new Set(FIXTURE_DIRECTORIES);
+	const available = new Set([...FIXTURE_DIRECTORIES, automationSetupDir]);
 	const app: DashboardServerApp = createDashboardServer({
 		auth: new DashboardAuth(),
 		pool,
 		staticDir: clientDir,
+		automationHistoryFile,
+		automationSetupDir,
 		listAllSessions: () => SessionManager.listAllMetadataFromDir(sandbox.sessionsDir),
 		deleteSession: async () => {
 			throw failures.record("Screenshot harness never deletes sessions");
@@ -271,6 +298,12 @@ async function startDashboard(
 	return {
 		baseUrl: `http://127.0.0.1:${address.port}`,
 		runtimeKeys,
+		setupTurns(key) {
+			const handle = pool.get(key);
+			const turns = handle && fixtureControls(handle.client).setup;
+			if (!turns) throw failures.record(`Expected a new fixture setup runtime for ${key}`);
+			return turns;
+		},
 		emitLiveEvents() {
 			for (const handle of pool.list()) fixtureControls(handle.client).emitLiveEvents();
 		},
@@ -294,6 +327,8 @@ function routeHash(shot: ShotDefinition, runtimeKeys: Map<string, string>): stri
 	switch (shot.route.screen) {
 		case "fleet":
 			return "#/";
+		case "automate":
+			return "#/automate";
 		case "session":
 			return `#/session/${key(shot.route.runtime)}`;
 		case "subagent":
@@ -355,7 +390,7 @@ async function newShotContext(
 	browser: Browser,
 	shot: ShotDefinition,
 	baseUrl: string,
-	options: HarnessOptions,
+	options: Pick<HarnessOptions, "fonts" | "googleFontsRoute">,
 	blocked: string[],
 ): Promise<BrowserContext> {
 	const viewport = shotViewport(shot);
@@ -479,8 +514,50 @@ async function captureShot(
  */
 export async function runScreenshotHarness(options: HarnessOptions): Promise<CaptureResult[]> {
 	if (options.shots.length === 0) throw new ScreenshotHarnessError("No screenshots requested");
-	const log = options.log ?? (() => {});
 	const host: HostIdentity = captureHostIdentity();
+	return withFixtureBrowser(options, true, async (browser, dashboard, sandbox) => {
+		const needles = [...leakNeedles(host, sandbox.root), ...(options.extraLeakNeedles ?? [])];
+		await mkdir(resolve(options.outDir), { recursive: true });
+		const results: CaptureResult[] = [];
+		for (const shot of options.shots) {
+			const result = await captureShot(browser, dashboard, shot, options, needles);
+			options.log?.(`captured ${result.path} (${result.width}×${result.height})`);
+			results.push(result);
+		}
+		return results;
+	});
+}
+
+/** Exercise the same HTTP/SSE server in offline Chromium without publishing a frame of the setup cwd. */
+export async function runSetupWalkthrough(
+	clientDir: string,
+	walk: (page: Page, dashboard: Pick<RunningDashboard, "baseUrl" | "setupTurns">) => Promise<void>,
+): Promise<void> {
+	await withFixtureBrowser({ clientDir }, false, async (browser, dashboard) => {
+		const blocked: string[] = [];
+		const [fleet] = selectShots(["fleet-desktop-dark"]);
+		const context = await newShotContext(browser, fleet, dashboard.baseUrl, { fonts: "stub" }, blocked);
+		try {
+			const page = await context.newPage();
+			const problems = new PageProblems(page, dashboard.baseUrl);
+			await page.clock.setFixedTime(NOW_MS);
+			await page.goto(`${dashboard.baseUrl}/#/`);
+			for (const selector of fleet.ready) await page.locator(selector).first().waitFor();
+			await walk(page, dashboard);
+			await problems.waitForQuiet();
+			const issues = [...problems.problems, ...blocked, ...dashboard.failures.messages, ...dashboard.serverErrors];
+			if (issues.length) throw new ScreenshotHarnessError(issues.join("\n"));
+		} finally {
+			await context.close();
+		}
+	});
+}
+
+async function withFixtureBrowser<T>(
+	options: Pick<HarnessOptions, "clientDir" | "log">,
+	seedInventory: boolean,
+	run: (browser: Browser, dashboard: RunningDashboard, sandbox: Sandbox) => Promise<T>,
+): Promise<T> {
 	const sandbox = await createSandbox();
 	const restoreEnvironment = isolateEnvironment(sandbox);
 	let dashboard: RunningDashboard | undefined;
@@ -490,21 +567,13 @@ export async function runScreenshotHarness(options: HarnessOptions): Promise<Cap
 		const paths = await materializeSessions(scenario, sandbox);
 		let clientDir = options.clientDir;
 		if (!clientDir) {
-			log("building dashboard client…");
+			options.log?.("building dashboard client…");
 			clientDir = sandbox.clientDir;
 			await buildDashboardClient(clientDir);
 		}
-		dashboard = await startDashboard(scenario, sandbox, clientDir, paths);
-		const needles = [...leakNeedles(host, sandbox.root), ...(options.extraLeakNeedles ?? [])];
-		await mkdir(resolve(options.outDir), { recursive: true });
+		dashboard = await startDashboard(scenario, sandbox, clientDir, paths, seedInventory);
 		browser = await chromium.launch({ args: DETERMINISTIC_CHROMIUM_ARGS });
-		const results: CaptureResult[] = [];
-		for (const shot of options.shots) {
-			const result = await captureShot(browser, dashboard, shot, options, needles);
-			log(`captured ${result.path} (${result.width}×${result.height})`);
-			results.push(result);
-		}
-		return results;
+		return await run(browser, dashboard, sandbox);
 	} finally {
 		await browser?.close();
 		await dashboard?.close();

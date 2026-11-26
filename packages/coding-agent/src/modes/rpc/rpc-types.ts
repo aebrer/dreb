@@ -8,6 +8,7 @@
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessageEvent, ImageContent, Model, Transport } from "@dreb/ai";
 import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
+import type { AutomationDraft, AutomationRoleOptions } from "../../core/automation.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type { DispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
@@ -23,6 +24,8 @@ import type { SourceInfo } from "../../core/source-info.js";
 
 export type RpcCommand =
 	// Prompting
+	| { id?: string; type: "configure_automation"; options: AutomationRoleOptions }
+	| { id?: string; type: "automation_turn"; message: string; feedback?: boolean }
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
@@ -263,7 +266,11 @@ export interface RpcMessageUpdateEvent {
 export type RpcSessionEvent = Exclude<AgentSessionEvent, { type: "message_update" }> | RpcMessageUpdateEvent;
 
 /** Non-response JSONL messages emitted by the RPC server on stdout. */
-export type RpcEvent = RpcSessionEvent | RpcExtensionUIRequest | RpcDashboardSnapshotBarrierEvent;
+export type RpcEvent =
+	| { type: "automation_approved"; draft: AutomationDraft; setupFile: string }
+	| RpcSessionEvent
+	| RpcExtensionUIRequest
+	| RpcDashboardSnapshotBarrierEvent;
 
 export interface RpcSessionState {
 	model?: Model<any>;
@@ -306,6 +313,8 @@ export interface RpcSessionState {
 
 // Success responses with data
 export type RpcResponse =
+	| { id?: string; type: "response"; command: "configure_automation"; success: true }
+	| { id?: string; type: "response"; command: "automation_turn"; success: true; data: { text: string } }
 	// Prompting (async - events follow)
 	| { id?: string; type: "response"; command: "prompt"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }

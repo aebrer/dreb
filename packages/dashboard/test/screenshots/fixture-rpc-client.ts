@@ -2,7 +2,8 @@
  * A fake dreb RPC runtime that serves the screenshot scenario.
  *
  * The dashboard server talks to live sessions only through `RpcClient`. This
- * fake implements exactly the read-only subset the captured screens need, typed
+ * fake implements the reads the captured screens need, plus text turns for the new
+ * setup session only. Its members are typed
  * against the real `RpcClient` signatures so an RPC interface change fails
  * `tsgo`. Every other member throws a descriptive error when called and is also
  * recorded in {@link FixtureFailures}, so a screen that starts depending on a
@@ -22,6 +23,7 @@ import type {
 	RpcExitListener,
 	RpcSessionState,
 } from "@dreb/coding-agent/rpc";
+import { SetupTurns } from "./automation-fixture.js";
 import {
 	AGENT_TYPES,
 	AVAILABLE_MODELS,
@@ -124,6 +126,26 @@ export function createFixtureRpcClient(options: {
 		events.emit("event", event);
 	};
 
+	const setup = binding?.scenario.slug === "setup" ? new SetupTurns(binding.scenario, emit) : undefined;
+	const setupMembers = setup
+		? ({
+				async configureAutomation(config: { role: string }) {
+					setup.configure(config);
+				},
+				async prompt(message, images) {
+					if (images?.length) throw failures.record("Setup walkthrough expects a text-only prompt");
+					setup.prompt(message);
+				},
+				async abort() {
+					setup.finish("aborted");
+				},
+				// Session's Stop control restores the (empty) pending queue after abort.
+				async clearPendingMessages() {
+					return { steering: [], followUp: [] };
+				},
+			} satisfies Pick<RpcClient, "configureAutomation" | "prompt" | "abort" | "clearPendingMessages">)
+		: {};
+
 	const state = (member: string): RpcSessionState => {
 		const { runtime, transcript } = requireSession(member);
 		const contextWindow = runtime.model.contextWindow;
@@ -134,7 +156,7 @@ export function createFixtureRpcClient(options: {
 			usingSubscription: false,
 			thinkingLevel: runtime.thinkingLevel,
 			availableThinkingLevels: [...THINKING_LEVELS],
-			isStreaming: runtime.status !== "idle",
+			isStreaming: setup?.streaming ?? runtime.status !== "idle",
 			isRetrying: false,
 			retryAttempt: 0,
 			isCompacting: false,
@@ -163,6 +185,10 @@ export function createFixtureRpcClient(options: {
 	const implemented = {
 		async start() {
 			if (!binding) return;
+			if (setup) {
+				messages = binding.scenario.session.messages;
+				return;
+			}
 			// Read the transcript back through the real session parser, exactly as a resumed runtime would.
 			const sessionFile = binding.paths.sessionFile(binding.scenario.session.id);
 			messages = SessionManager.open(sessionFile).buildSessionContext().messages;
@@ -293,27 +319,31 @@ export function createFixtureRpcClient(options: {
 		for (const event of binding?.scenario.liveEvents ?? []) emit(event);
 	};
 
-	const controls: FixtureRuntimeControls = { replayLifecycle, emitLiveEvents };
-	const client = new Proxy(implemented, {
-		get(target, property, receiver) {
-			if (property === FIXTURE_CONTROLS) return controls;
-			if (typeof property === "symbol" || property === "then" || property === "toJSON") {
-				return Reflect.get(target, property, receiver);
-			}
-			if (property in target) return Reflect.get(target, property, receiver);
-			return () => {
-				throw failures.record(
-					`Screenshot fixture runtime does not implement RpcClient.${property}() — add it to fixture-rpc-client.ts`,
-				);
-			};
+	const controls: FixtureRuntimeControls = { replayLifecycle, emitLiveEvents, setup };
+	const client = new Proxy(
+		{ ...implemented, ...setupMembers },
+		{
+			get(target, property, receiver) {
+				if (property === FIXTURE_CONTROLS) return controls;
+				if (typeof property === "symbol" || property === "then" || property === "toJSON") {
+					return Reflect.get(target, property, receiver);
+				}
+				if (property in target) return Reflect.get(target, property, receiver);
+				return () => {
+					throw failures.record(
+						`Screenshot fixture runtime does not implement RpcClient.${property}() — add it to fixture-rpc-client.ts`,
+					);
+				};
+			},
 		},
-	});
+	);
 	return client as unknown as RpcClient;
 }
 
 const FIXTURE_CONTROLS = Symbol("screenshot fixture runtime controls");
 
 interface FixtureRuntimeControls {
+	setup?: SetupTurns;
 	/** Replay status, attention, and activity events after the pool registered the runtime. */
 	replayLifecycle(): void;
 	/** Emit the scenario's live events once a browser is connected. */

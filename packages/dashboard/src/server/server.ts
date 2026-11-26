@@ -32,6 +32,7 @@ import {
 	MAX_SESSION_PREVIEW_CHARACTERS,
 } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
+import { AutomationRuns } from "./automation-runs.js";
 import {
 	DASHBOARD_IMAGE_ID_PATTERN,
 	DashboardImageNotFoundError,
@@ -65,6 +66,9 @@ export interface DashboardSessionInfoSource {
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
 	pool: RuntimePool;
+	automationSetupDir?: string;
+	automationHistoryFile?: string;
+	automationSessionDir?: string;
 	/** Directory of built client assets; omit to skip static serving (tests). */
 	staticDir?: string;
 	/** Session listing (cross-project) — injected so tests can stub it. */
@@ -243,6 +247,10 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		new MemoryApi(options.memoryHomeDir ?? homedir(), (op, scopeId, detail) =>
 			log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
 		);
+	const runs = new AutomationRuns({
+		historyFile: options.automationHistoryFile,
+		start: (cwd, role, spec) => pool.startAutomationChild(cwd, role, spec, options.automationSessionDir),
+	});
 	const hub = options.eventHub ?? new EventHub();
 	const images = options.imageService ?? new DashboardImageService(new ImagePreviewWorker());
 	hub.setEventProjector((key, event) => (key ? images.projectEvent(event, { runtimeKey: key }) : event));
@@ -261,7 +269,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const app = express() as DashboardServerApp;
 	let closePromise: Promise<void> | undefined;
 	app.closeDashboard = () => {
-		closePromise ??= images.close();
+		closePromise ??= Promise.all([images.close(), runs.close()]).then(() => {});
 		return closePromise;
 	};
 	app.disable("x-powered-by");
@@ -752,6 +760,83 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		})().catch((err) => res.status(502).json({ error: String(err?.message ?? err) }));
 	});
 
+	const setupOwners = new Map<string, string>();
+	function owner(req: AuthedRequest): string {
+		const decision = req.authDecision;
+		if (!decision?.allowed) throw new Error("Not authenticated");
+		return decision.mode === "remote" ? `remote:${decision.identity.loginName}` : "local";
+	}
+	app.get("/api/automations", (req, res) => res.json({ runs: runs.list(owner(req)) }));
+	app.post("/api/automations/:id/stop", (req, res) => {
+		if (!runs.get(owner(req), req.params.id)) {
+			res.status(404).json({ error: "Unknown automation" });
+			return;
+		}
+		runs.stop(owner(req), req.params.id);
+		res.json({ ok: true });
+	});
+	app.get("/api/automations/:id/transcripts/:ref", (req, res) => {
+		const run = runs.get(owner(req), req.params.id);
+		const ref = req.params.ref;
+		const file =
+			ref === "setup"
+				? run?.setupFile
+				: ref === "work"
+					? run?.workFile
+					: /^guard-(0|[1-9]\d*)$/.test(ref)
+						? run?.guardFiles[Number(ref.slice(6))]
+						: undefined;
+		if (!file) {
+			res.status(404).json({ error: "Unknown automation transcript" });
+			return;
+		}
+		try {
+			res.json({ messages: readSubagentMessages({ sessionFile: file }) });
+		} catch (err) {
+			handleMemoryError(res, err);
+		}
+	});
+	app.post("/api/automations/setup", async (req, res) => {
+		try {
+			const cwd = await resolveExistingDirectory(options.automationSetupDir ?? homedir());
+			const h = await pool.create(cwd, undefined, { sessionDir: options.automationSessionDir });
+			try {
+				await h.client.configureAutomation({ role: "setup" });
+				const who = owner(req);
+				const info = await pool.describe(h);
+				setupOwners.set(h.key, who);
+				h.client.onEvent((event) => {
+					if (event.type !== "automation_approved" || pool.get(h.key) !== h) return;
+					try {
+						if (!info.state.sessionFile || event.setupFile !== info.state.sessionFile)
+							throw new Error("Setup session changed since creation");
+						runs.launch(who, h.key, event.setupFile, event.draft);
+					} catch (err) {
+						hub.publish(h.key, {
+							type: "extension_ui_request",
+							method: "notify",
+							notifyType: "error",
+							message: `Automation launch failed: ${String(err)}`,
+						});
+					}
+				});
+				res.status(201).json(info);
+			} catch (err) {
+				await pool.stop(h.key);
+				throw err;
+			}
+		} catch (err) {
+			handleMemoryError(res, err);
+		}
+	});
+	app.use("/api/runtimes/:key", (req, res, next) => {
+		const who = setupOwners.get(String(req.params.key));
+		if (who && who !== owner(req)) {
+			res.status(404).json({ error: "Unknown setup session" });
+			return;
+		}
+		next();
+	});
 	// -- runtimes ---------------------------------------------------------------
 	app.post("/api/runtimes", (req, res) => {
 		(async () => {
@@ -1146,6 +1231,10 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			return;
 		}
 		try {
+			if (req.body?.type !== "extension_ui_response" || typeof req.body.id !== "string") {
+				res.status(400).json({ error: "Expected extension UI response" });
+				return;
+			}
 			handle.client.sendExtensionUIResponse(req.body);
 			res.json({ ok: true });
 		} catch (err) {

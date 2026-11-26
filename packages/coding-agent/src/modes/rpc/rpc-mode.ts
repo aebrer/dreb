@@ -2057,11 +2057,41 @@ export async function runRpcMode(
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
+		if (
+			session.automationRole === "setup" &&
+			["prompt", "steer", "follow_up", "abort", "reload", "new_session", "switch_session"].includes(command.type)
+		)
+			session.invalidateAutomationDraft();
 
 		switch (command.type) {
 			// =================================================================
 			// Prompting
 			// =================================================================
+
+			case "configure_automation": {
+				await session.configureAutomation(command.options, (draft) =>
+					output({ type: "automation_approved", draft, setupFile: session.sessionFile }),
+				);
+				return success(id, command.type);
+			}
+			case "automation_turn": {
+				const role = session.automationRole;
+				if (role !== "orchestrator" && role !== "guard") {
+					return error(id, command.type, "automation_turn requires an orchestrator or guard session");
+				}
+				if (
+					typeof command.message !== "string" ||
+					(command.feedback !== undefined && typeof command.feedback !== "boolean")
+				) {
+					return error(
+						id,
+						command.type,
+						"automation_turn expects a string message and an optional boolean feedback",
+					);
+				}
+				const text = await session.automationTurn(command.message, command.feedback);
+				return success(id, command.type, { text });
+			}
 
 			case "prompt": {
 				const rejection = getBuiltinPromptRejection(command.message);

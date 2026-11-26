@@ -371,11 +371,42 @@ export class RuntimePool {
 		this.fleetSnapshotTimer.unref?.();
 	}
 
+	/** Unattended children are owned by the review loop, never Fleet-editable runtimes. */
+	async startAutomationChild(
+		cwd: string,
+		role: "orchestrator" | "guard",
+		spec: import("@dreb/coding-agent/rpc").AutomationDraft["guard"],
+		sessionDir?: string,
+	) {
+		if (this.closing) throw new Error("Runtime pool is closing");
+		const args = ["--ui", "dashboard", ...this.baseArgs, "--no-extensions"];
+		if (sessionDir) args.push("--session-dir", sessionDir);
+		const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
+		try {
+			await client.start();
+			await client.configureAutomation({ ...spec, role });
+			const { sessionFile: file } = await client.getState();
+			if (!file) throw new Error("Automation requires a saved session");
+			return {
+				file,
+				turn: (message: string, feedback?: boolean) => client.automationTurn(message, feedback),
+				close: () => client.stop(),
+			};
+		} catch (err) {
+			await client.stop();
+			throw err;
+		}
+	}
+
 	/** Spawn a new runtime in `cwd`, optionally opening an existing session file. */
-	async create(cwd: string, sessionPath?: string): Promise<RuntimeHandle> {
+	async create(cwd: string, sessionPath?: string, automation?: { sessionDir?: string }): Promise<RuntimeHandle> {
 		if (this.closing) throw new Error("Runtime pool is closing");
 		const key = randomBytes(6).toString("hex");
 		const args = ["--ui", "dashboard", ...this.baseArgs];
+		if (automation) {
+			args.push("--no-extensions");
+			if (automation.sessionDir) args.push("--session-dir", automation.sessionDir);
+		}
 		if (sessionPath) args.push("--session", sessionPath);
 		const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
 		const handle: RuntimeHandle = {

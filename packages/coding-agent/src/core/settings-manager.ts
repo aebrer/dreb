@@ -156,6 +156,7 @@ export interface Settings {
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
+	automationSetupDir?: string; // Global Dashboard setup cwd, independent of the agreed work directory.
 	sessionDir?: string; // Custom main-session storage directory (same format as --session-dir CLI flag)
 	/** Global-only custom root for subagent child-session logs. Project settings are ignored. */
 	subagentSessionDir?: string;

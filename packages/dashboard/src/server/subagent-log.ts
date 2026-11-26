@@ -126,6 +126,16 @@ function readMessagesFromFile(file: string): unknown[] {
 		try {
 			const entry = JSON.parse(line);
 			if (isRecord(entry) && entry.type === "message" && entry.message) messages.push(entry.message);
+			if (isRecord(entry) && entry.type === "custom_message" && entry.display === true) {
+				messages.push({
+					role: "custom",
+					customType: entry.customType,
+					content: entry.content,
+					details: entry.details,
+					display: true,
+					timestamp: Date.parse(String(entry.timestamp)),
+				});
+			}
 		} catch (err) {
 			if (err instanceof SyntaxError) continue;
 			throw err;

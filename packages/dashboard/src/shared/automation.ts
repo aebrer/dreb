@@ -1,0 +1,16 @@
+import type { AutomationDraft } from "@dreb/coding-agent/rpc";
+export type { AutomationDraft };
+
+export interface AutomationRun {
+	id: string;
+	draft: AutomationDraft;
+	status: "working" | "reviewing" | "stopped" | "failed" | "interrupted";
+	startedAt: number;
+	endedAt?: number;
+	compactions: number;
+	decisions: { action: "continue" | "stop"; report: string; at: number }[];
+	report?: string;
+	setupFile: string;
+	workFile?: string;
+	guardFiles: string[];
+}

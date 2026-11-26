@@ -110,6 +110,38 @@ Response:
 
 The `images` field is optional. Each image uses `ImageContent` format: `{"type": "image", "data": "base64-encoded-data", "mimeType": "image/png"}`.
 
+#### automation_turn
+
+Run one turn on an `orchestrator` or `guard` automation session. Unlike `prompt`, this command replies **after** the turn settles. Events still stream; an `agent_end` event can precede automatic retry or compaction, so wait for the matching response instead.
+
+```json
+{"id":"turn-1","type":"automation_turn","message":"Summarize the changes."}
+```
+
+```json
+{"id":"turn-1","type":"response","command":"automation_turn","success":true,"data":{"text":"The changes are ready for review."}}
+```
+
+The initial message is sent without prompt-template or skill expansion. Set `"feedback": true` to start a turn with a visible custom message labeled `automation-guard-feedback` instead. Automation sessions use their role's foreground tools, not `subagent` or `wait`. A second in-flight automation turn, outstanding background work, terminal error, abort, failed compaction, or lack of a fresh assistant answer returns `success: false`.
+
+`await client.automationTurn(message, feedback?)` returns the final assistant text. It has no client-side request timeout and rejects if the RPC process exits.
+
+Before the first prompt, send `configure_automation` once on a fresh, idle session (`await client.configureAutomation(options)`). Use a separate session for each role. For example, configure the interactive setup session with:
+
+```json
+{"id":"setup-1","type":"configure_automation","options":{"role":"setup"}}
+```
+
+Use ordinary `prompt` turns for setup. Only setup can emit `automation_approved`: selecting **Approve** on the full proposal emits `{"type":"automation_approved","draft":...,"setupFile":...}`. The draft contains `instructions`, `cwd`, `orchestrator` and `guard`; `setupFile` identifies the setup transcript. **Request changes**, dismissal and chat text do not emit this event.
+
+For each unattended session, copy the role's exact `provider`, `model` and `tools` from the approved draft into `options` alongside `role`. For example:
+
+```json
+{"id":"guard-1","type":"configure_automation","options":{"role":"guard","provider":"anthropic","model":"claude-opus-5-5","tools":["read","grep"]}}
+```
+
+An unknown model, missing credentials or invalid tool list fails configuration; nothing is silently substituted. Once configured, use `automation_turn` for work or review. See [Automate](dashboard.md#automate) for the role catalogs and review loop.
+
 #### steer
 
 Queue a steering message while the agent is running. It is delivered after the current assistant turn finishes executing its tool calls, before the next LLM call. Skill commands and prompt templates are expanded. Extension commands are not allowed (use `prompt` instead).
