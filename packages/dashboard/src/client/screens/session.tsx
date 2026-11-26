@@ -42,7 +42,7 @@ import {
 	setComposerDraft,
 } from "../state/composer-memory.js";
 import type { AskUiQuestion, ExtensionUiRequest, SessionViewState } from "../state/reducer.js";
-import type { AppStore } from "../state/store.js";
+import { type AppStore, findSessionRuntime } from "../state/store.js";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const UPLOAD_DIR_NAME = ".dreb-dashboard-uploads";
@@ -874,7 +874,7 @@ function ImportModal(props: {
 
 export function SessionScreen(props: { store: AppStore; sessionKey: string }): JSX.Element {
 	const session = (): SessionViewState | undefined => props.store.sessions[props.sessionKey];
-	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
+	const runtime = createMemo(() => findSessionRuntime(props.sessionKey, props.store.sessions, props.store.fleet()));
 	const automationSetup = () => {
 		const route = props.store.route();
 		return route.screen === "session" && route.automationSetup === true;

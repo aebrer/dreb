@@ -166,6 +166,7 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 		try {
 			const runtime = await api.setupAutomation();
 			if (controller.signal.aborted) return;
+			props.store.rememberSetupRuntime(runtime);
 			props.store.navigate({ screen: "session", key: runtime.key, automationSetup: true });
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));

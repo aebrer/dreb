@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } fro
 import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { readSessionTranscript } from "@dreb/coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDashboardSessionLister } from "../src/index.js";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
@@ -17,7 +18,7 @@ import {
 	MAX_SSE_BUFFERED_BYTES,
 	parseDeviceCookie,
 } from "../src/server/server.js";
-import { MAX_SESSION_PREVIEW_CHARACTERS } from "../src/shared/protocol.js";
+import { MAX_SESSION_PREVIEW_CHARACTERS, type RuntimeInfoDto } from "../src/shared/protocol.js";
 import { makeFakeClient } from "./runtime-pool.test.js";
 
 const servers: Server[] = [];
@@ -158,6 +159,143 @@ async function startServer(options: TestServerOptions = {}) {
 	if (address === null || typeof address === "string") throw new Error("no port");
 	return { base: `http://127.0.0.1:${address.port}`, pool, clients, clientCwds, app };
 }
+
+describe("closed automation setup resume", () => {
+	async function fixture() {
+		const dir = await createTempProject();
+		const auth = new DashboardAuth();
+		const { base, pool, clients } = await startServer({ auth });
+		const create = pool.create.bind(pool);
+		const spawn = vi.spyOn(pool, "create").mockImplementation(async (cwd, path, automation) => {
+			const handle = await create(cwd, path, automation);
+			const client = handle.client;
+			const transcript = path ? readSessionTranscript(path) : undefined;
+			const sessionId = transcript?.header.id ?? `setup-${clients.length}`;
+			const state = {
+				...(await client.getState()),
+				sessionId,
+				sessionFile: path ?? join(dir, `${sessionId}.jsonl`),
+				messageCount: transcript?.messages.length ?? 0,
+			};
+			vi.mocked(client.getState).mockResolvedValue(state);
+			client.configureAutomation = vi.fn(async () => {});
+			return handle;
+		});
+		const post = (url: string, body: object) =>
+			fetch(base + url, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		const resume = (key: string, body = {}) => post(`/api/automations/setup/${key}/resume`, body);
+		const stop = async (key: string) =>
+			expect((await fetch(`${base}/api/runtimes/${key}`, { method: "DELETE" })).status).toBe(200);
+		const created = await post("/api/automations/setup", {});
+		expect(created.status).toBe(201);
+		const {
+			key,
+			state: { sessionFile: file },
+		} = (await created.json()) as RuntimeInfoDto;
+		if (!file) throw new Error("Missing setup path");
+		return { dir, auth, base, pool, spawn, clients, resume, stop, key, file };
+	}
+
+	it("only accepts a stopped setup from its owner, with no client-selected source file", async () => {
+		const { auth, spawn, resume, stop, key, file } = await fixture();
+		expect((await resume(key)).status).toBe(409);
+		await stop(key);
+		vi.spyOn(auth, "authenticate").mockResolvedValueOnce({
+			allowed: true,
+			mode: "remote",
+			identity: { loginName: "other" },
+			pairing: { id: "device", identity: "other", createdAt: "", expiresAt: "" },
+		});
+		expect((await resume(key)).status).toBe(404);
+		expect((await resume("unknown")).status).toBe(404);
+		expect((await resume(key, { sessionPath: file })).status).toBe(400);
+		expect((await resume(key, { cwd: 123 })).status).toBe(400);
+		expect(spawn).toHaveBeenCalledTimes(1);
+	});
+
+	it("serializes resume, cleans up a failed configuration and allows retry of an unwritten setup", async () => {
+		const { dir, pool, clients, spawn, resume, stop, key } = await fixture();
+		await stop(key);
+		const realCreate = spawn.getMockImplementation()!;
+		const gate = Promise.withResolvers<void>();
+		spawn.mockImplementationOnce(async (...args) => {
+			const handle = await realCreate(...args);
+			handle.client.configureAutomation = vi.fn(() => gate.promise);
+			return handle;
+		});
+		const pending = resume(key);
+		await waitUntil(() => clients.length === 2 && vi.mocked(clients[1].configureAutomation).mock.calls.length > 0);
+		expect((await resume(key)).status).toBe(409);
+		gate.reject(new Error("configuration failed"));
+		expect((await pending).status).toBe(500);
+		expect(clients[1].stop).toHaveBeenCalledOnce();
+		expect(pool.list()).toEqual([]);
+		const retry = await resume(key, { cwd: dir });
+		expect(retry.status).toBe(201);
+		const reopened = (await retry.json()) as RuntimeInfoDto;
+		expect(spawn).toHaveBeenLastCalledWith(dir, undefined, { owner: "local", sessionDir: undefined });
+		expect(clients[2].configureAutomation).toHaveBeenCalledWith({ role: "setup" });
+		expect((await resume(key)).status).toBe(404);
+		// The new file, not the abandoned empty path, is the only valid approval source.
+		const child = vi.spyOn(pool, "startAutomationChild").mockRejectedValue(new Error("offline fixture"));
+		const approval = { type: "automation_approved", draft: { cwd: dir, orchestrator: {}, guard: {} } };
+		clients[2].emit({ ...approval, setupFile: join(dir, "setup-1.jsonl") });
+		expect(child).not.toHaveBeenCalled();
+		clients[2].emit({ ...approval, setupFile: reopened.state.sessionFile });
+		expect(child).toHaveBeenCalledOnce();
+	});
+
+	it("requires a genuine saved transcript and keeps duplicate launch protection across runtime keys", async () => {
+		const { base, dir, pool, key, file, clients, spawn, resume, stop } = await fixture();
+		const child = vi.spyOn(pool, "startAutomationChild").mockRejectedValue(new Error("offline fixture"));
+		const approval = {
+			type: "automation_approved",
+			setupFile: file,
+			draft: { cwd: dir, orchestrator: {}, guard: {} },
+		};
+		clients[0].emit({ type: "message_start" });
+		clients[0].emit(approval);
+		expect(child).toHaveBeenCalledOnce();
+		await stop(key);
+		expect((await resume(key)).status).toBe(409);
+		await writeFile(file, JSON.stringify({ type: "session", id: "someone-else" }));
+		expect((await resume(key)).status).toBe(409);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const header = {
+			type: "session",
+			version: 3,
+			id: "setup-1",
+			cwd: homedir(),
+			timestamp: new Date().toISOString(),
+		};
+		await writeFile(file, JSON.stringify(header));
+		expect((await resume(key)).status).toBe(500); // Same header, but no longer contains the conversation.
+		const turn = {
+			type: "message",
+			id: "m1",
+			parentId: null,
+			message: { role: "user", content: "Setup request", timestamp: 1 },
+		};
+		await writeFile(file, `${JSON.stringify(header)}\n${JSON.stringify(turn)}\n`);
+		const reopened = await resume(key);
+		expect(reopened.status).toBe(201);
+		expect(await reopened.json()).toMatchObject({
+			cwd: homedir(),
+			state: { sessionFile: file, sessionId: "setup-1", messageCount: 1 },
+		});
+		expect(spawn).toHaveBeenLastCalledWith(homedir(), file, { owner: "local", sessionDir: undefined });
+		expect(clients[2].configureAutomation).toHaveBeenCalledWith({ role: "setup", resumeSessionId: "setup-1" });
+		clients[2].emit(approval);
+		expect(child).toHaveBeenCalledOnce();
+		const { runs } = (await (await fetch(`${base}/api/automations`)).json()) as { runs: { id: string }[] };
+		expect(runs).toHaveLength(1);
+		expect(runs[0].id).toBe(key);
+	});
+});
 
 describe("dashboard server — auth middleware", () => {
 	it("allows loopback requests with a loopback Host", async () => {

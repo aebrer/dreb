@@ -364,6 +364,8 @@ export interface ExtensionUiRequestDto {
  */
 export interface RuntimeHydrationDto {
 	key: string;
+	/** Setup sessions are not Fleet members; hydrate their host metadata with the Session state. */
+	automationSetup?: Pick<RuntimeInfoDto, "cwd" | "settingsRevision">;
 	state: SessionStateDto;
 	messages: unknown[];
 	backgroundAgents: BackgroundAgentDto[];

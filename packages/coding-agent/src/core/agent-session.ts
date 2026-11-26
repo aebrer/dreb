@@ -137,6 +137,9 @@ import {
 import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
+/** Only setup may be bound to an existing transcript, identified by the host. */
+export type ConfigureAutomationOptions = AutomationRoleOptions | { role: "setup"; resumeSessionId: string };
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -1868,9 +1871,9 @@ export class AgentSession {
 		this._automation?.invalidateDraft();
 	}
 
-	private _assertFreshForAutomation(): void {
+	private _assertIdleForAutomation(resumingSetup = false): void {
 		if (
-			this.messages.length ||
+			(!resumingSetup && this.messages.length) ||
 			this._promptsInFlight ||
 			this.isStreaming ||
 			this.isRetrying ||
@@ -1889,19 +1892,25 @@ export class AgentSession {
 	}
 
 	async configureAutomation(
-		options: AutomationRoleOptions,
+		options: ConfigureAutomationOptions,
 		onApproved: (draft: AutomationDraft) => void,
 	): Promise<void> {
 		if (this._automation || this._configuringAutomation)
 			throw new Error("Automation already configured or configuring");
-		this._assertFreshForAutomation();
+		const resumingSetup = "resumeSessionId" in options;
+		if (
+			resumingSetup &&
+			(options.role !== "setup" || !this.sessionFile || options.resumeSessionId !== this.sessionId)
+		)
+			throw new Error("Automation resume requires the recorded setup session");
+		this._assertIdleForAutomation(resumingSetup);
 		this._configuringAutomation = true;
 		try {
 			const automation = new Automation(options, this._modelRegistry, () => this.sessionId, onApproved);
 			const sessionId = this.sessionId;
 			if (options.role !== "setup") {
 				const model = await resolveAutomationModel(this._modelRegistry, options);
-				this._assertFreshForAutomation();
+				this._assertIdleForAutomation();
 				if (sessionId !== this.sessionId) throw new Error("Session changed during automation configuration");
 				this._validateModelPromptSettings(model);
 				const level = clampThinkingLevel(model, this._getThinkingLevelForModelSwitch());

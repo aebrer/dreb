@@ -7,8 +7,8 @@
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessageEvent, ImageContent, Model, Transport } from "@dreb/ai";
-import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
-import type { AutomationDraft, AutomationRoleOptions } from "../../core/automation.js";
+import type { AgentSessionEvent, ConfigureAutomationOptions, SessionStats } from "../../core/agent-session.js";
+import type { AutomationDraft } from "../../core/automation.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type { DispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
@@ -24,7 +24,7 @@ import type { SourceInfo } from "../../core/source-info.js";
 
 export type RpcCommand =
 	// Prompting
-	| { id?: string; type: "configure_automation"; options: AutomationRoleOptions }
+	| { id?: string; type: "configure_automation"; options: ConfigureAutomationOptions }
 	| { id?: string; type: "automation_turn"; message: string; feedback?: boolean }
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }

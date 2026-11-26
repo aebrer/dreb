@@ -7,7 +7,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { ImageContent } from "@dreb/ai";
-import type { SessionStats } from "../../core/agent-session.js";
+import type { ConfigureAutomationOptions, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -356,7 +356,7 @@ export class RpcClient {
 		await this.send({ type: "prompt", message, images });
 	}
 
-	async configureAutomation(options: import("../../core/automation.js").AutomationRoleOptions): Promise<void> {
+	async configureAutomation(options: ConfigureAutomationOptions): Promise<void> {
 		await this.send({ type: "configure_automation", options });
 	}
 

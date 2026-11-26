@@ -129,6 +129,8 @@ export const api = {
 			"/api/automations",
 			{ signal },
 		),
+	resumeAutomationSetup: (key: string, cwd?: string) =>
+		request<RuntimeInfoDto>(`/api/automations/setup/${encodeURIComponent(key)}/resume`, json({ cwd })),
 	setupAutomation: () => request<RuntimeInfoDto>("/api/automations/setup", json({})),
 	stopAutomation: (id: string) => request<unknown>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
 	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>

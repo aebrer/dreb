@@ -28,6 +28,7 @@ import {
 	extensionUiRequestFromEvent,
 	messagesToEntries,
 	resolveUiRequest as resolveReducerUiRequest,
+	type SessionRuntime,
 	type SessionViewState,
 	syncCompactionStatusEntry,
 	type Toast,
@@ -179,6 +180,14 @@ function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[],
 		messages,
 		snapshotState.isStreaming || snapshotState.isRetrying || snapshotState.isCompacting,
 	);
+}
+
+export function findSessionRuntime(
+	key: string,
+	sessions: Record<string, SessionViewState>,
+	fleet: FleetDto,
+): SessionRuntime | undefined {
+	return sessions[key]?.setupRuntime ?? fleet.runtimes.find((runtime) => runtime.key === key);
 }
 
 export function createAppStore() {
@@ -578,7 +587,25 @@ export function createAppStore() {
 		);
 	}
 
-	function retainClosedSession(key: string, runtime?: RuntimeInfoDto): void {
+	function sessionRuntime(key: string): SessionRuntime | undefined {
+		return findSessionRuntime(key, sessions, fleet());
+	}
+
+	function rememberSetupRuntime({ key, cwd, state, settingsRevision }: SessionRuntime): void {
+		mutateSession(key, (session) => {
+			session.setupRuntime = { key, cwd, state, settingsRevision };
+		});
+	}
+
+	function restoreSetupRuntime(snapshot: ActiveRuntimeSnapshotDto): void {
+		if (!snapshot.automationSetup) return;
+		const previous = sessions[snapshot.key]?.setupRuntime;
+		// A delayed hydrate must not revert a model or thinking change the host already confirmed.
+		if (previous && (previous.settingsRevision ?? 0) > (snapshot.automationSetup.settingsRevision ?? 0)) return;
+		rememberSetupRuntime({ key: snapshot.key, state: snapshot.state, ...snapshot.automationSetup });
+	}
+
+	function retainClosedSession(key: string, runtime?: SessionRuntime): void {
 		clearHydrationTransaction(key);
 		bumpHydrationGeneration(key);
 		const runtimeSessionFile = runtime?.state.sessionFile;
@@ -587,7 +614,10 @@ export function createAppStore() {
 			: undefined;
 		mutateSession(key, (session) => {
 			const previous = session.closed;
+			const isSetup = !!session.setupRuntime || previous?.automationSetup;
+			delete session.setupRuntime;
 			session.closed = {
+				...(isSetup ? { automationSetup: true } : {}),
 				...(runtime?.cwd || previous?.cwd ? { cwd: previous?.cwd ?? runtime?.cwd } : {}),
 				...(historicalCwd || previous?.historicalCwd
 					? { historicalCwd: previous?.historicalCwd ?? historicalCwd }
@@ -614,8 +644,8 @@ export function createAppStore() {
 	}
 
 	/** Apply the same idempotent local transition for SSE and directly confirmed stops. */
-	function removeRuntime(key: string, capturedRuntime?: RuntimeInfoDto, refreshInventory = true): Promise<void> {
-		const runtime = capturedRuntime ?? fleet().runtimes.find((candidate) => candidate.key === key);
+	function removeRuntime(key: string, capturedRuntime?: SessionRuntime, refreshInventory = true): Promise<void> {
+		const runtime = capturedRuntime ?? sessionRuntime(key);
 		const alreadyRemoved = removedRuntimeKeys.has(key);
 		removedRuntimeKeys.add(key);
 		pendingRuntimeSettings.delete(key);
@@ -638,7 +668,7 @@ export function createAppStore() {
 	}
 
 	async function stopRuntime(key: string): Promise<void> {
-		const capturedRuntime = fleet().runtimes.find((runtime) => runtime.key === key);
+		const capturedRuntime = sessionRuntime(key);
 		try {
 			await api.stopRuntime(key);
 		} catch (error) {
@@ -683,7 +713,9 @@ export function createAppStore() {
 		});
 		let runtime: RuntimeInfoDto;
 		try {
-			runtime = await api.createRuntime(cwd, { sessionPath: sessionFile });
+			runtime = closed.automationSetup
+				? await api.resumeAutomationSetup(key, cwd)
+				: await api.createRuntime(cwd, { sessionPath: sessionFile });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (!sessions[key]?.closed) return;
@@ -693,6 +725,11 @@ export function createAppStore() {
 				session.closed.resumeError = message;
 				session.closed.bannerDismissed = false;
 			});
+			return;
+		}
+		if (closed.automationSetup) {
+			rememberSetupRuntime(runtime);
+			navigate({ screen: "session", key: runtime.key, automationSetup: true });
 			return;
 		}
 		upsertRuntime(runtime);
@@ -795,6 +832,22 @@ export function createAppStore() {
 		}));
 	}
 
+	/** Setup and ordinary Session controls apply exactly the state returned by the same RPC mutation. */
+	function applyConfirmedSettings(key: string, patch: Partial<SessionStateDto>, revision: number): void {
+		const setup = sessions[key]?.setupRuntime;
+		if (setup) {
+			if ((setup.settingsRevision ?? 0) < revision)
+				rememberSetupRuntime({ ...setup, state: { ...setup.state, ...patch }, settingsRevision: revision });
+			return;
+		}
+		mutateFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((candidate) =>
+				candidate.key === key ? { ...candidate, state: { ...candidate.state, ...patch } } : candidate,
+			),
+		}));
+	}
+
 	/** Patch model and model-aware thinking state until a snapshot reaches this confirmed mutation's revision. */
 	function setRuntimeModel(
 		key: string,
@@ -829,22 +882,8 @@ export function createAppStore() {
 			pendingRuntimeSettings.set(key, pending);
 		}
 		if ((runtime?.settingsRevision ?? 0) >= result.settingsRevision) return;
-		mutateFleet((current) => ({
-			...current,
-			runtimes: current.runtimes.map((candidate) =>
-				candidate.key === key
-					? {
-							...candidate,
-							state: {
-								...candidate.state,
-								model: result.model,
-								thinkingLevel: result.thinkingLevel,
-								availableThinkingLevels: [...result.availableThinkingLevels],
-							},
-						}
-					: candidate,
-			),
-		}));
+		const { settingsRevision, ...patch } = result;
+		applyConfirmedSettings(key, patch, settingsRevision);
 	}
 
 	/** Patch thinking state until a snapshot reaches this confirmed mutation's revision. */
@@ -863,12 +902,7 @@ export function createAppStore() {
 			pendingRuntimeSettings.set(key, pending);
 		}
 		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) return;
-		mutateFleet((current) => ({
-			...current,
-			runtimes: current.runtimes.map((candidate) =>
-				candidate.key === key ? { ...candidate, state: { ...candidate.state, thinkingLevel } } : candidate,
-			),
-		}));
+		applyConfirmedSettings(key, { thinkingLevel }, settingsRevision);
 	}
 
 	function mergeRuntimeStats(
@@ -1100,13 +1134,12 @@ export function createAppStore() {
 		const barrierSeq = pending.barrierSeq;
 		authoritativeBarrierSeq = barrierSeq;
 		const activeRouteKey = routedSessionKey();
-		const previousRuntime = activeRouteKey
-			? fleet().runtimes.find((runtime) => runtime.key === activeRouteKey)
-			: undefined;
+		const previousRuntime = activeRouteKey ? sessionRuntime(activeRouteKey) : undefined;
 		replaceFleet(snapshot.fleet);
 		setFleetError(undefined);
 		if (snapshot.active) {
 			hydrateSnapshot(snapshot.active);
+			restoreSetupRuntime(snapshot.active);
 		} else if (activeRouteKey) {
 			// The authoritative resync Fleet already includes disk inventory and
 			// replaceFleet schedules any membership refresh it needs.
@@ -1378,6 +1411,7 @@ export function createAppStore() {
 			// fork or rewind. Preserve card-only enrichment on the surrounding card.
 			// Skip if a newer fleet_snapshot mutated the card while the HTTP request
 			// was in flight — the live snapshot must win.
+			restoreSetupRuntime(snapshot);
 			setHydratedRuntimeState(key, snapshot.state, generationAtHydrate, snapshot.barrierSeq);
 			for (const envelope of [...pending.queued].sort((a, b) => a.seq - b.seq)) {
 				if (envelope.seq > snapshot.barrierSeq) applyEnvelope(envelope);
@@ -1429,6 +1463,7 @@ export function createAppStore() {
 		dismissClosedBanner,
 		dismissStatusBanner,
 		upsertRuntime,
+		rememberSetupRuntime,
 		setRuntimeModel,
 		setRuntimeThinkingLevel,
 		resyncing,
