@@ -8627,9 +8627,10 @@ describe("dashboard client regressions", () => {
 					resolveTitle = resolve;
 				});
 			});
+			// Fleet sorts by latest activity; pin the order instead of relying on Date.now() ties.
 			const { el } = renderFleet([
-				pastSession(),
-				pastSession({ path: "/sessions/two.jsonl", id: "two", name: "Two" }),
+				pastSession({ modified: "2026-01-02T00:00:00.000Z" }),
+				pastSession({ path: "/sessions/two.jsonl", id: "two", name: "Two", modified: "2026-01-01T00:00:00.000Z" }),
 			]);
 			rowButton(el, "rename").click();
 			modalButton(el, "auto-generate").click();

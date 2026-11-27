@@ -38,9 +38,9 @@ function toolCall(id: string, name: string, args: object) {
 }
 
 // Same two-chunk completions SSE framing as ai/test/opencode-session-headers.test.ts.
-function stream(delta: ReturnType<typeof toolCall> | { content: string }) {
+function stream(delta: ReturnType<typeof toolCall> | { content: string }, responseModel = model) {
 	const chunk = (part: object, finish: string | null) =>
-		`data: ${JSON.stringify({ id: "chatcmpl-smoke", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta: part, finish_reason: finish }] })}\n\n`;
+		`data: ${JSON.stringify({ id: "chatcmpl-smoke", object: "chat.completion.chunk", created: 1, model: responseModel, choices: [{ index: 0, delta: part, finish_reason: finish }] })}\n\n`;
 	return `${chunk(delta, null)}${chunk({}, "tool_calls" in delta ? "tool_calls" : "stop")}data: [DONE]\n\n`;
 }
 
@@ -90,15 +90,21 @@ function scriptedModel(draft: AutomationDraft) {
 			}
 		} else {
 			expect(names).toEqual(draft.guard.tools);
-			expect(content).toContain(instructions);
 			switch (++calls.guard) {
 				case 1:
+					expect(content).toContain(instructions);
 					expect(content).toContain(inventory);
-					return { content: "" }; // Expected guard failure, not a fixture assertion error.
+					return toolCall("guard-read", "read", { path: "manifest.txt" });
 				case 2:
+					expect(last).toMatchObject({ role: "tool", tool_call_id: "guard-read" });
+					expect(content).toContain("smoke fixture");
+					return { content: "" }; // Expected guard failure, not a fixture assertion error.
+				case 3:
+					expect(content).toContain(instructions);
 					expect(content).toContain(inventory);
 					return { content: `${feedback}\nCONTINUE` };
-				case 3:
+				case 4:
+					expect(content).toContain(instructions);
 					expect(content).toContain(finalInventory);
 					expect(content).toContain(feedback);
 					return { content: `${stop}\n\nSTOP` };
@@ -163,6 +169,19 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	onTestFinished(() => {
 		expect(stub.errors).toEqual([]);
 	});
+	const titleProvider = "offline-title";
+	const titleModel = "title-model";
+	const titleRequests: ChatRequest[] = [];
+	const titleServer = createServer(async (req, res) => {
+		let text = "";
+		for await (const chunk of req) text += chunk;
+		titleRequests.push(JSON.parse(text));
+		res.writeHead(200, { "content-type": "text/event-stream" }).end(
+			stream({ content: "Inventory setup" }, titleModel),
+		);
+	});
+	const titleOrigin = await listen(titleServer);
+	onTestFinished(() => titleServer[Symbol.asyncDispose]());
 	await writeFile(
 		join(agentDir, "models.json"),
 		JSON.stringify({
@@ -173,6 +192,12 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 					apiKey: "unused-test-key",
 					models: [{ id: model, name: model }],
 				},
+				[titleProvider]: {
+					api: "openai-completions",
+					baseUrl: `${titleOrigin}/v1`,
+					apiKey: "unused-title-key",
+					models: [{ id: titleModel, name: titleModel }],
+				},
 			},
 		}),
 	);
@@ -182,7 +207,7 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 			defaultProvider: provider,
 			defaultModel: model,
 			retry: { enabled: false },
-			tabTitle: { enabled: false },
+			tabTitle: { enabled: true, triggerAfter: 1, model: `${titleProvider}/${titleModel}` },
 		}),
 	);
 
@@ -231,6 +256,10 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	const first = proposal(request);
 	await first.getByText("Request changes", { exact: true }).click();
 	await first.getByRole("button", { name: "submit", exact: true }).click();
+	// Positive control: titling is enabled and the separate provider receives the setup request.
+	await expect.poll(() => titleRequests.length).toBe(1);
+	expect(titleRequests[0].model).toBe(titleModel);
+	expect(JSON.stringify(titleRequests[0].messages)).toContain(request);
 	const revised = proposal(instructions);
 	await revised.getByText("Approve", { exact: true }).click();
 	const before = await list();
@@ -297,11 +326,14 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	});
 	expect(run.workFile).not.toBe(failed.workFile);
 	expect(new Set(run.guardFiles).size).toBe(2);
-	expect(stub.calls).toEqual({ setup: setupCalls, worker: 5, guard: 3 });
+	expect(stub.calls).toEqual({ setup: setupCalls, worker: 5, guard: 4 });
 	const setupLog = await readFile(run.setupFile, "utf8");
 	expect(setupLog).toContain("proposal1");
 	expect(setupLog).toContain("proposal2");
 	await expect.poll(() => pool.list().length, { timeout: 15_000 }).toBe(0);
+	// Both unattended roles executed a tool with triggerAfter: 1. No unattended context
+	// may reach the title provider, even though the setup chat uses it normally.
+	expect(titleRequests).toHaveLength(1);
 	expect(spawnClient).toHaveBeenCalledTimes(clientsBeforeApproval + 5); // relaunched worker and two reviews
 
 	// Open each saved record from the second card, then deep-reload it with every RPC child gone.

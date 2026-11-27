@@ -206,12 +206,19 @@ it.each([false, true])("serves Fleet if startup history repair cannot be saved (
 		expect(inventory.setups).toEqual([]);
 		expect(logger).toHaveBeenCalledWith(expect.stringContaining("Could not save repaired automation history"));
 		expect(repair).toHaveBeenCalledOnce();
-		const files = await readdir(dir);
-		const source = mixed ? files.find((name) => name.startsWith("history.json.corrupt-")) : "history.json";
-		expect(source).toBeDefined();
-		expect(await readFile(join(dir, source!), "utf8")).toBe(original);
+		// A second boot reads the canonical path, not the archive. Keep that source even if
+		// the first host never gets another chance to save.
+		expect(await readFile(automationHistoryFile, "utf8")).toBe(original);
 	} finally {
 		repair.mockRestore();
+	}
+	const restarted = await startServer({ automationHistoryFile });
+	const recovered = (await (await fetch(`${restarted.base}/api/automations`)).json()) as { runs: AutomationRun[] };
+	expect(recovered.runs).toEqual([expect.objectContaining({ id: "saved-run", status: "interrupted" })]);
+	if (mixed) {
+		const archive = (await readdir(dir)).find((name) => name.startsWith("history.json.corrupt-"));
+		expect(archive).toBeDefined();
+		expect(await readFile(join(dir, archive!), "utf8")).toBe(original);
 	}
 });
 

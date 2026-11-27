@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { setImmediate as nextTick } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -107,6 +108,30 @@ describe("settled automation turns", () => {
 		expect(finished).toBe(false);
 		release.resolve();
 		await expect(turn).rejects.toThrow(/compactor failed/);
+	});
+
+	it("rejects an unsaved final reply after the event queue has recovered", async () => {
+		harness = createHarness({ persistSession: true, responses: ["saved answer", "unsaved answer"] });
+		const { session, sessionManager } = harness;
+		await expect(session.automationTurn("start")).resolves.toBe("saved answer");
+		const file = session.sessionFile!;
+		const append = sessionManager.appendMessage.bind(sessionManager);
+		const offline = Object.assign(new Error("No space left"), { code: "ENOSPC" });
+		vi.spyOn(sessionManager, "appendMessage").mockImplementation((message) => {
+			if (
+				message.role === "assistant" &&
+				message.content.some((block) => block.type === "text" && block.text === "unsaved answer")
+			) {
+				throw offline;
+			}
+			return append(message);
+		});
+		await expect(session.automationTurn("review again")).rejects.toThrow(
+			/Could not save the automation transcript: No space left/,
+		);
+		expect(harness.eventsOfType("agent_end")).toHaveLength(2);
+		expect(readFileSync(file, "utf8")).toContain("saved answer");
+		expect(readFileSync(file, "utf8")).not.toContain("unsaved answer");
 	});
 
 	it("rejects an agent_end-only exception even when its diagnostic looks retryable", async () => {

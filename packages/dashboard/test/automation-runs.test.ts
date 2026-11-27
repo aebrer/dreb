@@ -1,4 +1,14 @@
-import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as settle } from "node:timers/promises";
@@ -308,7 +318,7 @@ describe("AutomationRuns", () => {
 		const warnings: string[] = [];
 		const runs = new AutomationRuns({ historyFile, warn: (m) => warnings.push(m), start: vi.fn<Start>() });
 		expect(runs.list(owner)).toEqual([]);
-		expect(warnings.join("\n")).toMatch(/aside/i);
+		expect(warnings.join("\n")).toMatch(/aside|archiving/i);
 		// The unusable bytes survive for inspection; the dashboard boots either way.
 		const quarantined = readdirSync(dir).filter((name) => name.startsWith("history.json.corrupt-"));
 		expect(quarantined.length).toBe(1);
@@ -498,6 +508,53 @@ describe("AutomationRuns", () => {
 		runs.delete(owner, attempt.id);
 		expect(runs.get(owner, attempt.id)).toBeUndefined();
 		expect(history().some((run) => run.id === attempt.id)).toBe(false);
+		await runs.close();
+	});
+
+	it.each(["rename", "delete"] as const)("does not publish or later save a failed history %s", (edit) => {
+		const target = {
+			id,
+			owner,
+			name: "Original name",
+			setupFile: join(dir, "setup.jsonl"),
+			draft: agreement("Check the project"),
+			status: "stopped",
+			startedAt: 1,
+			endedAt: 2,
+			compactions: 0,
+			guardFiles: [],
+			decisions: [{ at: 2, action: "stop", report: "All done" }],
+			report: "All done",
+		};
+		const other = { ...target, id: "other" };
+		writeFileSync(historyFile, JSON.stringify([target, other]));
+		const options = { historyFile, start: vi.fn<Start>() };
+		const runs = new AutomationRuns(options);
+		const before = runs.get(owner, id);
+		// A directory in place of the history file reliably fails atomic replacement, even as root.
+		const backup = join(dir, "backup.json");
+		renameSync(historyFile, backup);
+		mkdirSync(historyFile);
+		expect(() => (edit === "rename" ? runs.rename(owner, id, "Not saved") : runs.delete(owner, id))).toThrow();
+		expect(runs.get(owner, id)).toEqual(before);
+		rmSync(historyFile, { recursive: true });
+		renameSync(backup, historyFile);
+		runs.rename(owner, other.id, "Saved separately");
+		const reopened = new AutomationRuns(options);
+		expect(reopened.get(owner, id)).toEqual(before);
+		expect(reopened.get(owner, other.id)?.name).toBe("Saved separately");
+	});
+
+	it("does not start a guard when the worker cannot save its answer", async () => {
+		const work = child("work");
+		const start = vi.fn<Start>().mockResolvedValueOnce(work);
+		work.turn.mockRejectedValue(new Error("Could not save the automation transcript: No space left"));
+		const runs = new AutomationRuns({ start, historyFile });
+		launch(runs);
+		await settle();
+		expect(start).toHaveBeenCalledOnce();
+		expect(history()[0]).toMatchObject({ status: "failed", guardFiles: [], decisions: [] });
+		expect(history()[0].report).toContain("Could not save the automation transcript");
 		await runs.close();
 	});
 

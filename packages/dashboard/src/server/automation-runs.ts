@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	constants,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import type { AutomationDraft, AutomationRun } from "../shared/automation.js";
 
@@ -143,7 +152,7 @@ export class AutomationRuns {
 	private readonly resources = new Set<Promise<unknown>>();
 	private readonly now: () => number;
 	private closed = false;
-	private historyNeedsQuarantine = false;
+	private pendingHistoryArchive: "move" | "copy" | undefined;
 
 	private warn(message: string): void {
 		(this.options.warn ?? console.warn)(message);
@@ -210,13 +219,14 @@ export class AutomationRuns {
 			}
 		});
 		if (rejected.length > 0) {
-			// Preserve the original before writing the recovered rows to the canonical path.
 			warn(
-				`Automation history at ${file} rejected ${rejected.length} record(s): ${rejected.join(", ")}. Moving the original aside and keeping the rest.`,
+				`Automation history at ${file} rejected ${rejected.length} record(s): ${rejected.join(", ")}. Keeping valid records and archiving the original before replacement.`,
 			);
-			this.quarantineHistory(file, warn);
+			// A mixed file is still recoverable. Keep it at the canonical path until the repaired
+			// history can replace it atomically, even if this process stops before saving again.
+			this.pendingHistoryArchive = "copy";
 		}
-		if (!(interrupted || rejected.length > 0) || this.historyNeedsQuarantine) return;
+		if (!(interrupted || rejected.length > 0)) return;
 		try {
 			this.save();
 		} catch (err) {
@@ -226,36 +236,43 @@ export class AutomationRuns {
 		}
 	}
 
-	/** Rename the unusable history file aside with a sortable, filesystem-safe timestamp. */
-	private quarantineHistory(file: string, warn: (message: string) => void): void {
+	/** Archive the original history with a sortable, filesystem-safe timestamp. */
+	private archiveHistory(file: string, mode: "move" | "copy"): void {
 		const stamp = new Date(this.now()).toISOString().replace(/[:.]/g, "-");
 		let target = `${file}.corrupt-${stamp}`;
 		for (let attempt = 1; existsSync(target); attempt++) target = `${file}.corrupt-${stamp}-${attempt}`;
+		if (mode === "copy") copyFileSync(file, target, constants.COPYFILE_EXCL);
+		else renameSync(file, target);
+		this.pendingHistoryArchive = undefined;
+	}
+
+	private quarantineHistory(file: string, warn: (message: string) => void): void {
 		try {
-			renameSync(file, target);
-			this.historyNeedsQuarantine = false;
+			this.archiveHistory(file, "move");
 		} catch (err) {
-			this.historyNeedsQuarantine = true;
+			this.pendingHistoryArchive = "move";
 			warn(
 				`Automation history at ${file} could not be moved aside (${String(err)}); leaving the original untouched.`,
 			);
 		}
 	}
 
-	private save(): void {
+	private save(runs: Iterable<StoredRun> = this.runs.values()): void {
 		const path = this.options.historyFile;
 		if (path === undefined) return;
-		if (this.historyNeedsQuarantine) {
-			this.quarantineHistory(path, (message) => this.warn(message));
-			if (this.historyNeedsQuarantine) throw new Error("Could not move damaged automation history aside");
-		}
 		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 		const temp = `${path}.${randomUUID()}.tmp`;
 		try {
-			writeFileSync(temp, `${JSON.stringify([...this.runs.values()])}\n`, { mode: 0o600, flag: "wx" });
+			writeFileSync(temp, `${JSON.stringify([...runs])}\n`, { mode: 0o600, flag: "wx" });
+			if (this.pendingHistoryArchive) this.archiveHistory(path, this.pendingHistoryArchive);
 			renameSync(temp, path);
-		} finally {
-			rmSync(temp, { force: true });
+		} catch (error) {
+			try {
+				rmSync(temp, { force: true });
+			} catch (cleanupError) {
+				this.warn(`Could not remove temporary automation history ${temp}: ${String(cleanupError)}`);
+			}
+			throw error;
 		}
 	}
 
@@ -346,17 +363,18 @@ export class AutomationRuns {
 		if (this.live.has(id)) throw new AutomationBusy("Cannot rename a running automation");
 		const next = name.trim();
 		if (!next || next.length > 80) throw new AutomationInput("Automation name must be 1-80 characters");
-		run.name = next;
-		this.save();
-		return snapshot(run);
+		const renamed = { ...run, name: next };
+		this.save([...this.runs.values()].map((row) => (row === run ? renamed : row)));
+		this.runs.set(id, renamed);
+		return snapshot(renamed);
 	}
 
 	delete(owner: string, id: string): void {
 		const run = this.runs.get(id);
 		if (run?.owner !== owner) throw new AutomationNotFound("Automation not found");
 		if (this.live.has(id)) throw new AutomationBusy("Cannot delete a running automation");
+		this.save([...this.runs.values()].filter((row) => row !== run));
 		this.runs.delete(id);
-		this.save();
 	}
 
 	private current(live: LiveRun): boolean {

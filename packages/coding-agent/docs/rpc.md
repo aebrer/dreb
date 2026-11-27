@@ -122,7 +122,7 @@ Run one turn on an `orchestrator` or `guard` automation session. Unlike `prompt`
 {"id":"turn-1","type":"response","command":"automation_turn","success":true,"data":{"text":"The changes are ready for review."}}
 ```
 
-The initial message is sent without prompt-template or skill expansion. Set `"feedback": true` to start a turn with a visible custom message labeled `automation-guard-feedback` instead. Automation sessions use their role's foreground tools, not `subagent` or `wait`. A second in-flight automation turn, outstanding background work, terminal error, abort, failed compaction, or lack of a fresh assistant answer returns `success: false`.
+The initial message is sent without prompt-template or skill expansion. Set `"feedback": true` to start a turn with a visible custom message labeled `automation-guard-feedback` instead. Automation sessions use their role's foreground tools, not `subagent` or `wait`. A second in-flight automation turn, outstanding background work, terminal error, abort, failed transcript append or compaction, or lack of a fresh assistant answer returns `success: false`.
 
 `await client.automationTurn(message, feedback?)` returns the final assistant text. It has no client-side request timeout and rejects if the RPC process exits.
 

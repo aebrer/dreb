@@ -1286,22 +1286,30 @@ export class AgentSession {
 
 			// Handle session persistence
 			if (event.type === "message_end") {
-				// Check if this is a custom message from extensions
-				if (event.message.role === "custom") {
-					// Persist as CustomMessageEntry
-					this.sessionManager.appendCustomMessageEntry(
-						event.message.customType,
-						event.message.content,
-						event.message.display,
-						event.message.details,
-					);
-				} else if (
-					event.message.role === "user" ||
-					event.message.role === "assistant" ||
-					event.message.role === "toolResult"
-				) {
-					// Regular LLM message - persist as SessionMessageEntry
-					this.sessionManager.appendMessage(event.message);
+				try {
+					if (event.message.role === "custom") {
+						this.sessionManager.appendCustomMessageEntry(
+							event.message.customType,
+							event.message.content,
+							event.message.display,
+							event.message.details,
+						);
+					} else if (
+						event.message.role === "user" ||
+						event.message.role === "assistant" ||
+						event.message.role === "toolResult"
+					) {
+						this.sessionManager.appendMessage(event.message);
+					}
+				} catch (error) {
+					// Later events can recover the queue, but they cannot make this reply durable.
+					if (this._automationTurn) {
+						this._automationTurn.writeError ??= new Error(
+							`Could not save the automation transcript: ${error instanceof Error ? error.message : String(error)}`,
+							{ cause: error },
+						);
+					}
+					throw error;
 				}
 				// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -1879,7 +1887,7 @@ export class AgentSession {
 			this.isRetrying ||
 			this.isCompacting ||
 			this.isBashRunning ||
-			this._automationTurnInFlight ||
+			this._automationTurn ||
 			this._agentEventsInFlight ||
 			this._recoveryPromise ||
 			this.pendingMessageCount ||
@@ -1927,12 +1935,12 @@ export class AgentSession {
 		}
 	}
 
-	private _automationTurnInFlight = false;
+	private _automationTurn: { writeError?: Error } | undefined;
 
 	/** Run a foreground automation command through the last automatic continuation. */
 	async automationTurn(message: string, feedback = false): Promise<string> {
 		if (
-			this._automationTurnInFlight ||
+			this._automationTurn ||
 			this.isStreaming ||
 			this.isCompacting ||
 			this.isRetrying ||
@@ -1967,7 +1975,8 @@ export class AgentSession {
 				if (event.willRetry) assistant = undefined;
 			}
 		});
-		this._automationTurnInFlight = true;
+		const turn: { writeError?: Error } = {};
+		this._automationTurn = turn;
 		try {
 			if (feedback) {
 				await this.sendCustomMessage(
@@ -1985,6 +1994,7 @@ export class AgentSession {
 				await this._waitForAutomaticFollowUps();
 			} while (this.isStreaming || this._agentEventsInFlight || this._recoveryPromise || this.isRetrying);
 
+			if (turn.writeError) throw turn.writeError;
 			if (failure) throw new Error(failure);
 			if (assistant?.stopReason === "error" || assistant?.stopReason === "aborted") {
 				throw new Error(assistant.errorMessage || `Automation turn ${assistant.stopReason}`);
@@ -1997,9 +2007,11 @@ export class AgentSession {
 			if (!text?.trim() || assistant?.stopReason === "toolUse")
 				throw new Error("Automation turn produced no final assistant text");
 			return text;
+		} catch (error) {
+			throw turn.writeError ?? error;
 		} finally {
 			unsubscribe();
-			this._automationTurnInFlight = false;
+			this._automationTurn = undefined;
 		}
 	}
 

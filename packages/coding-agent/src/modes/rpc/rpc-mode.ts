@@ -2052,7 +2052,10 @@ export async function runRpcMode(
 			// Force the next stats request to await a fresh per-session cost scan.
 			subagentCostGeneration++;
 		}
-		if (tabTitleGenerator && !session.sessionName) {
+		// Unattended roles already have an approved run name and must not send work
+		// context to the model selected for automatic titles.
+		const role = session.automationRole;
+		if (tabTitleGenerator && !session.sessionName && role !== "orchestrator" && role !== "guard") {
 			if (event.type === "tool_execution_end") {
 				tabTitleGenerator.onToolEnd({
 					toolName: event.toolName,
