@@ -127,7 +127,7 @@ describe("AutomationRuns", () => {
 				appendFileSync(work.file, '{"type":"compaction"}\n');
 				return "B has a duplicate.";
 			});
-		first.turn.mockImplementation(async () => {
+		first.turn.mockResolvedValueOnce("CONTINUE").mockImplementationOnce(async () => {
 			writeFileSync(first.file, '{"type":"compaction"}\n');
 			return `${choice.report}\nCONTINUE`;
 		});
@@ -172,7 +172,7 @@ describe("AutomationRuns", () => {
 			expect(saved).toMatchObject({
 				status: "failed",
 				decisions: [],
-				report: expect.stringMatching(/no STOP or CONTINUE/i),
+				report: expect.stringMatching(/without a usable guard decision and report/i),
 				endedAt: expect.any(Number),
 			});
 			// The guard's own words survive in the report instead of a parser message.
@@ -403,11 +403,26 @@ describe("AutomationRuns", () => {
 			}
 		});
 
-		it("accepts a decision sent alone, without inventing report text", async () => {
-			const { runs, runId } = await reviewWith(["STOP"]);
+		it("asks for an explanation after a bare STOP and cannot reverse it", async () => {
+			const { runs, runId, guard, work } = await reviewWith(["STOP", "Check another item.\nCONTINUE"]);
+			expect(guard.turn).toHaveBeenCalledTimes(2);
+			expect(work.turn).toHaveBeenCalledTimes(1);
 			expect(runs.get(owner, runId)).toMatchObject({
 				status: "stopped",
-				report: expect.stringMatching(/no report text/i),
+				report: expect.stringMatching(/did not provide a usable stop report/i),
+				decisions: [{ action: "stop" }],
+			});
+			await runs.close();
+		});
+
+		it("never continues without findings, even when the correction says CONTINUE", async () => {
+			const { runs, runId, guard, work } = await reviewWith(["The inventory is incomplete.", "CONTINUE"]);
+			expect(guard.turn).toHaveBeenCalledTimes(2);
+			expect(work.turn).toHaveBeenCalledTimes(1);
+			expect(runs.get(owner, runId)).toMatchObject({
+				status: "failed",
+				report: expect.stringContaining("The inventory is incomplete."),
+				decisions: [],
 			});
 			await runs.close();
 		});
@@ -418,7 +433,7 @@ describe("AutomationRuns", () => {
 				"The work is complete.\nSTOP",
 			]);
 			expect(guard.turn).toHaveBeenCalledTimes(2);
-			expect(guard.turn.mock.calls[1][0]).toMatch(/did not contain your decision/i);
+			expect(guard.turn.mock.calls[1][0]).toMatch(/did not contain both a report and a decision/i);
 			expect(runs.get(owner, runId)).toMatchObject({
 				status: "stopped",
 				report: "The work is complete.",
@@ -436,7 +451,8 @@ describe("AutomationRuns", () => {
 			const run = runs.get(owner, runId);
 			expect(run?.status).toBe("failed");
 			expect(run?.report).toContain("Still fine.");
-			expect(run?.report).toMatch(/no STOP or CONTINUE/i);
+			expect(run?.report).toContain("I think it is fine.");
+			expect(run?.report).toMatch(/without a usable guard decision and report/i);
 			await runs.close();
 		});
 	});

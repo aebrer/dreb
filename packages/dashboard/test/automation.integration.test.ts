@@ -275,6 +275,11 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	await back.click();
 	const completedCard = past.getByRole("article").filter({ hasText: /stopped/i });
 	await completedCard.waitFor();
+	await completedCard.getByText("Decision history", { exact: true }).click();
+	const accepted = completedCard.locator(".automation-decisions li");
+	expect(await accepted.count()).toBe(2);
+	await accepted.nth(0).getByText(feedback, { exact: true }).waitFor();
+	await accepted.nth(1).getByText(conclusion, { exact: true }).waitFor();
 	const finished = await list();
 	expect(finished.setups).toEqual([]);
 	expect(finished.runs).toHaveLength(2);
@@ -453,12 +458,33 @@ it("resumes a launched setup, revises the job, and launches the revised draft (o
 	await proposal.getByText("Approve", { exact: true }).click();
 	await proposal.getByRole("button", { name: "submit", exact: true }).click();
 
-	// The host closes the setup when the run starts. From the closed chat the user resumes it.
+	// Inspect the failure after leaving the closed chat, then return after a page reload.
 	await composer.waitFor({ state: "hidden" });
-	await page.getByRole("button", { name: "Resume session", exact: true }).click();
+	const back = page.getByRole("link", { name: /^← Automate$/i });
+	await back.click();
+	const past = page.getByRole("region", { name: "Past automations" });
+	let card = past.getByRole("article").filter({ hasText: firstDraft.name });
+	await card.getByRole("link", { name: "Final report" }).click();
+	await page
+		.getByRole("main")
+		.getByText(/no final assistant text/i)
+		.waitFor();
+	await back.click();
+	await card.getByRole("button", { name: "Rename", exact: true }).click();
+	await page.getByRole("textbox", { name: "Name", exact: true }).fill("First job renamed");
+	await page.getByRole("button", { name: "Save", exact: true }).click();
+	await expect.poll(async () => (await list()).runs[0].name).toBe("First job renamed");
+	await page.reload({ waitUntil: "domcontentloaded" });
+	card = past.getByRole("article").filter({ hasText: "First job renamed" });
+	await card.getByRole("button", { name: "Resume setup", exact: true }).click();
 	await composer.waitFor({ state: "visible" });
-	const resumedKey = new URL(page.url()).hash.split("/").at(-1)!;
-	expect(resumedKey).not.toBe("");
+	await page.getByText(request, { exact: true }).waitFor();
+
+	// /new cannot switch away from the setup transcript, and setup is still usable afterward.
+	await composer.fill("/new");
+	await page.getByRole("button", { name: "send ↵", exact: true }).click();
+	await page.getByText("Setup chats keep the same transcript. Use New automation to start over.").waitFor();
+	await page.getByText(request, { exact: true }).waitFor();
 	await composer.fill(revision);
 	await page.getByRole("button", { name: "send ↵", exact: true }).click();
 	const revised = page.getByRole("region", { name: "Automation draft" }).filter({ hasText: revisedInstructions });

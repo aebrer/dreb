@@ -909,7 +909,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 					// generation, so re-approving a revised draft there starts a new run instead
 					// of colliding with the run the earlier generation already launched. Within one
 					// generation the child cannot emit a second approval at all.
-					runs.launch(who, h.key, setup.file, event.draft);
+					runs.launch(who, h.key, setup.file, event.draft, { id: setup.sessionId, cwd: setup.cwd });
 				} catch (err) {
 					const reason = err instanceof Error ? err.message : String(err);
 					hub.publish(h.key, {
@@ -945,6 +945,59 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			handleMemoryError(res, err);
 		}
 	});
+	async function resumeSetup(source: SetupSource, requestedCwd?: string) {
+		if (resumingSetups.has(source.file))
+			throw Object.assign(new Error("Setup resume already in progress"), { status: 409 });
+		resumingSetups.add(source.file);
+		try {
+			const active = await pool.findBySessionFile(source.file);
+			if (active) {
+				if (!requestedCwd && liveSetups.get(active)?.owner === source.owner) return pool.describe(active);
+				throw Object.assign(new Error("Setup transcript is already open"), { status: 409 });
+			}
+			const cwd = await resolveExistingDirectory(requestedCwd ?? source.cwd);
+			const info = await startSetup(source.owner, cwd, source);
+			for (const [key, previous] of closedSetups) {
+				if (previous.owner === source.owner && previous.file === source.file) closedSetups.delete(key);
+			}
+			return info;
+		} finally {
+			resumingSetups.delete(source.file);
+		}
+	}
+
+	app.post("/api/automations/:id/resume-setup", async (req, res) => {
+		const who = owner(req);
+		const run = runs.get(who, req.params.id);
+		if (!run) {
+			res.status(404).json({ error: "Unknown automation" });
+			return;
+		}
+		try {
+			if (!isAbsolute(run.setupFile) || !lstatSync(run.setupFile, { throwIfNoEntry: false })?.isFile()) {
+				res.status(409).json({ error: "Recorded setup transcript is missing or invalid" });
+				return;
+			}
+			const check = checkSessionFile(run.setupFile);
+			if (!check.ok || (run.setupSession && check.header.id !== run.setupSession.id)) {
+				res.status(409).json({ error: "Recorded setup transcript is missing or invalid" });
+				return;
+			}
+			res.status(201).json(
+				await resumeSetup({
+					owner: who,
+					cwd: run.setupSession?.cwd ?? check.header.cwd,
+					file: check.path,
+					sessionId: check.header.id,
+					hadMessages: true,
+					requireFile: true,
+				}),
+			);
+		} catch (err) {
+			handleMemoryError(res, err);
+		}
+	});
+
 	app.post("/api/automations/setup/:key/resume", async (req, res) => {
 		const key = req.params.key;
 		const who = owner(req);
@@ -963,26 +1016,20 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			res.status(400).json({ error: "Expected only an optional cwd" });
 			return;
 		}
-		if (resumingSetups.has(key)) {
-			res.status(409).json({ error: "Setup resume already in progress" });
-			return;
-		}
-		resumingSetups.add(key);
 		try {
-			const cwd = await resolveExistingDirectory(body.cwd ?? source.cwd);
-			const info = await startSetup(who, cwd, source);
-			closedSetups.delete(key);
-			res.status(201).json(info);
+			res.status(201).json(await resumeSetup(source, body.cwd));
 		} catch (err) {
 			handleMemoryError(res, err);
-		} finally {
-			resumingSetups.delete(key);
 		}
 	});
 	app.use("/api/runtimes/:key", (req, res, next) => {
 		const h = pool.get(String(req.params.key));
 		if (h?.automationOwner && (h.automationOwner !== owner(req) || !liveSetups.has(h))) {
 			res.status(404).json({ error: "Unknown setup session" });
+			return;
+		}
+		if (h?.automationOwner && req.method === "POST" && /^\/(?:new-session|fork|resume|import)\/?$/i.test(req.path)) {
+			res.status(409).json({ error: "Setup chats keep the same transcript. Use New automation to start over." });
 			return;
 		}
 		next();

@@ -23,6 +23,7 @@ vi.mock("../../src/client/api.js", () => ({
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		automations: vi.fn(async () => ({ runs: [] })),
 		setupAutomation: vi.fn(),
+		resumeSavedAutomationSetup: vi.fn(),
 		stopAutomation: vi.fn(),
 		automationTranscript: vi.fn(),
 		extensionUiResponse: vi.fn(async () => ({ ok: true })),
@@ -821,7 +822,9 @@ describe("automation inventory and saved records", () => {
 			const card = active.querySelector("article")!;
 			expect(card.textContent).toContain("Compactions: 2 · Guard decisions: 1");
 			expect(card.textContent).toContain("Latest: continue — more evidence needed");
-			card.querySelector("button")!.click();
+			Array.from(card.querySelectorAll("button"))
+				.find((button) => button.textContent === "Stop")!
+				.click();
 			expect(api.stopAutomation).toHaveBeenCalledWith("a");
 			await vi.advanceTimersToNextTimerAsync();
 			expect(active.querySelector("article")).toBe(card);

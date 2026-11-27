@@ -35,7 +35,17 @@ function elapsed(ms: number): string {
 	return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
 }
 
-function RunCard(props: { run: AutomationRun; now: number; onError: (message: string) => void }): JSX.Element {
+function RunCard(props: {
+	run: AutomationRun;
+	now: number;
+	store: AppStore;
+	onError: (message: string) => void;
+}): JSX.Element {
+	const [resuming, setResuming] = createSignal(false);
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 	const [stopping, setStopping] = createSignal(false);
 	const [relaunching, setRelaunching] = createSignal(false);
 	const [renaming, setRenaming] = createSignal(false);
@@ -47,6 +57,20 @@ function RunCard(props: { run: AutomationRun; now: number; onError: (message: st
 	const tone = () => (running(props.run) ? "running" : props.run.status === "stopped" ? "idle" : "error");
 	const latest = () => props.run.decisions.at(-1);
 	const href = (ref: string) => routeToHash({ screen: "automation", runId: props.run.id, ref });
+	async function resumeSetup() {
+		if (resuming()) return;
+		setResuming(true);
+		try {
+			const runtime = await api.resumeSavedAutomationSetup(props.run.id);
+			if (disposed) return;
+			props.store.rememberSetupRuntime(runtime);
+			props.store.navigate({ screen: "session", key: runtime.key, automationSetup: true });
+		} catch (err) {
+			if (!disposed) props.onError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setResuming(false);
+		}
+	}
 	async function stop() {
 		if (stopping()) return;
 		setStopping(true);
@@ -122,6 +146,9 @@ function RunCard(props: { run: AutomationRun; now: number; onError: (message: st
 				<a class="btn btn-small" href={href("setup")}>
 					Setup transcript
 				</a>
+				<button type="button" class="btn btn-small" disabled={resuming()} onClick={resumeSetup}>
+					{resuming() ? "Opening setup…" : "Resume setup"}
+				</button>
 				<Show when={props.run.workFile}>
 					<a class="btn btn-small" href={href("work")}>
 						Orchestrator
@@ -161,6 +188,24 @@ function RunCard(props: { run: AutomationRun; now: number; onError: (message: st
 					</button>
 				</Show>
 			</div>
+			<Show when={props.run.decisions.length > 0}>
+				<details class="automation-decisions">
+					<summary>Decision history</summary>
+					<ol>
+						<For each={props.run.decisions}>
+							{(decision) => (
+								<li>
+									<strong>{decision.action === "stop" ? "Stop" : "Continue"}</strong> ·{" "}
+									<time dateTime={new Date(decision.at).toISOString()}>
+										{new Date(decision.at).toLocaleString()}
+									</time>
+									<MarkdownBody text={decision.report} />
+								</li>
+							)}
+						</For>
+					</ol>
+				</details>
+			</Show>
 			<Show when={renaming()}>
 				<Modal
 					title="Rename automation"
@@ -290,7 +335,7 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 		}
 	}
 
-	const card = (run: AutomationRun) => <RunCard run={run} now={now()} onError={setActionError} />;
+	const card = (run: AutomationRun) => <RunCard run={run} now={now()} store={props.store} onError={setActionError} />;
 	return (
 		<div class="screen-fill">
 			<Topbar store={props.store} active="automate" />

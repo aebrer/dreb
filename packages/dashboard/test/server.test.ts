@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { readSessionTranscript } from "@dreb/coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDashboardSessionLister } from "../src/index.js";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
+import { AutomationRuns } from "../src/server/automation-runs.js";
 import { DashboardImageService } from "../src/server/dashboard-images.js";
 import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
 import { FilePairingStorage } from "../src/server/pairing-storage.js";
@@ -34,6 +35,7 @@ afterEach(async () => {
 
 interface TestServerOptions {
 	auth?: DashboardAuth;
+	automationHistoryFile?: string;
 	listAllSessions?: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession?: (path: string) => Promise<unknown>;
 	renameSession?: (path: string, name: string) => Promise<unknown>;
@@ -136,6 +138,7 @@ async function startServer(options: TestServerOptions = {}) {
 	});
 	const app = createDashboardServer({
 		auth: options.auth ?? new DashboardAuth(),
+		automationHistoryFile: options.automationHistoryFile,
 		pool,
 		listAllSessions: options.listAllSessions ?? (async () => []),
 		deleteSession: options.deleteSession ?? (async () => ({ method: "trash" })),
@@ -160,6 +163,119 @@ async function startServer(options: TestServerOptions = {}) {
 	if (address === null || typeof address === "string") throw new Error("no port");
 	return { base: `http://127.0.0.1:${address.port}`, pool, clients, clientCwds, app };
 }
+
+function savedAutomation(dir: string, status: AutomationRun["status"] = "failed") {
+	return {
+		id: "saved-run",
+		owner: "local",
+		setupFile: join(dir, "setup.jsonl"),
+		setupSession: { id: "saved-setup", cwd: dir },
+		draft: {
+			name: "Saved job",
+			cwd: dir,
+			instructions: "List the project",
+			orchestrator: { provider: "test", model: "worker", tools: ["ls"] },
+			guard: { provider: "test", model: "guard", tools: ["read"] },
+		},
+		status,
+		startedAt: 1,
+		compactions: 0,
+		decisions: [],
+		guardFiles: [],
+	};
+}
+
+it.each([false, true])("serves Fleet if startup history repair cannot be saved (mixed rows: %s)", async (mixed) => {
+	const dir = await createTempProject();
+	const automationHistoryFile = join(dir, "history.json");
+	const rows = [savedAutomation(dir, "working"), ...(mixed ? [{}] : [])];
+	const original = JSON.stringify(rows);
+	await writeFile(automationHistoryFile, original);
+	const repair = vi.spyOn(AutomationRuns.prototype as unknown as { save(): void }, "save").mockImplementation(() => {
+		throw Object.assign(new Error("No space left"), { code: "ENOSPC" });
+	});
+	const logger = vi.fn();
+	try {
+		const { base } = await startServer({ automationHistoryFile, logger });
+		expect((await fetch(`${base}/api/fleet/live`)).status).toBe(200);
+		const inventory = (await (await fetch(`${base}/api/automations`)).json()) as {
+			runs: AutomationRun[];
+			setups: unknown[];
+		};
+		expect(inventory.runs).toEqual([expect.objectContaining({ id: "saved-run", status: "interrupted" })]);
+		expect(inventory.setups).toEqual([]);
+		expect(logger).toHaveBeenCalledWith(expect.stringContaining("Could not save repaired automation history"));
+		expect(repair).toHaveBeenCalledOnce();
+		const files = await readdir(dir);
+		const source = mixed ? files.find((name) => name.startsWith("history.json.corrupt-")) : "history.json";
+		expect(source).toBeDefined();
+		expect(await readFile(join(dir, source!), "utf8")).toBe(original);
+	} finally {
+		repair.mockRestore();
+	}
+});
+
+it("resumes a durable setup after Dashboard restart and deduplicates later opens", async () => {
+	const dir = await createTempProject();
+	const run = savedAutomation(dir);
+	const automationHistoryFile = join(dir, "history.json");
+	await writeFile(automationHistoryFile, JSON.stringify([run]));
+	const header = {
+		type: "session",
+		version: 3,
+		id: run.setupSession.id,
+		cwd: dir,
+		timestamp: new Date().toISOString(),
+	};
+	const message = {
+		type: "message",
+		id: "m1",
+		parentId: null,
+		message: { role: "user", content: "Setup request", timestamp: 1 },
+	};
+	await writeFile(run.setupFile, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`);
+	const auth = new DashboardAuth();
+	const { base, pool, clients } = await startServer({ automationHistoryFile, auth });
+	const create = pool.create.bind(pool);
+	const spawn = vi.spyOn(pool, "create").mockImplementation(async (cwd, path, automation) => {
+		const handle = await create(cwd, path, automation);
+		vi.mocked(handle.client.getState).mockResolvedValue({
+			...(await handle.client.getState()),
+			sessionId: header.id,
+			sessionFile: path,
+			messageCount: 1,
+		});
+		handle.client.configureAutomation = vi.fn(async () => {});
+		return handle;
+	});
+	const read = await fetch(`${base}/api/automations/${run.id}/transcripts/setup`);
+	expect(read.status).toBe(200);
+	expect(spawn).not.toHaveBeenCalled();
+	const resume = () => fetch(`${base}/api/automations/${run.id}/resume-setup`, { method: "POST" });
+	const other = vi.spyOn(auth, "authenticate").mockResolvedValue({
+		allowed: true,
+		mode: "remote",
+		identity: { loginName: "other@example.test" } as TailscaleIdentity,
+	} as Awaited<ReturnType<DashboardAuth["authenticate"]>>);
+	expect((await resume()).status).toBe(404);
+	other.mockRestore();
+	await writeFile(run.setupFile, `${JSON.stringify({ ...header, id: "replaced" })}\n`);
+	expect((await resume()).status).toBe(409);
+	await writeFile(run.setupFile, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`);
+	const response = await resume();
+	expect(response.status).toBe(201);
+	const reopened = (await response.json()) as RuntimeInfoDto;
+	expect(reopened.state).toMatchObject({ sessionId: header.id, sessionFile: run.setupFile, messageCount: 1 });
+	expect(clients[0].configureAutomation).toHaveBeenCalledWith({ role: "setup", resumeSessionId: header.id });
+	const again = await resume();
+	expect(again.status).toBe(201);
+	expect(await again.json()).toMatchObject({ key: reopened.key });
+	expect(spawn).toHaveBeenCalledOnce();
+	for (const path of ["new-session", "fork", "resume", "import"]) {
+		expect((await fetch(`${base}/api/runtimes/${reopened.key}/${path}`, { method: "POST" })).status).toBe(409);
+	}
+	await pool.stopAll();
+});
 
 describe("closed automation setup resume", () => {
 	async function fixture() {

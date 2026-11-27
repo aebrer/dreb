@@ -77,7 +77,7 @@ function json(body: unknown): RequestInit {
 	return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
-function jsonWithMethod(method: "PUT" | "DELETE", body: unknown): RequestInit {
+function jsonWithMethod(method: "PUT" | "PATCH" | "DELETE", body: unknown): RequestInit {
 	return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
@@ -132,14 +132,13 @@ export const api = {
 	resumeAutomationSetup: (key: string, cwd?: string) =>
 		request<RuntimeInfoDto>(`/api/automations/setup/${encodeURIComponent(key)}/resume`, json({ cwd })),
 	setupAutomation: () => request<RuntimeInfoDto>("/api/automations/setup", json({})),
+	resumeSavedAutomationSetup: (id: string) =>
+		request<RuntimeInfoDto>(`/api/automations/${encodeURIComponent(id)}/resume-setup`, json({})),
 	stopAutomation: (id: string) => request<unknown>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
 	relaunchAutomation: (id: string) =>
 		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}/relaunch`, json({})),
 	renameAutomation: (id: string, name: string) =>
-		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}`, {
-			method: "PATCH",
-			...json({ name }),
-		}),
+		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}`, jsonWithMethod("PATCH", { name })),
 	deleteAutomation: (id: string) =>
 		request<{ ok: true }>(`/api/automations/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>

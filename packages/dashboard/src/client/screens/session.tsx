@@ -1611,6 +1611,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setActionNotice(undefined);
 		const builtin = parseDashboardBuiltin(text, commands());
 		if (builtin) {
+			if (
+				(automationSetup() || runtime()?.automationSetup) &&
+				["new", "fork", "resume", "import"].includes(builtin.command.name)
+			) {
+				setActionNotice("Setup chats keep the same transcript. Use New automation to start over.");
+				return;
+			}
 			if (fileAttachments().length > 0 || imageAttachments().length > 0) {
 				setActionNotice("Remove attachments before running a built-in command; nothing was sent or discarded.");
 				return;

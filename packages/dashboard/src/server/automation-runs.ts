@@ -58,6 +58,10 @@ function stored(value: unknown): value is StoredRun {
 		typeof value.id === "string" &&
 		(value.name === undefined || (typeof value.name === "string" && !!value.name.trim())) &&
 		typeof value.setupFile === "string" &&
+		(value.setupSession === undefined ||
+			(object(value.setupSession) &&
+				typeof value.setupSession.id === "string" &&
+				typeof value.setupSession.cwd === "string")) &&
 		typeof draft.name === "string" &&
 		typeof draft.cwd === "string" &&
 		typeof draft.instructions === "string" &&
@@ -94,12 +98,7 @@ function parseGuardReport(text: string): Verdict | undefined {
 		.toLowerCase();
 	if (bare !== "stop" && bare !== "continue") return undefined;
 	const report = lines.slice(0, -1).join("\n").trim();
-	return {
-		action: bare as Verdict["action"],
-		// A guard that answers with only its decision still has a decision; record it without
-		// inventing report text the guard never wrote.
-		report: report || `The guard sent no report text; its decision alone was ${bare.toUpperCase()}.`,
-	};
+	return { action: bare, report };
 }
 function snapshot({ owner: _owner, ...run }: StoredRun): AutomationRun {
 	return structuredClone(run);
@@ -144,6 +143,11 @@ export class AutomationRuns {
 	private readonly resources = new Set<Promise<unknown>>();
 	private readonly now: () => number;
 	private closed = false;
+	private historyNeedsQuarantine = false;
+
+	private warn(message: string): void {
+		(this.options.warn ?? console.warn)(message);
+	}
 
 	constructor(private readonly options: Options) {
 		this.now = options.now ?? Date.now;
@@ -159,7 +163,7 @@ export class AutomationRuns {
 	private loadHistory(): void {
 		const file = this.options.historyFile;
 		if (file === undefined) return;
-		const warn = this.options.warn ?? ((message: string) => console.warn(message));
+		const warn = (message: string) => this.warn(message);
 		let text: string;
 		try {
 			text = readFileSync(file, "utf8");
@@ -205,17 +209,21 @@ export class AutomationRuns {
 				interrupted = true;
 			}
 		});
-		if (rejected.length === 0) {
-			if (interrupted) this.save();
-			return;
+		if (rejected.length > 0) {
+			// Preserve the original before writing the recovered rows to the canonical path.
+			warn(
+				`Automation history at ${file} rejected ${rejected.length} record(s): ${rejected.join(", ")}. Moving the original aside and keeping the rest.`,
+			);
+			this.quarantineHistory(file, warn);
 		}
-		// Keep the readable rows live, but preserve the original file first so nothing is lost:
-		// the sanitized list is written to the canonical path afterwards.
-		warn(
-			`Automation history at ${file} rejected ${rejected.length} record(s): ${rejected.join(", ")}. Moving the original aside and keeping the rest.`,
-		);
-		this.quarantineHistory(file, warn);
-		this.save();
+		if (!(interrupted || rejected.length > 0) || this.historyNeedsQuarantine) return;
+		try {
+			this.save();
+		} catch (err) {
+			warn(
+				`Could not save repaired automation history at ${file} (${String(err)}). Recovered runs are available in memory.`,
+			);
+		}
 	}
 
 	/** Rename the unusable history file aside with a sortable, filesystem-safe timestamp. */
@@ -225,9 +233,11 @@ export class AutomationRuns {
 		for (let attempt = 1; existsSync(target); attempt++) target = `${file}.corrupt-${stamp}-${attempt}`;
 		try {
 			renameSync(file, target);
+			this.historyNeedsQuarantine = false;
 		} catch (err) {
+			this.historyNeedsQuarantine = true;
 			warn(
-				`Automation history at ${file} could not be moved aside (${String(err)}); leaving it untouched and starting without history.`,
+				`Automation history at ${file} could not be moved aside (${String(err)}); leaving the original untouched.`,
 			);
 		}
 	}
@@ -235,6 +245,10 @@ export class AutomationRuns {
 	private save(): void {
 		const path = this.options.historyFile;
 		if (path === undefined) return;
+		if (this.historyNeedsQuarantine) {
+			this.quarantineHistory(path, (message) => this.warn(message));
+			if (this.historyNeedsQuarantine) throw new Error("Could not move damaged automation history aside");
+		}
 		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 		const temp = `${path}.${randomUUID()}.tmp`;
 		try {
@@ -260,6 +274,7 @@ export class AutomationRuns {
 		setupFile: string,
 		draft: AutomationDraft,
 		name: string | undefined,
+		setupSession: AutomationRun["setupSession"],
 	): AutomationRun {
 		if (this.closed) throw new Error("Automation service closed");
 		if (this.runs.has(id)) throw new Error("Automation already launched for this setup");
@@ -268,6 +283,7 @@ export class AutomationRuns {
 			owner,
 			...(name?.trim() ? { name: name.trim() } : {}),
 			setupFile,
+			...(setupSession ? { setupSession: { ...setupSession } } : {}),
 			draft: structuredClone(draft),
 			status: "working",
 			startedAt: this.now(),
@@ -295,8 +311,14 @@ export class AutomationRuns {
 		return snapshot(run);
 	}
 
-	launch(owner: string, setupKey: string, setupFile: string, draft: AutomationDraft): AutomationRun {
-		return this.register(owner, setupKey, setupFile, draft, draft.name);
+	launch(
+		owner: string,
+		setupKey: string,
+		setupFile: string,
+		draft: AutomationDraft,
+		setupSession?: AutomationRun["setupSession"],
+	): AutomationRun {
+		return this.register(owner, setupKey, setupFile, draft, draft.name, setupSession);
 	}
 
 	/** Start a fresh attempt from a finished run's exact approved draft and setup transcript. */
@@ -308,7 +330,14 @@ export class AutomationRuns {
 		let attempt = 1;
 		let newId = `${id}-r${attempt}`;
 		while (this.runs.has(newId)) newId = `${id}-r${++attempt}`;
-		return this.register(owner, newId, source.setupFile, source.draft, source.name ?? source.draft.name);
+		return this.register(
+			owner,
+			newId,
+			source.setupFile,
+			source.draft,
+			source.name ?? source.draft.name,
+			source.setupSession,
+		);
 	}
 
 	rename(owner: string, id: string, name: string): AutomationRun {
@@ -403,28 +432,42 @@ export class AutomationRuns {
 			if (!this.current(live) || !guard) return;
 			run.guardFiles.push(guard.file);
 			this.save();
-			let response = await guard.turn(reviewPrompt(run, this.now(), evidence));
+			const response = await guard.turn(reviewPrompt(run, this.now(), evidence));
 			if (!this.current(live)) return;
 			let decision = parseGuardReport(response);
-			if (!decision) {
-				// A missing decision is usually phrasing drift, not a refusal. Ask once more in
-				// the same review session before treating the finished review as unusable.
-				response = await guard.turn(
-					"Your reply did not contain your decision. Repeat the same report, then write your decision on its own last line, as one word alone: STOP or CONTINUE.",
-				);
+			if (!decision?.report) {
+				// Ask once in the same review. An explicit STOP cannot be reversed by this
+				// formatting correction, even if the guard now says CONTINUE.
+				const mustStop = decision?.action === "stop";
+				let correction: string;
+				let corrected: Verdict | undefined;
+				try {
+					correction = await guard.turn(
+						mustStop
+							? "You decided STOP without a report. Explain why you stopped and what remains. Write STOP again on the last line."
+							: "Your reply did not contain both a report and a decision. State your findings and any decision you made for the user. For STOP, explain why you stopped and what remains. Write STOP or CONTINUE on the last line.",
+					);
+					corrected = parseGuardReport(correction);
+				} catch (err) {
+					correction = `The guard could not complete the correction: ${err instanceof Error ? err.message : String(err)}`;
+				}
 				if (!this.current(live)) return;
-				decision = parseGuardReport(response);
-			}
-			if (!decision) {
-				// Fail closed: an unreadable verdict must never launch another unattended turn, and
-				// the guard's own words stay in the report so the review is inspectable from the
-				// run card instead of only from its transcript file.
-				this.finishBackground(
-					live,
-					"failed",
-					`Automation stopped without a decision: the guard reply held no STOP or CONTINUE token.\n\nGuard reply:\n${response}`,
-				);
-				return;
+				const replies = `First guard reply:\n${response}\n\nCorrection:\n${correction}`;
+				if (corrected?.report && (!mustStop || corrected.action === "stop")) {
+					decision = corrected;
+				} else if (mustStop || corrected?.action === "stop") {
+					decision = {
+						action: "stop",
+						report: `The guard decided STOP but did not provide a usable stop report. No further work was started.\n\n${replies}`,
+					};
+				} else {
+					this.finishBackground(
+						live,
+						"failed",
+						`Automation stopped without a usable guard decision and report.\n\n${replies}`,
+					);
+					return;
+				}
 			}
 			run.decisions.push({ at: this.now(), ...decision });
 			if (decision.action === "stop") {
