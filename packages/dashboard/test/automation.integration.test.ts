@@ -20,6 +20,11 @@ const feedback = "The inventory is missing the file count.";
 const finalInventory = "Inventory: manifest.txt. File count: 1.";
 const conclusion = "Inventory and count verified; the job is complete.";
 const stop = `## Inventory review\n\n${conclusion}`;
+// The owner's "change the launch params" journey (manual review note 1): after a run starts, the
+// closed setup is resumed, the job is revised, and the revised draft launches a second run.
+const revision = "Count the lines in each file as well.";
+const revisedInstructions = "Inventory the work directory and report line counts per file.";
+const revisedName = "Work inventory with line counts";
 
 type ChatRequest = {
 	model: string;
@@ -92,7 +97,7 @@ function scriptedModel(draft: AutomationDraft) {
 					return { content: "" }; // Expected guard failure, not a fixture assertion error.
 				case 2:
 					expect(content).toContain(inventory);
-					return { content: `CONTINUE\n${feedback}` };
+					return { content: `${feedback}\nCONTINUE` };
 				case 3:
 					expect(content).toContain(finalInventory);
 					expect(content).toContain(feedback);
@@ -310,7 +315,8 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	await openSaved("Guard 1");
 	await main
 		.locator(".entry.assistant")
-		.filter({ hasText: `CONTINUE ${feedback}` })
+		// The guard's contract: report first, then its decision alone on the last line.
+		.filter({ hasText: new RegExp(`${feedback}\\s+CONTINUE`) })
 		.waitFor();
 	await back.click();
 	await openSaved("Guard 2");
@@ -325,3 +331,152 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	expect((await list()).runs).toEqual(finished.runs);
 	expect(spawnClient).toHaveBeenCalledTimes(clientsBeforeApproval + 5);
 }, 120_000);
+
+it("resumes a launched setup, revises the job, and launches the revised draft (owner note 1)", async ({
+	onTestFinished,
+}) => {
+	const home = await mkdtemp(join(tmpdir(), "dreb-automation-resume-"));
+	onTestFinished(() => rm(home, { recursive: true, force: true }));
+	const agentDir = join(home, "agent");
+	const cwd = join(home, "work");
+	await Promise.all([mkdir(agentDir), mkdir(cwd)]);
+	for (const key of Object.keys(process.env)) {
+		if (!["PATH", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TMP", "TEMP", "TMPDIR"].includes(key.toUpperCase()))
+			vi.stubEnv(key, undefined);
+	}
+	vi.stubEnv("HOME", home);
+	vi.stubEnv("USERPROFILE", home);
+	vi.stubEnv("DREB_CODING_AGENT_DIR", agentDir);
+	vi.stubEnv("DREB_OFFLINE", "1");
+	onTestFinished(() => {
+		vi.unstubAllEnvs();
+	});
+	const firstDraft: AutomationDraft = {
+		name: "First job",
+		cwd,
+		instructions,
+		orchestrator: { provider, model, tools: ["ls"] },
+		guard: { provider, model, tools: ["read"] },
+	};
+	const revisedDraft: AutomationDraft = { ...firstDraft, name: revisedName, instructions: revisedInstructions };
+	// Content-addressed, not call-counted: a resumed setup re-asks with the same tools, and the
+	// approved run's worker answers with no text on purpose so the run fails without a review.
+	const errors: Error[] = [];
+	const server = createServer(async (req, res) => {
+		try {
+			expect([req.method, req.url]).toEqual(["POST", "/v1/chat/completions"]);
+			let text = "";
+			for await (const chunk of req) text += chunk;
+			const body = JSON.parse(text) as ChatRequest;
+			expect(body).toMatchObject({ model, stream: true });
+			const names = body.tools.map(({ function: fn }) => fn.name).sort();
+			const last = body.messages.at(-1);
+			const content = JSON.stringify(last?.content);
+			let response: ReturnType<typeof toolCall> | { content: string };
+			if (!names.includes("propose_automation"))
+				response = { content: "" }; // The worker answers with no text: the run fails without a review.
+			else if (last?.role === "tool" && content.includes("Approval sent")) response = { content: "Approved." };
+			else if (last?.role === "user" && content.includes(revision))
+				response = toolCall("proposal-revised", "propose_automation", revisedDraft);
+			else if (last?.role === "user" && content.includes(request))
+				response = toolCall("proposal-first", "propose_automation", firstDraft);
+			else throw new Error(`Unexpected completion (role ${last?.role}, tools ${names.join(",")})`);
+			res.writeHead(200, { "content-type": "text/event-stream" }).end(stream(response));
+		} catch (err) {
+			errors.push(err instanceof Error ? err : new Error(String(err)));
+			res.writeHead(400).end("Unexpected offline fixture request");
+		}
+	});
+	const origin = await listen(server);
+	onTestFinished(() => server[Symbol.asyncDispose]());
+	await writeFile(
+		join(agentDir, "models.json"),
+		JSON.stringify({
+			providers: {
+				[provider]: {
+					api: "openai-completions",
+					baseUrl: `${origin}/v1`,
+					apiKey: "unused-test-key",
+					models: [{ id: model, name: model }],
+				},
+			},
+		}),
+	);
+	await writeFile(
+		join(agentDir, "settings.json"),
+		JSON.stringify({
+			defaultProvider: provider,
+			defaultModel: model,
+			retry: { enabled: false },
+			tabTitle: { enabled: false },
+		}),
+	);
+	const pool = new RuntimePool({ clientFactory: (options) => new RpcClient(options) });
+	onTestFinished(() => pool.stopAll());
+	const app = createDashboardServer({
+		auth: new DashboardAuth(),
+		pool,
+		automationSetupDir: home,
+		automationSessionDir: join(agentDir, "sessions"),
+		automationHistoryFile: join(agentDir, "runs.json"),
+		staticDir: join(import.meta.dirname, "../dist/static"),
+		listAllSessions: async () => [],
+		deleteSession: async () => {
+			throw new Error("Unexpected delete");
+		},
+		renameSession: async () => {
+			throw new Error("Unexpected delete");
+		},
+	});
+	onTestFinished(() => app.closeDashboard());
+	const http = createServer(app);
+	const base = await listen(http);
+	onTestFinished(() => http[Symbol.asyncDispose]());
+	const browser = await chromium.launch({
+		args: ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=127.0.0.1"],
+	});
+	onTestFinished(() => browser.close());
+	const context = await browser.newContext({ ...devices["Pixel 7"], serviceWorkers: "block" });
+	await context.route("**/*", (route) =>
+		new URL(route.request().url()).origin === base ? route.continue() : route.abort(),
+	);
+	const page = await context.newPage();
+	page.setDefaultTimeout(20_000);
+	const list = async (): Promise<{ runs: AutomationRun[] }> =>
+		(await page.request.get(`${base}/api/automations`)).json();
+	const composer = page.getByPlaceholder(/^Message dreb/);
+	await page.goto(`${base}/#/automate`, { waitUntil: "domcontentloaded" });
+	await page.getByRole("button", { name: "New automation", exact: true }).click();
+	await composer.fill(request);
+	await page.getByRole("button", { name: "send ↵", exact: true }).click();
+	const proposal = page.getByRole("region", { name: "Automation draft" }).filter({ hasText: instructions });
+	await proposal.getByText("Approve", { exact: true }).click();
+	await proposal.getByRole("button", { name: "submit", exact: true }).click();
+
+	// The host closes the setup when the run starts. From the closed chat the user resumes it.
+	await composer.waitFor({ state: "hidden" });
+	await page.getByRole("button", { name: "Resume session", exact: true }).click();
+	await composer.waitFor({ state: "visible" });
+	const resumedKey = new URL(page.url()).hash.split("/").at(-1)!;
+	expect(resumedKey).not.toBe("");
+	await composer.fill(revision);
+	await page.getByRole("button", { name: "send ↵", exact: true }).click();
+	const revised = page.getByRole("region", { name: "Automation draft" }).filter({ hasText: revisedInstructions });
+	await revised.getByText("Approve", { exact: true }).click();
+	const beforeSecond = await list();
+	await revised.getByRole("button", { name: "submit", exact: true }).click();
+
+	// A second run starts from the resumed setup; the first run's record is untouched.
+	await composer.waitFor({ state: "hidden" });
+	await page.getByRole("link", { name: /^← Automate$/i }).click();
+	await expect.poll(async () => (await list()).runs.length, { timeout: 20_000 }).toBe(2);
+	const { runs } = await list();
+	expect(runs.map((run) => run.id)).toEqual(expect.arrayContaining([beforeSecond.runs[0].id]));
+	expect(new Set(runs.map((run) => run.id)).size).toBe(2);
+	const first = runs.find((run) => run.draft.instructions === instructions)!;
+	const second = runs.find((run) => run.draft.instructions === revisedInstructions)!;
+	expect(first).toMatchObject({ draft: firstDraft, setupFile: beforeSecond.runs[0].setupFile });
+	expect(second).toMatchObject({ draft: revisedDraft, setupFile: first.setupFile });
+	expect(errors).toEqual([]);
+	await expect.poll(() => pool.list().length, { timeout: 20_000 }).toBe(0);
+}, 180_000);

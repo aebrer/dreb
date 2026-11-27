@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as settle } from "node:timers/promises";
@@ -155,33 +155,36 @@ describe("AutomationRuns", () => {
 		await runs.close();
 	});
 
-	it.each([
-		"null",
-		"The work looks fine, so carry on with the plan.",
-		'{"action":"stop","report":"done"}',
-		"STOP",
-		"   \n\nCONTINUE",
-	])("fails closed on invalid verdict %s", async (response) => {
-		const work = child("work"),
-			guard = child("guard");
-		work.turn.mockResolvedValue("Evidence");
-		guard.turn.mockResolvedValue(response);
-		const runs = new AutomationRuns({
-			historyFile,
-			start: vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard),
-		});
-		launch(runs);
-		await settle();
-		expect(history()[0]).toMatchObject({
-			status: "failed",
-			decisions: [],
-			report: expect.stringMatching(/invalid guard verdict/i),
-			endedAt: expect.any(Number),
-		});
-		expect(work.turn).toHaveBeenCalledTimes(1);
-		expect(guard.close).toHaveBeenCalledTimes(1);
-		await runs.close();
-	});
+	it.each(["null", "The work looks fine, so carry on with the plan.", '{"action":"stop","report":"done"}', "   \n\n"])(
+		"fails closed on a guard reply that carries no decision: %s",
+		async (response) => {
+			const work = child("work"),
+				guard = child("guard");
+			work.turn.mockResolvedValue("Evidence");
+			guard.turn.mockResolvedValue(response);
+			const runs = new AutomationRuns({
+				historyFile,
+				start: vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard),
+			});
+			launch(runs);
+			await settle();
+			const saved = history()[0];
+			expect(saved).toMatchObject({
+				status: "failed",
+				decisions: [],
+				report: expect.stringMatching(/no STOP or CONTINUE/i),
+				endedAt: expect.any(Number),
+			});
+			// The guard's own words survive in the report instead of a parser message.
+			if (response.trim()) expect(saved.report).toContain(response.trim());
+			// One corrective ask in the same review session, then a visible stop; never a second
+			// unattended work turn on an unreadable verdict.
+			expect(guard.turn).toHaveBeenCalledTimes(2);
+			expect(work.turn).toHaveBeenCalledTimes(1);
+			expect(guard.close).toHaveBeenCalledTimes(1);
+			await runs.close();
+		},
+	);
 
 	it.each(["startup", "response", "close"])("ignores late guard %s after stop", async (stage) => {
 		const work = child("work"),
@@ -300,10 +303,142 @@ describe("AutomationRuns", () => {
 		expect(start).not.toHaveBeenCalled();
 	});
 
-	it.each(["{", "{}", "[{}]"])("rejects corrupt history %s without overwriting it", (raw) => {
+	it.each(["{", "{}", "[{}]"])("moves unusable history %s aside and still starts", (raw) => {
 		writeFileSync(historyFile, raw);
-		expect(() => new AutomationRuns({ historyFile, start: vi.fn<Start>() })).toThrow();
-		expect(readFileSync(historyFile, "utf8")).toBe(raw);
+		const warnings: string[] = [];
+		const runs = new AutomationRuns({ historyFile, warn: (m) => warnings.push(m), start: vi.fn<Start>() });
+		expect(runs.list(owner)).toEqual([]);
+		expect(warnings.join("\n")).toMatch(/aside/i);
+		// The unusable bytes survive for inspection; the dashboard boots either way.
+		const quarantined = readdirSync(dir).filter((name) => name.startsWith("history.json.corrupt-"));
+		expect(quarantined.length).toBe(1);
+		expect(readFileSync(join(dir, quarantined[0]), "utf8")).toBe(raw);
+	});
+
+	it("keeps valid rows when a history file contains an invalid one, preserving the original", () => {
+		const good = {
+			id: "kept",
+			owner,
+			setupFile: join(dir, "setup.jsonl"),
+			draft: agreement("Keep me"),
+			status: "stopped",
+			startedAt: 5,
+			endedAt: 9,
+			compactions: 0,
+			guardFiles: [],
+			decisions: [],
+		};
+		writeFileSync(historyFile, JSON.stringify([good, { draft: {} }, good]));
+		const warnings: string[] = [];
+		const runs = new AutomationRuns({ historyFile, warn: (m) => warnings.push(m), start: vi.fn<Start>() });
+		expect(warnings.join("\n")).toMatch(/rejected 2 record\(s\)/);
+		expect(runs.list(owner)).toEqual([expect.objectContaining({ id: "kept", status: "stopped" })]);
+		const quarantined = readdirSync(dir).filter((name) => name.startsWith("history.json.corrupt-"));
+		expect(quarantined.length).toBe(1);
+		expect(JSON.parse(readFileSync(join(dir, quarantined[0]), "utf8")).length).toBe(3);
+		// The sanitized history replaces the canonical path so the same warning cannot recur.
+		expect(history()).toEqual([expect.objectContaining({ id: "kept" })]);
+	});
+
+	it("keeps a successful turn when the transcript tail is mid-write, and counts what it can", async () => {
+		const work = child("work"),
+			guard = child("guard");
+		const start = vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard);
+		work.turn.mockImplementation(async () => {
+			// A torn last record is expected while the child appends (see subagent-log.ts).
+			writeFileSync(work.file, '{"type":"compaction"}\n{"type":"comp');
+			return "Work finished.";
+		});
+		guard.turn.mockResolvedValue("All finished.\nSTOP");
+		const runs = new AutomationRuns({ start, historyFile });
+		launch(runs);
+		await settle();
+		expect(runs.get(owner, id)).toMatchObject({ status: "stopped", report: "All finished.", compactions: 1 });
+		await runs.close();
+	});
+
+	it("skips compaction bookkeeping instead of failing the run when the transcript is unreadable", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const work = child("work"),
+			guard = child("guard");
+		// A directory path makes every read throw EISDIR: an environmental read failure, not a
+		// missing file. Bookkeeping must never replace the successful turn.
+		work.file = dir;
+		const start = vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard);
+		work.turn.mockResolvedValue("Work finished.");
+		guard.turn.mockResolvedValue("All finished.\nSTOP");
+		const runs = new AutomationRuns({ start, historyFile });
+		launch(runs);
+		await settle();
+		expect(runs.get(owner, id)).toMatchObject({ status: "stopped", report: "All finished.", compactions: 0 });
+		expect(warn.mock.calls.map((call) => String(call[0])).join("\n")).toMatch(/count compactions/);
+		warn.mockRestore();
+		await runs.close();
+	});
+
+	describe("guard verdict parsing", () => {
+		let caseIndex = 0;
+		async function reviewWith(guardReplies: string[]) {
+			const work = child(`work${caseIndex}`),
+				guard = child(`guard${caseIndex}`);
+			const start = vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard);
+			work.turn.mockResolvedValue("Evidence from the work turn.");
+			for (const reply of guardReplies) guard.turn.mockResolvedValueOnce(reply);
+			const runs = new AutomationRuns({ start, historyFile });
+			const runId = `review-case-${caseIndex++}`;
+			runs.launch(owner, runId, join(dir, "setup.jsonl"), agreement("Check the project"));
+			await settle();
+			return { runs, runId, work, guard };
+		}
+
+		it("reads a decision in any case or punctuation, and strips emphasis markers", async () => {
+			for (const [reply, report] of [
+				["Everything is finished.\nStop.", "Everything is finished."],
+				["Everything is finished.\n**STOP**", "Everything is finished."],
+				["Everything is finished.\nStop!?", "Everything is finished."],
+			] as const) {
+				const { runs, runId } = await reviewWith([reply]);
+				expect(runs.get(owner, runId)).toMatchObject({ status: "stopped", report });
+				await runs.close();
+			}
+		});
+
+		it("accepts a decision sent alone, without inventing report text", async () => {
+			const { runs, runId } = await reviewWith(["STOP"]);
+			expect(runs.get(owner, runId)).toMatchObject({
+				status: "stopped",
+				report: expect.stringMatching(/no report text/i),
+			});
+			await runs.close();
+		});
+
+		it("asks once more when a reply carries no decision, then records the retry's verdict", async () => {
+			const { runs, runId, guard, work } = await reviewWith([
+				"I believe the work is complete.",
+				"The work is complete.\nSTOP",
+			]);
+			expect(guard.turn).toHaveBeenCalledTimes(2);
+			expect(guard.turn.mock.calls[1][0]).toMatch(/did not contain your decision/i);
+			expect(runs.get(owner, runId)).toMatchObject({
+				status: "stopped",
+				report: "The work is complete.",
+				decisions: [{ action: "stop", report: "The work is complete." }],
+			});
+			// The retry is a review question, not another work turn.
+			expect(work.turn).toHaveBeenCalledTimes(1);
+			await runs.close();
+		});
+
+		it("stops without a decision after the retry, preserving the guard's text in the report", async () => {
+			const { runs, runId, guard, work } = await reviewWith(["I think it is fine.", "Still fine."]);
+			expect(guard.turn).toHaveBeenCalledTimes(2);
+			expect(work.turn).toHaveBeenCalledTimes(1);
+			const run = runs.get(owner, runId);
+			expect(run?.status).toBe("failed");
+			expect(run?.report).toContain("Still fine.");
+			expect(run?.report).toMatch(/no STOP or CONTINUE/i);
+			await runs.close();
+		});
 	});
 
 	it("relaunches a finished run as a new attempt and refuses to mutate live or foreign runs", async () => {

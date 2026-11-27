@@ -188,4 +188,54 @@ describe("settled automation turns", () => {
 		});
 		await expect(harness.session.automationTurn("start")).rejects.toThrow(/outstanding background work/);
 	});
+
+	it("invalidates a pending setup draft from every command the Dashboard can send, and only those", async () => {
+		harness = createHarness();
+		const { session } = harness;
+		await session.configureAutomation({ role: "setup" }, () => {});
+		const invalidate = vi.spyOn(session, "invalidateAutomationDraft");
+
+		// Drive the real RPC command surface: the hook under test lives in runRpcMode's dispatcher,
+		// which is the only path the Dashboard uses. Without this test, deleting the hook or typoing
+		// a command name still leaves a user able to approve a draft they replaced by typing.
+		const child = Object.assign(new ChildProcess(), {
+			stdin: new PassThrough(),
+			stdout: new PassThrough(),
+			stderr: new PassThrough(),
+		});
+		vi.mocked(spawn).mockReturnValueOnce(child);
+		vi.spyOn(process, "stdin", "get").mockReturnValue(child.stdin as unknown as typeof process.stdin);
+		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
+		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
+			child.stdout.write(line);
+		});
+		void runRpcMode(session);
+		const client = new RpcClient();
+		await client.start();
+		try {
+			expect(session.automationRole).toBe("setup");
+			// Command outcomes (accepted or rejected) are not the point: each of these is a user
+			// action that makes a draft on screen stale, so each must discard it. (abort invalidates
+			// twice: once from this hook and once from AgentSession.abort() itself.)
+			for (const [name, send] of [
+				["prompt", () => client.prompt("change of plan")] as const,
+				["steer", () => client.steer("change of plan")] as const,
+				["follow_up", () => client.followUp("change of plan")] as const,
+				["abort", () => client.abort()] as const,
+				["reload", () => client.reload()] as const,
+				["new_session", () => client.newSession()] as const,
+				["switch_session", () => client.switchSession("/nonexistent.jsonl")] as const,
+			]) {
+				invalidate.mockClear();
+				await send().catch(() => {});
+				expect(invalidate, name).toHaveBeenCalled();
+			}
+			// A read must not throw away the draft the user is looking at.
+			invalidate.mockClear();
+			await client.getState();
+			expect(invalidate).not.toHaveBeenCalled();
+		} finally {
+			await client.stop();
+		}
+	});
 });

@@ -841,7 +841,10 @@ describe("automation inventory and saved records", () => {
 		vi.mocked(api.automations).mockResolvedValue({ runs: [saved] });
 		vi.mocked(api.automationTranscript)
 			.mockClear()
-			.mockImplementation(async (_, ref) => ({ messages: [{ role: "user", content: `Saved ${ref} body` }] }));
+			.mockImplementation(async (_, ref) => ({
+				messages: [{ role: "user", content: `Saved ${ref} body` }],
+				running: false,
+			}));
 		vi.mocked(api.setupAutomation).mockClear();
 		vi.mocked(api.createRuntime).mockClear();
 		vi.mocked(api.hydrate).mockClear();
@@ -864,6 +867,52 @@ describe("automation inventory and saved records", () => {
 		expect(api.createRuntime).not.toHaveBeenCalled();
 		expect(api.setupAutomation).not.toHaveBeenCalled();
 		expect(api.hydrate).not.toHaveBeenCalled();
+	});
+
+	it("keeps the read window across live refreshes and stops polling once the run is finished", async () => {
+		vi.useFakeTimers();
+		const live = run("live-run", "/p", 0, "working");
+		vi.mocked(api.automations).mockResolvedValue({ runs: [live] });
+		const oldest = "oldest message in the record";
+		let payload: unknown[] = [
+			{ role: "user", content: oldest },
+			...Array.from({ length: 159 }, (_, i) => ({ role: "user", content: `message ${i}` })),
+		];
+		const transcript = vi
+			.mocked(api.automationTranscript)
+			.mockClear()
+			.mockImplementation(async () => ({ messages: payload, running: true }));
+		// Arrive the way a user does: the Automate card links to each saved record.
+		window.location.hash = "#/automate";
+		const el = mount(() => <App />);
+		try {
+			await vi.advanceTimersByTimeAsync(0);
+			el.querySelector<HTMLAnchorElement>('article a[href="#/automation/live-run/work"]')!.click();
+			await vi.waitFor(() => expect(transcript).toHaveBeenCalledTimes(1));
+			const showEarlier = () =>
+				Array.from(el.querySelectorAll("button")).find((b) => b.textContent?.startsWith("show earlier"));
+			// The window shows the newest 150; the oldest record is behind the fold.
+			expect(showEarlier()?.textContent).toMatch(/10 hidden/);
+			expect(el.textContent).not.toContain(oldest);
+			showEarlier()!.click();
+			expect(el.textContent).toContain(oldest);
+			// Twenty new messages arrive while reading. The refresh must keep the widened window:
+			// a reset to the newest 150 would hide 160 - 150 + 20 = 30 records again.
+			payload = [...payload, ...Array.from({ length: 20 }, (_, i) => ({ role: "user", content: `newest ${i}` }))];
+			await vi.advanceTimersByTimeAsync(1_500);
+			await vi.waitFor(() => expect(transcript).toHaveBeenCalledTimes(2));
+			expect(el.textContent).toContain("newest 19");
+			expect(showEarlier()?.textContent).toMatch(/^show earlier 20 \(20 hidden\)$/);
+			// When the run finishes, the transcript cannot grow: the last poll reports it and the
+			// timer is not rescheduled (no repeated full-file reads for a finished run).
+			vi.mocked(api.automationTranscript).mockImplementation(async () => ({ messages: payload, running: false }));
+			await vi.advanceTimersByTimeAsync(1_500);
+			await vi.waitFor(() => expect(transcript).toHaveBeenCalledTimes(3));
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(transcript).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

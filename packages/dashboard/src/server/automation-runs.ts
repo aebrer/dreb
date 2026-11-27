@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AutomationDraft, AutomationRun } from "../shared/automation.js";
 
@@ -13,6 +13,8 @@ interface Child {
 interface Options {
 	historyFile?: string;
 	now?: () => number;
+	/** Routes operator-visible warnings through the caller's logger; defaults to console.warn. */
+	warn?(message: string): void;
 	start(cwd: string, role: Role, spec: AutomationDraft["guard"]): Promise<Child>;
 }
 interface LiveRun {
@@ -75,33 +77,54 @@ function stored(value: unknown): value is StoredRun {
 		value.decisions.every((d: unknown) => object(d) && Number.isFinite(d.at) && decision(d))
 	);
 }
-// The guard reports in plain English (ASD-STE100 style) and closes with its decision: one
-// bare word, STOP or CONTINUE. The last decision token is authoritative and removed from the
-// report; everything else is the report, so quoted or stray text cannot change the decision.
-const guardDecisionToken = /\bSTOP\b|\bCONTINUE\b/g;
-function parseGuardReport(text: string): Verdict {
-	const matches = [...text.matchAll(guardDecisionToken)];
-	const last = matches.at(-1);
-	if (!last) throw new Error("Invalid guard verdict: no decision token STOP or CONTINUE");
-	const start = last.index ?? 0;
-	const report = (text.slice(0, start) + text.slice(start + last[0].length)).trim();
-	if (!report) throw new Error("Invalid guard verdict: missing the report beside the decision token");
-	return { action: last[0] === "STOP" ? "stop" : "continue", report };
+// The guard reports in plain English (ASD-STE100 style) and closes with its decision: the word
+// STOP or CONTINUE alone on the last line. Only that final line can be the decision — a report
+// may legitimately contain the words "stop" or "continue" in prose, and treating such a mention
+// as a verdict would end or extend a run by accident. A decision written as "Stop." or
+// "**STOP**" is the same decision, so emphasis and sentence punctuation are tolerated. A reply
+// whose last line is not a decision is unparseable, not a verdict: the loop asks once more and,
+// if that fails too, records the guard's text and stops without scheduling more work.
+function parseGuardReport(text: string): Verdict | undefined {
+	const lines = text.trimEnd().split("\n");
+	const final = (lines.at(-1) ?? "").trim();
+	const bare = final
+		.replace(/[*_`]/g, "") // emphasis markers, wherever a one-word line puts them
+		.replace(/^decision\b[:\-\u2014]?\s+/i, "") // a labelled decision is still the decision
+		.replace(/[.!?;:\s]+$/g, "") // sentence punctuation the guard may end with
+		.toLowerCase();
+	if (bare !== "stop" && bare !== "continue") return undefined;
+	const report = lines.slice(0, -1).join("\n").trim();
+	return {
+		action: bare as Verdict["action"],
+		// A guard that answers with only its decision still has a decision; record it without
+		// inventing report text the guard never wrote.
+		report: report || `The guard sent no report text; its decision alone was ${bare.toUpperCase()}.`,
+	};
 }
 function snapshot({ owner: _owner, ...run }: StoredRun): AutomationRun {
 	return structuredClone(run);
 }
-function countCompactions(file: string): number {
+function countCompactions(file: string): number | undefined {
 	let text: string;
 	try {
 		text = readFileSync(file, "utf8");
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
-		throw err;
+		// Compaction counts are card bookkeeping. A read error here must never replace a
+		// successful work turn (this runs in turn()'s finally), so report and skip.
+		console.warn(`Automation: could not read ${file} to count compactions`, err);
+		return undefined;
 	}
-	return text
-		.split("\n")
-		.reduce((count, line) => count + Number(!!line.trim() && JSON.parse(line)?.type === "compaction"), 0);
+	let count = 0;
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			if (JSON.parse(line)?.type === "compaction") count++;
+		} catch {
+			// The last record can be mid-write (see subagent-log.ts); the next count re-reads it.
+		}
+	}
+	return count;
 }
 function reviewPrompt(run: StoredRun, now: number, evidence: string): string {
 	const time = new Date(now);
@@ -124,20 +147,56 @@ export class AutomationRuns {
 
 	constructor(private readonly options: Options) {
 		this.now = options.now ?? Date.now;
-		const file = options.historyFile;
+		this.loadHistory();
+	}
+
+	/**
+	 * Boot must not depend on history surviving. The dashboard's other features are unrelated to
+	 * automation, so a damaged history is reported and moved aside (never silently rewritten)
+	 * rather than thrown at startup: an invalid row or unreadable file costs the Automate page
+	 * its records, not the whole Dashboard.
+	 */
+	private loadHistory(): void {
+		const file = this.options.historyFile;
 		if (file === undefined) return;
+		const warn = this.options.warn ?? ((message: string) => console.warn(message));
 		let text: string;
 		try {
 			text = readFileSync(file, "utf8");
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-			throw err;
+			warn(
+				`Automation history at ${file} could not be read (${String(err)}); moving it aside and starting without history.`,
+			);
+			this.quarantineHistory(file, warn);
+			return;
 		}
-		const rows: unknown = JSON.parse(text);
-		if (!Array.isArray(rows)) throw new Error(`Invalid automation history at ${file}`);
+		let rows: unknown;
+		try {
+			rows = JSON.parse(text);
+		} catch (err) {
+			warn(
+				`Automation history at ${file} is not readable JSON (${String(err)}); moving it aside and starting without history.`,
+			);
+			this.quarantineHistory(file, warn);
+			return;
+		}
+		if (!Array.isArray(rows)) {
+			warn(`Automation history at ${file} is not a list; moving it aside and starting without history.`);
+			this.quarantineHistory(file, warn);
+			return;
+		}
 		let interrupted = false;
-		for (const row of rows) {
-			if (!stored(row) || this.runs.has(row.id)) throw new Error(`Invalid automation history at ${file}`);
+		const rejected: string[] = [];
+		rows.forEach((row, index) => {
+			if (!stored(row) || this.runs.has(row.id)) {
+				rejected.push(
+					typeof (row as { id?: unknown })?.id === "string"
+						? String((row as { id: string }).id)
+						: `entry ${index}`,
+				);
+				return;
+			}
 			this.runs.set(row.id, row);
 			if (row.status === "working" || row.status === "reviewing") {
 				row.status = "interrupted";
@@ -145,8 +204,32 @@ export class AutomationRuns {
 				row.report = "Interrupted by dashboard restart; work was not resumed.";
 				interrupted = true;
 			}
+		});
+		if (rejected.length === 0) {
+			if (interrupted) this.save();
+			return;
 		}
-		if (interrupted) this.save();
+		// Keep the readable rows live, but preserve the original file first so nothing is lost:
+		// the sanitized list is written to the canonical path afterwards.
+		warn(
+			`Automation history at ${file} rejected ${rejected.length} record(s): ${rejected.join(", ")}. Moving the original aside and keeping the rest.`,
+		);
+		this.quarantineHistory(file, warn);
+		this.save();
+	}
+
+	/** Rename the unusable history file aside with a sortable, filesystem-safe timestamp. */
+	private quarantineHistory(file: string, warn: (message: string) => void): void {
+		const stamp = new Date(this.now()).toISOString().replace(/[:.]/g, "-");
+		let target = `${file}.corrupt-${stamp}`;
+		for (let attempt = 1; existsSync(target); attempt++) target = `${file}.corrupt-${stamp}-${attempt}`;
+		try {
+			renameSync(file, target);
+		} catch (err) {
+			warn(
+				`Automation history at ${file} could not be moved aside (${String(err)}); leaving it untouched and starting without history.`,
+			);
+		}
 	}
 
 	private save(): void {
@@ -287,8 +370,11 @@ export class AutomationRuns {
 		} finally {
 			if (this.current(live)) {
 				const count = countCompactions(child.file);
-				live.run.compactions += count - (counts.get(child.file) ?? 0);
-				counts.set(child.file, count);
+				// An unreadable transcript skips the count; the next turn re-reads the whole file.
+				if (count !== undefined) {
+					live.run.compactions += count - (counts.get(child.file) ?? 0);
+					counts.set(child.file, count);
+				}
 			}
 		}
 	}
@@ -317,9 +403,29 @@ export class AutomationRuns {
 			if (!this.current(live) || !guard) return;
 			run.guardFiles.push(guard.file);
 			this.save();
-			const response = await guard.turn(reviewPrompt(run, this.now(), evidence));
+			let response = await guard.turn(reviewPrompt(run, this.now(), evidence));
 			if (!this.current(live)) return;
-			const decision = parseGuardReport(response);
+			let decision = parseGuardReport(response);
+			if (!decision) {
+				// A missing decision is usually phrasing drift, not a refusal. Ask once more in
+				// the same review session before treating the finished review as unusable.
+				response = await guard.turn(
+					"Your reply did not contain your decision. Repeat the same report, then write your decision on its own last line, as one word alone: STOP or CONTINUE.",
+				);
+				if (!this.current(live)) return;
+				decision = parseGuardReport(response);
+			}
+			if (!decision) {
+				// Fail closed: an unreadable verdict must never launch another unattended turn, and
+				// the guard's own words stay in the report so the review is inspectable from the
+				// run card instead of only from its transcript file.
+				this.finishBackground(
+					live,
+					"failed",
+					`Automation stopped without a decision: the guard reply held no STOP or CONTINUE token.\n\nGuard reply:\n${response}`,
+				);
+				return;
+			}
 			run.decisions.push({ at: this.now(), ...decision });
 			if (decision.action === "stop") {
 				this.finishBackground(live, "stopped", decision.report);

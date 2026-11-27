@@ -249,6 +249,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		);
 	const runs = new AutomationRuns({
 		historyFile: options.automationHistoryFile,
+		warn: (message) => log(`automation history: ${message}`),
 		start: (cwd, role, spec) => pool.startAutomationChild(cwd, role, spec, options.automationSessionDir),
 	});
 	const hub = options.eventHub ?? new EventHub();
@@ -833,14 +834,18 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			return;
 		}
 		try {
-			res.json({ messages: readSubagentMessages({ sessionFile: file }) });
+			// `running` lets the read-only viewer stop polling once the transcript can no longer
+			// grow; a terminal run needs no timer and no repeated full-file reads.
+			res.json({
+				messages: readSubagentMessages({ sessionFile: file }),
+				running: run?.status === "working" || run?.status === "reviewing",
+			});
 		} catch (err) {
 			handleMemoryError(res, err);
 		}
 	});
 	interface SetupSource {
 		owner: string;
-		launchKey: string;
 		cwd: string;
 		file: string;
 		sessionId: string;
@@ -888,7 +893,6 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			if (source?.hadMessages && !messageCount) throw new Error("Recorded setup transcript loaded without messages");
 			const setup = {
 				owner: who,
-				launchKey: source?.launchKey ?? h.key,
 				cwd,
 				file,
 				sessionId,
@@ -900,14 +904,19 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 				if (event.type === "message_start" || event.type === "message_end") setup.hadMessages = true;
 				if (event.type !== "automation_approved" || pool.get(h.key) !== h) return;
 				try {
-					if (event.setupFile !== setup.file) throw new Error("Setup session changed since creation");
-					runs.launch(who, setup.launchKey, setup.file, event.draft);
+					if (event.setupFile !== setup.file) throw new Error("the setup session changed since creation");
+					// The run id is this setup generation's own key. A resumed setup is a new
+					// generation, so re-approving a revised draft there starts a new run instead
+					// of colliding with the run the earlier generation already launched. Within one
+					// generation the child cannot emit a second approval at all.
+					runs.launch(who, h.key, setup.file, event.draft);
 				} catch (err) {
+					const reason = err instanceof Error ? err.message : String(err);
 					hub.publish(h.key, {
 						type: "extension_ui_request",
 						method: "notify",
 						notifyType: "error",
-						message: `Automation launch failed: ${String(err)}`,
+						message: `The automation did not start: ${reason}. Nothing is running.`,
 					});
 					return;
 				}

@@ -160,7 +160,10 @@ describe("automation role sessions", () => {
 			expect(shown.questions[0].question).toContain(verbatim);
 		expect(approved.mock.calls).toEqual([[revised]]);
 		expect(session.messages).toContainEqual(
-			expect.objectContaining({ role: "toolResult", content: [{ type: "text", text: "Approval sent." }] }),
+			expect.objectContaining({
+				role: "toolResult",
+				content: [{ type: "text", text: expect.stringMatching(/^Approval sent to the host\./) }],
+			}),
 		);
 		await propose();
 		expect(approved).toHaveBeenCalledTimes(1);

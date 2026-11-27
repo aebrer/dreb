@@ -155,7 +155,8 @@ export class Automation {
 					return textResult("Not approved. Propose a fresh complete draft for any revision.");
 				this.approved = true;
 				this.onApproved(draft);
-				return textResult("Approval sent.");
+				// The host, not this tool, decides whether a run starts; claim only the handoff.
+				return textResult("Approval sent to the host. The host reports any problem with starting here.");
 			},
 		};
 	}

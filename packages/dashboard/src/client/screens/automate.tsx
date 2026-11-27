@@ -386,6 +386,11 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 	const transcript = props.record !== "report";
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let stopped = false;
+	// Polling is for growth: a transcript stops changing when its run stops, and the server
+	// says so with each payload. Keep the last raw payload to skip rebuilding entries when
+	// nothing arrived, so read state (window, expanded cards) survives idle polls.
+	const [live, setLive] = createSignal(true);
+	let lastPayload = "";
 	onCleanup(() => {
 		stopped = true;
 		controller.abort();
@@ -402,9 +407,14 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 				if (run?.report === undefined) throw new Error("Final report not found.");
 				setReport(run.report);
 			} else {
-				const { messages } = await api.automationTranscript(props.runId, props.record, controller.signal);
+				const { messages, running } = await api.automationTranscript(props.runId, props.record, controller.signal);
 				if (stopped) return;
-				setEntries(messagesToEntries(messages as MessageLike[]));
+				setLive(running !== false);
+				const payload = JSON.stringify(messages);
+				if (payload !== lastPayload) {
+					lastPayload = payload;
+					setEntries(messagesToEntries(messages as MessageLike[]));
+				}
 			}
 			if (!stopped) setError("");
 		} catch (err) {
@@ -416,10 +426,10 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 	}
 	onMount(() => {
 		void load(true).finally(() => {
-			if (transcript && !stopped) {
+			if (transcript && live() && !stopped) {
 				const tick = () => {
 					void load().finally(() => {
-						if (!stopped) timer = setTimeout(tick, 1500);
+						if (live() && !stopped) timer = setTimeout(tick, 1500);
 					});
 				};
 				timer = setTimeout(tick, 1500);
@@ -446,7 +456,9 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 					<Show when={!loading()} fallback={<p class="muted">Loading record…</p>}>
 						<Show when={props.record !== "report"} fallback={<MarkdownBody text={report()} />}>
 							<Show when={entries().length} fallback={!error() && <p class="muted">No saved messages.</p>}>
-								<Transcript entries={entries()} />
+								{/* Stable resetKey keeps the read window (and "show earlier") across live refreshes,
+								    matching the Session and subagent viewers. */}
+								<Transcript entries={entries()} resetKey={`${props.runId}:${props.record}`} />
 							</Show>
 						</Show>
 					</Show>

@@ -250,7 +250,7 @@ describe("closed automation setup resume", () => {
 		expect(child).toHaveBeenCalledOnce();
 	});
 
-	it("requires a genuine saved transcript and keeps duplicate launch protection across runtime keys", async () => {
+	it("requires a genuine saved transcript and lets a resumed setup launch a fresh run", async () => {
 		const { base, dir, pool, key, file, clients, spawn, resume } = await fixture();
 		const child = vi.spyOn(pool, "startAutomationChild").mockRejectedValue(new Error("offline fixture"));
 		const approval = {
@@ -291,11 +291,19 @@ describe("closed automation setup resume", () => {
 		});
 		expect(spawn).toHaveBeenLastCalledWith(homedir(), file, { owner: "local", sessionDir: undefined });
 		expect(clients[2].configureAutomation).toHaveBeenCalledWith({ role: "setup", resumeSessionId: "setup-1" });
-		clients[2].emit(approval);
-		expect(child).toHaveBeenCalledOnce();
-		const { runs } = (await (await fetch(`${base}/api/automations`)).json()) as { runs: { id: string }[] };
-		expect(runs).toHaveLength(1);
-		expect(runs[0].id).toBe(key);
+		// A resumed setup is a new generation. Approving a revised draft there must launch a new
+		// run carrying that revision, not collide with the run the first generation launched.
+		const revised = { ...approval, draft: { cwd: dir, instructions: "Revised terms", orchestrator: {}, guard: {} } };
+		clients[2].emit(revised);
+		await vi.waitFor(async () => expect(child).toHaveBeenCalledTimes(2));
+		const listed = (await (await fetch(`${base}/api/automations`)).json()) as {
+			runs: { id: string; draft: { instructions?: string } }[];
+		};
+		const first = listed.runs.find((run) => run.id === key);
+		const second = listed.runs.find((run) => run.id !== key);
+		expect(listed.runs).toHaveLength(2);
+		expect(first?.draft.instructions).toBeUndefined();
+		expect(second?.draft.instructions).toBe("Revised terms");
 	});
 
 	it("relaunches, renames, and deletes a finished run over HTTP", async () => {

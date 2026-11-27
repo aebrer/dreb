@@ -143,7 +143,7 @@ export const api = {
 	deleteAutomation: (id: string) =>
 		request<{ ok: true }>(`/api/automations/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>
-		request<{ messages: unknown[] }>(
+		request<{ messages: unknown[]; running: boolean }>(
 			`/api/automations/${encodeURIComponent(id)}/transcripts/${encodeURIComponent(ref)}`,
 			{ signal },
 		),
