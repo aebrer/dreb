@@ -11,6 +11,7 @@ export function automationHistory(setupFile: string): Array<AutomationRun & { ow
 			owner: "local",
 			id: "station-cache-review",
 			draft: {
+				name: "Station cache review",
 				cwd: FIXTURE_PROJECTS.tidewatch,
 				instructions: "Verify the station cache offline",
 				orchestrator: model,

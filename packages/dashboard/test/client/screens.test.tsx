@@ -771,7 +771,7 @@ describe("automation inventory and saved records", () => {
 		const model = { provider: "test", model: "offline", tools: [] };
 		return {
 			id,
-			draft: { cwd, instructions: id, orchestrator: model, guard: model },
+			draft: { name: id, cwd, instructions: id, orchestrator: model, guard: model },
 			status,
 			startedAt,
 			compactions: 2,

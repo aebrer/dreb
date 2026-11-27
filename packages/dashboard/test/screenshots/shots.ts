@@ -89,11 +89,7 @@ function automateShot(viewport: ViewportName): ShotDefinition {
 		viewport,
 		colorMode: "dark",
 		route: { screen: "automate" },
-		ready: [
-			CONNECTED,
-			'article.session-card:has-text("Verify the station cache offline")',
-			'a:has-text("Final report")',
-		],
+		ready: [CONNECTED, 'article.session-card:has-text("Station cache review")', 'a:has-text("Final report")'],
 	};
 }
 

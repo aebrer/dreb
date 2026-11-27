@@ -3,6 +3,7 @@ export type { AutomationDraft };
 
 export interface AutomationRun {
 	id: string;
+	name?: string;
 	draft: AutomationDraft;
 	status: "working" | "reviewing" | "stopped" | "failed" | "interrupted";
 	startedAt: number;

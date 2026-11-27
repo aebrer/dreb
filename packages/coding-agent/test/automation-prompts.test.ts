@@ -81,6 +81,7 @@ async function fixture() {
 	});
 	const draft: AutomationDraft = {
 		cwd,
+		name: "Stop at 9am job",
 		instructions: '  Stop at 9am.\nKeep **literal** `markup` and "Approve".  ',
 		orchestrator: { provider: "faux", model: "worker/V1", tools: ["ls", "edit", "write"] },
 		guard: { provider: "faux", model: "guard/v2", tools: ["read", "web_fetch"] },
@@ -198,6 +199,7 @@ describe("automation role sessions", () => {
 		const { draft, propose, ask, approved, registry } = await setup();
 		for (const invalid of [
 			{ instructions: " \t" },
+			{ name: "   " },
 			{ cwd: "." },
 			{ cwd: join(draft.cwd, "missing") },
 			{ cwd: join(draft.cwd, "models.json") },

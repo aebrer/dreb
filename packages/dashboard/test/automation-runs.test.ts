@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as settle } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AutomationRuns } from "../src/server/automation-runs.js";
+import { AutomationBusy, AutomationInput, AutomationNotFound, AutomationRuns } from "../src/server/automation-runs.js";
 import type { AutomationDraft, AutomationRun } from "../src/shared/automation.js";
 
 let dir: string;
@@ -14,6 +14,7 @@ type Start = ConstructorParameters<typeof AutomationRuns>[0]["start"];
 
 function agreement(instructions: string): AutomationDraft {
 	return {
+		name: "Review job",
 		cwd: dir,
 		instructions,
 		orchestrator: { provider: "a", model: "worker", tools: ["read", "write"] },
@@ -60,7 +61,7 @@ describe("AutomationRuns", () => {
 		const report = "Stop condition met: the deadline passed with two items outstanding.";
 		guard.turn.mockImplementation(async () => {
 			expect(history()[0]).toMatchObject({ status: "reviewing", guardFiles: [guard.file], compactions: 1 });
-			return JSON.stringify({ action: "stop", report });
+			return `${report}\nSTOP`;
 		});
 		const runs = new AutomationRuns({ start, historyFile, now: () => now });
 		const initial = launch(runs, draft);
@@ -128,9 +129,9 @@ describe("AutomationRuns", () => {
 			});
 		first.turn.mockImplementation(async () => {
 			writeFileSync(first.file, '{"type":"compaction"}\n');
-			return JSON.stringify(choice);
+			return `${choice.report}\nCONTINUE`;
 		});
-		second.turn.mockResolvedValue(JSON.stringify(final));
+		second.turn.mockResolvedValue(`${final.report}\nSTOP`);
 		const runs = new AutomationRuns({ start, historyFile, now: () => 42 });
 		launch(runs, draft);
 		await settle();
@@ -155,11 +156,11 @@ describe("AutomationRuns", () => {
 	});
 
 	it.each([
-		'```json\n{"action":"stop","report":"done"}\n```',
 		"null",
-		'{"action":"finish","report":"done"}',
-		'{"action":"continue","report":"  "}',
-		'{"action":"continue","report":"ok","other":true}',
+		"The work looks fine, so carry on with the plan.",
+		'{"action":"stop","report":"done"}',
+		"STOP",
+		"   \n\nCONTINUE",
 	])("fails closed on invalid verdict %s", async (response) => {
 		const work = child("work"),
 			guard = child("guard");
@@ -197,7 +198,7 @@ describe("AutomationRuns", () => {
 		await settle();
 		expect(start).toHaveBeenCalledTimes(2);
 		if (stage !== "startup") acquired.resolve(guard);
-		if (stage === "close") response.resolve('{"action":"continue","report":"keep going"}');
+		if (stage === "close") response.resolve("keep going\nCONTINUE");
 		await settle();
 		expect(guard.turn).toHaveBeenCalledTimes(stage === "startup" ? 0 : 1);
 		expect(guard.close).toHaveBeenCalledTimes(stage === "close" ? 1 : 0);
@@ -205,7 +206,7 @@ describe("AutomationRuns", () => {
 		const stopped = history();
 		expect(stopped[0]).toMatchObject({ status: "stopped", report: expect.stringMatching(/user/i) });
 		acquired.resolve(guard);
-		response.resolve('{"action":"continue","report":"too late"}');
+		response.resolve("too late\nCONTINUE");
 		closed.resolve();
 		await settle();
 		expect(history()).toEqual(stopped);
@@ -248,7 +249,7 @@ describe("AutomationRuns", () => {
 			active = Promise.withResolvers<string>();
 		a.turn.mockReturnValue(late.promise);
 		b.turn.mockReturnValue(active.promise);
-		reviewer.turn.mockResolvedValue('{"action":"stop","report":"B completed"}');
+		reviewer.turn.mockResolvedValue("B completed\nSTOP");
 		const start = vi.fn<Start>().mockResolvedValueOnce(a).mockResolvedValueOnce(b).mockResolvedValueOnce(reviewer);
 		const runs = new AutomationRuns({ start });
 		launch(runs);
@@ -303,6 +304,67 @@ describe("AutomationRuns", () => {
 		writeFileSync(historyFile, raw);
 		expect(() => new AutomationRuns({ historyFile, start: vi.fn<Start>() })).toThrow();
 		expect(readFileSync(historyFile, "utf8")).toBe(raw);
+	});
+
+	it("relaunches a finished run as a new attempt and refuses to mutate live or foreign runs", async () => {
+		const first = child("first"),
+			firstGuard = child("firstguard");
+		const liveWork = { ...child("live"), turn: vi.fn<() => Promise<string>>(() => new Promise(() => {})) };
+		const start = vi
+			.fn<Start>()
+			.mockResolvedValueOnce(first)
+			.mockResolvedValueOnce(firstGuard)
+			.mockResolvedValueOnce(liveWork);
+		first.turn.mockResolvedValue("Evidence");
+		firstGuard.turn.mockResolvedValue("All done\nSTOP");
+		const runs = new AutomationRuns({ historyFile, start });
+		const original = launch(runs);
+		await settle();
+		expect(runs.get(owner, id)).toMatchObject({ status: "stopped", report: "All done" });
+
+		expect(() => runs.relaunch("mallory", id)).toThrow(AutomationNotFound);
+		expect(() => runs.relaunch(owner, "missing")).toThrow(AutomationNotFound);
+
+		const attempt = runs.relaunch(owner, id);
+		expect(attempt.id).not.toBe(id);
+		expect(attempt).toMatchObject({ id: `${id}-r1`, name: original.draft.name, status: "working" });
+		expect(attempt.setupFile).toBe(original.setupFile);
+		expect(attempt.draft).toEqual(original.draft);
+
+		// The live attempt cannot be renamed, deleted, or relaunched again.
+		expect(() => runs.rename(owner, attempt.id, "Renamed")).toThrow(AutomationBusy);
+		expect(() => runs.delete(owner, attempt.id)).toThrow(AutomationBusy);
+		expect(() => runs.relaunch(owner, attempt.id)).toThrow(AutomationBusy);
+		runs.stop(owner, attempt.id);
+		liveWork.turn.mockResolvedValue("too late");
+
+		expect(runs.rename(owner, attempt.id, "Renamed")).toMatchObject({ name: "Renamed" });
+		expect(history().find((run) => run.id === attempt.id)?.name).toBe("Renamed");
+		expect(() => runs.rename(owner, attempt.id, "  ")).toThrow(AutomationInput);
+		expect(() => runs.rename(owner, attempt.id, "x".repeat(81))).toThrow(AutomationInput);
+		expect(() => runs.rename("mallory", attempt.id, "x")).toThrow(AutomationNotFound);
+		expect(() => runs.delete("mallory", attempt.id)).toThrow(AutomationNotFound);
+		runs.delete(owner, attempt.id);
+		expect(runs.get(owner, attempt.id)).toBeUndefined();
+		expect(history().some((run) => run.id === attempt.id)).toBe(false);
+		await runs.close();
+	});
+
+	it("records the last work evidence in the report when a turn fails", async () => {
+		const work = child("work"),
+			guard = child("guard");
+		const runs = new AutomationRuns({
+			historyFile,
+			start: vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard),
+		});
+		work.turn.mockResolvedValue("The worker found the answer is 42.");
+		guard.turn.mockRejectedValue(new Error("provider rejected the request"));
+		launch(runs);
+		await settle();
+		expect(history()[0]).toMatchObject({ status: "failed" });
+		expect(history()[0].report).toContain("provider rejected the request");
+		expect(history()[0].report).toContain("The worker found the answer is 42.");
+		await runs.close();
 	});
 
 	it("does not spawn or reserve a run id when initial persistence fails", async () => {

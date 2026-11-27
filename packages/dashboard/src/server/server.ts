@@ -32,7 +32,7 @@ import {
 	MAX_SESSION_PREVIEW_CHARACTERS,
 } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
-import { AutomationRuns } from "./automation-runs.js";
+import { AutomationBusy, AutomationInput, AutomationNotFound, AutomationRuns } from "./automation-runs.js";
 import {
 	DASHBOARD_IMAGE_ID_PATTERN,
 	DashboardImageNotFoundError,
@@ -776,6 +776,12 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		if (!decision?.allowed) throw new Error("Not authenticated");
 		return decision.mode === "remote" ? `remote:${decision.identity.loginName}` : "local";
 	}
+	const automationError = (res: Response, err: unknown): void => {
+		if (err instanceof AutomationNotFound) res.status(404).json({ error: String(err) });
+		else if (err instanceof AutomationBusy) res.status(409).json({ error: String(err) });
+		else if (err instanceof AutomationInput) res.status(400).json({ error: String(err) });
+		else res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+	};
 	app.get("/api/automations", (req, res) =>
 		res.json({ runs: runs.list(owner(req)), setups: pool.automationSetups(owner(req)) }),
 	);
@@ -786,6 +792,30 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		}
 		runs.stop(owner(req), req.params.id);
 		res.json({ ok: true });
+	});
+	// A finished run keeps its approved draft, so a retry needs no new setup conversation.
+	app.post("/api/automations/:id/relaunch", (req, res) => {
+		try {
+			res.status(201).json(runs.relaunch(owner(req), req.params.id));
+		} catch (err) {
+			automationError(res, err);
+		}
+	});
+	app.patch("/api/automations/:id", (req, res) => {
+		const name = typeof req.body?.name === "string" ? req.body.name : "";
+		try {
+			res.json(runs.rename(owner(req), req.params.id, name));
+		} catch (err) {
+			automationError(res, err);
+		}
+	});
+	app.delete("/api/automations/:id", (req, res) => {
+		try {
+			runs.delete(owner(req), req.params.id);
+			res.json({ ok: true });
+		} catch (err) {
+			automationError(res, err);
+		}
 	});
 	app.get("/api/automations/:id/transcripts/:ref", (req, res) => {
 		const run = runs.get(owner(req), req.params.id);
@@ -822,6 +852,16 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const closedSetups = new Map<string, SetupSource>();
 	const resumingSetups = new Set<string>();
 	const maxClosedSetups = 256;
+	// A closed setup stays resumable so a launched run's own setup can be reopened and edited.
+	function retireClosedSetup(handle: RuntimeHandle, setup: SetupSource): void {
+		setup.hadMessages ||= (handle.lastState?.messageCount ?? 0) > 0;
+		setup.requireFile ||= existsSync(setup.file);
+		if (closedSetups.size >= maxClosedSetups) {
+			const oldest = closedSetups.keys().next();
+			if (!oldest.done) closedSetups.delete(oldest.value);
+		}
+		closedSetups.set(handle.key, setup);
+	}
 
 	async function startSetup(who: string, cwd: string, source?: SetupSource) {
 		let path: string | undefined;
@@ -869,7 +909,13 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 						notifyType: "error",
 						message: `Automation launch failed: ${String(err)}`,
 					});
+					return;
 				}
+				// The approved conversation no longer controls the run, so the host closes it
+				// instead of leaving a live chat whose messages do nothing. The transcript stays
+				// readable and the closed setup stays resumable.
+				retireClosedSetup(h, setup);
+				void pool.stop(h.key);
 			});
 			return info;
 		} catch (err) {
@@ -956,15 +1002,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 					res.status(404).json({ error: `No runtime ${String(req.params.key)}` });
 					return;
 				}
-				if (setup && handle) {
-					setup.hadMessages ||= (handle.lastState?.messageCount ?? 0) > 0;
-					setup.requireFile ||= existsSync(setup.file);
-					if (closedSetups.size >= maxClosedSetups) {
-						const oldest = closedSetups.keys().next();
-						if (!oldest.done) closedSetups.delete(oldest.value);
-					}
-					closedSetups.set(handle.key, setup);
-				}
+				if (setup && handle) retireClosedSetup(handle, setup);
 				images.removeRuntime(String(req.params.key));
 				log(`runtime ${String(req.params.key)} stopped`);
 				res.json({ ok: true });

@@ -132,7 +132,7 @@ Before the first prompt, send `configure_automation` once on a fresh, idle sessi
 {"id":"setup-1","type":"configure_automation","options":{"role":"setup"}}
 ```
 
-Use ordinary `prompt` turns for setup. Only setup can emit `automation_approved`: selecting **Approve** on the full proposal emits `{"type":"automation_approved","draft":...,"setupFile":...}`. The draft contains `instructions`, `cwd`, `orchestrator` and `guard`; `setupFile` identifies the setup transcript. **Request changes**, dismissal and chat text do not emit this event.
+Use ordinary `prompt` turns for setup. Only setup can emit `automation_approved`: selecting **Approve** on the full proposal emits `{"type":"automation_approved","draft":...,"setupFile":...}`. The draft contains `name` (a short job title), `instructions`, `cwd`, `orchestrator` and `guard`; `setupFile` identifies the setup transcript. **Request changes**, dismissal and chat text do not emit this event.
 
 For each unattended session, copy the role's exact `provider`, `model` and `tools` from the approved draft into `options` alongside `role`. For example:
 

@@ -133,6 +133,15 @@ export const api = {
 		request<RuntimeInfoDto>(`/api/automations/setup/${encodeURIComponent(key)}/resume`, json({ cwd })),
 	setupAutomation: () => request<RuntimeInfoDto>("/api/automations/setup", json({})),
 	stopAutomation: (id: string) => request<unknown>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
+	relaunchAutomation: (id: string) =>
+		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}/relaunch`, json({})),
+	renameAutomation: (id: string, name: string) =>
+		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}`, {
+			method: "PATCH",
+			...json({ name }),
+		}),
+	deleteAutomation: (id: string) =>
+		request<{ ok: true }>(`/api/automations/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>
 		request<{ messages: unknown[] }>(
 			`/api/automations/${encodeURIComponent(id)}/transcripts/${encodeURIComponent(ref)}`,

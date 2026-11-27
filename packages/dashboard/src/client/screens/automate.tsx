@@ -3,7 +3,7 @@ import { createStore, reconcile } from "solid-js/store";
 import type { AutomationRun } from "../../shared/automation.js";
 import type { FleetRuntimeSnapshotDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { BannerRegion, FleetCard, StatusChip, Topbar } from "../components/common.js";
+import { BannerRegion, FleetCard, Modal, StatusChip, Topbar } from "../components/common.js";
 import { MarkdownBody, Transcript } from "../components/transcript.js";
 import { type MessageLike, messagesToEntries, type TranscriptEntry } from "../state/reducer.js";
 import { type AppStore, routeToHash } from "../state/store.js";
@@ -37,6 +37,13 @@ function elapsed(ms: number): string {
 
 function RunCard(props: { run: AutomationRun; now: number; onError: (message: string) => void }): JSX.Element {
 	const [stopping, setStopping] = createSignal(false);
+	const [relaunching, setRelaunching] = createSignal(false);
+	const [renaming, setRenaming] = createSignal(false);
+	const [nameDraft, setNameDraft] = createSignal(props.run.name ?? props.run.draft.name);
+	const [savingName, setSavingName] = createSignal(false);
+	const [confirmingDelete, setConfirmingDelete] = createSignal(false);
+	const [deleting, setDeleting] = createSignal(false);
+	const title = () => props.run.name ?? props.run.draft.name;
 	const tone = () => (running(props.run) ? "running" : props.run.status === "stopped" ? "idle" : "error");
 	const latest = () => props.run.decisions.at(-1);
 	const href = (ref: string) => routeToHash({ screen: "automation", runId: props.run.id, ref });
@@ -51,11 +58,49 @@ function RunCard(props: { run: AutomationRun; now: number; onError: (message: st
 			setStopping(false);
 		}
 	}
+	async function relaunch() {
+		if (relaunching()) return;
+		setRelaunching(true);
+		try {
+			await api.relaunchAutomation(props.run.id);
+			// The poll surfaces the new attempt; a failure keeps the button available.
+		} catch (err) {
+			props.onError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setRelaunching(false);
+		}
+	}
+	async function saveName() {
+		if (savingName()) return;
+		const next = nameDraft().trim();
+		if (!next) return;
+		setSavingName(true);
+		try {
+			await api.renameAutomation(props.run.id, next);
+			setRenaming(false);
+		} catch (err) {
+			props.onError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setSavingName(false);
+		}
+	}
+	async function remove() {
+		if (deleting()) return;
+		setDeleting(true);
+		try {
+			await api.deleteAutomation(props.run.id);
+			// The poll drops the record; the card unmounts before this signal resets.
+		} catch (err) {
+			props.onError(err instanceof Error ? err.message : String(err));
+			setDeleting(false);
+			setConfirmingDelete(false);
+		}
+	}
 	return (
 		<FleetCard status={tone()}>
 			<div class="session-title">
-				<span class="name" title={props.run.draft.instructions}>
-					{props.run.draft.instructions}
+				<span class="name" title={title()}>
+					{title()}
 				</span>
 				<StatusChip status={tone()} label={props.run.status} />
 			</div>
@@ -75,7 +120,7 @@ function RunCard(props: { run: AutomationRun; now: number; onError: (message: st
 			</Show>
 			<div class="session-actions">
 				<a class="btn btn-small" href={href("setup")}>
-					Setup
+					Setup transcript
 				</a>
 				<Show when={props.run.workFile}>
 					<a class="btn btn-small" href={href("work")}>
@@ -99,7 +144,77 @@ function RunCard(props: { run: AutomationRun; now: number; onError: (message: st
 						{stopping() ? "Stopping…" : "Stop"}
 					</button>
 				</Show>
+				<Show when={!running(props.run)}>
+					<button type="button" class="btn btn-small btn-primary" disabled={relaunching()} onClick={relaunch}>
+						{relaunching() ? "Relaunching…" : "Relaunch"}
+					</button>
+					<button type="button" class="btn btn-small" onClick={() => setRenaming(true)}>
+						Rename
+					</button>
+					<button
+						type="button"
+						class="btn btn-small btn-danger"
+						disabled={deleting()}
+						onClick={() => setConfirmingDelete(true)}
+					>
+						Delete
+					</button>
+				</Show>
 			</div>
+			<Show when={renaming()}>
+				<Modal
+					title="Rename automation"
+					onDismiss={() => !savingName() && setRenaming(false)}
+					actions={
+						<>
+							<button
+								type="button"
+								class="btn btn-small"
+								disabled={savingName()}
+								onClick={() => setRenaming(false)}
+							>
+								Cancel
+							</button>
+							<button type="button" class="btn btn-small btn-primary" disabled={savingName()} onClick={saveName}>
+								{savingName() ? "Saving…" : "Save"}
+							</button>
+						</>
+					}
+				>
+					<label class="field">
+						Name
+						<input
+							type="text"
+							maxlength={80}
+							value={nameDraft()}
+							onInput={(e) => setNameDraft(e.currentTarget.value)}
+						/>
+					</label>
+				</Modal>
+			</Show>
+			<Show when={confirmingDelete()}>
+				<Modal
+					title="Delete automation"
+					onDismiss={() => !deleting() && setConfirmingDelete(false)}
+					actions={
+						<>
+							<button
+								type="button"
+								class="btn btn-small"
+								disabled={deleting()}
+								onClick={() => setConfirmingDelete(false)}
+							>
+								Cancel
+							</button>
+							<button type="button" class="btn btn-small btn-danger" disabled={deleting()} onClick={remove}>
+								{deleting() ? "Deleting…" : "Delete"}
+							</button>
+						</>
+					}
+				>
+					<p>Delete “{title()}” and its saved history? The work it produced is not changed.</p>
+				</Modal>
+			</Show>
 		</FleetCard>
 	);
 }
@@ -268,23 +383,48 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 	const [error, setError] = createSignal("");
 	const [loading, setLoading] = createSignal(true);
 	const controller = new AbortController();
-	onCleanup(() => controller.abort());
-	onMount(async () => {
+	const transcript = props.record !== "report";
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let stopped = false;
+	onCleanup(() => {
+		stopped = true;
+		controller.abort();
+		clearTimeout(timer);
+	});
+	// A running run keeps appending to its saved transcript. Re-reading on a timer streams
+	// new messages into the same read-only view, so an open transcript needs no reload.
+	async function load(reportOnlyOnce = false) {
 		try {
 			if (props.record === "report") {
 				const { runs } = await api.automations(controller.signal);
+				if (stopped) return;
 				const run = runs.find((item) => item.id === props.runId);
 				if (run?.report === undefined) throw new Error("Final report not found.");
 				setReport(run.report);
 			} else {
 				const { messages } = await api.automationTranscript(props.runId, props.record, controller.signal);
+				if (stopped) return;
 				setEntries(messagesToEntries(messages as MessageLike[]));
 			}
+			if (!stopped) setError("");
 		} catch (err) {
-			if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
+			if (stopped) return;
+			if (entries().length === 0 || reportOnlyOnce) setError(err instanceof Error ? err.message : String(err));
 		} finally {
-			setLoading(false);
+			if (!stopped) setLoading(false);
 		}
+	}
+	onMount(() => {
+		void load(true).finally(() => {
+			if (transcript && !stopped) {
+				const tick = () => {
+					void load().finally(() => {
+						if (!stopped) timer = setTimeout(tick, 1500);
+					});
+				};
+				timer = setTimeout(tick, 1500);
+			}
+		});
 	});
 	const label =
 		props.record === "report"

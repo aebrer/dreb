@@ -14,6 +14,7 @@ const roleSpec = Type.Object(
 type RoleSpec = Static<typeof roleSpec>;
 const draftSchema = Type.Object(
 	{
+		name: Type.String({ minLength: 1, maxLength: 80 }),
 		instructions: Type.String(),
 		cwd: Type.String(),
 		orchestrator: roleSpec,
@@ -114,6 +115,7 @@ export class Automation {
 				if (!active()) return stale();
 				const draft = structuredClone(params);
 				if (!Value.Check(draftSchema, draft)) throw new Error("Invalid automation draft fields");
+				if (!draft.name.trim()) throw new Error("Automation draft name is required");
 				if (!draft.instructions.trim()) throw new Error("Automation instructions are required");
 				if (!isAbsolute(draft.cwd) || !(await stat(draft.cwd)).isDirectory())
 					throw new Error("Automation cwd must be an absolute existing directory");
@@ -123,7 +125,7 @@ export class Automation {
 				}
 				if (!active()) return stale();
 				if (!ctx.hasUI) throw new Error("Approval requires an interactive selection");
-				const text = `Working directory: ${draft.cwd}\nOrchestrator: ${JSON.stringify(draft.orchestrator)}\nGuard: ${JSON.stringify(draft.guard)}\n\nInstructions:\n${draft.instructions}`;
+				const text = `Name: ${draft.name}\nWorking directory: ${draft.cwd}\nOrchestrator: ${JSON.stringify(draft.orchestrator)}\nGuard: ${JSON.stringify(draft.guard)}\n\nInstructions:\n${draft.instructions}`;
 				// Fence the literal draft so Markdown cannot hide or reinterpret any of it.
 				let fenceLength = 3;
 				for (const match of text.matchAll(/`+/g)) fenceLength = Math.max(fenceLength, match[0].length + 1);

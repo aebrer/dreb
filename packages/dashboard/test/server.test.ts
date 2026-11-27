@@ -18,6 +18,7 @@ import {
 	MAX_SSE_BUFFERED_BYTES,
 	parseDeviceCookie,
 } from "../src/server/server.js";
+import type { AutomationRun } from "../src/shared/automation.js";
 import { MAX_SESSION_PREVIEW_CHARACTERS, type RuntimeInfoDto } from "../src/shared/protocol.js";
 import { makeFakeClient } from "./runtime-pool.test.js";
 
@@ -250,7 +251,7 @@ describe("closed automation setup resume", () => {
 	});
 
 	it("requires a genuine saved transcript and keeps duplicate launch protection across runtime keys", async () => {
-		const { base, dir, pool, key, file, clients, spawn, resume, stop } = await fixture();
+		const { base, dir, pool, key, file, clients, spawn, resume } = await fixture();
 		const child = vi.spyOn(pool, "startAutomationChild").mockRejectedValue(new Error("offline fixture"));
 		const approval = {
 			type: "automation_approved",
@@ -260,7 +261,8 @@ describe("closed automation setup resume", () => {
 		clients[0].emit({ type: "message_start" });
 		clients[0].emit(approval);
 		expect(child).toHaveBeenCalledOnce();
-		await stop(key);
+		// The host closes the launched setup automatically; it stays resumable from its transcript.
+		await waitUntil(() => pool.get(key) === undefined);
 		expect((await resume(key)).status).toBe(409);
 		await writeFile(file, JSON.stringify({ type: "session", id: "someone-else" }));
 		expect((await resume(key)).status).toBe(409);
@@ -294,6 +296,51 @@ describe("closed automation setup resume", () => {
 		const { runs } = (await (await fetch(`${base}/api/automations`)).json()) as { runs: { id: string }[] };
 		expect(runs).toHaveLength(1);
 		expect(runs[0].id).toBe(key);
+	});
+
+	it("relaunches, renames, and deletes a finished run over HTTP", async () => {
+		const { base, dir, pool, key, file, clients } = await fixture();
+		const child = vi.spyOn(pool, "startAutomationChild").mockRejectedValue(new Error("offline fixture"));
+		clients[0].emit({
+			type: "automation_approved",
+			setupFile: file,
+			draft: { name: "Job", cwd: dir, instructions: "Go", orchestrator: {}, guard: {} },
+		});
+		const listRuns = async () =>
+			((await (await fetch(`${base}/api/automations`)).json()) as { runs: AutomationRun[] }).runs;
+		await vi.waitFor(async () => expect((await listRuns())[0]).toMatchObject({ status: "failed" }));
+
+		const relaunch = await fetch(`${base}/api/automations/${key}/relaunch`, { method: "POST" });
+		expect(relaunch.status).toBe(201);
+		const attempt = (await relaunch.json()) as AutomationRun;
+		expect(attempt.id).toBe(`${key}-r1`);
+		expect(attempt.setupFile).toBe(file);
+		expect(child).toHaveBeenCalledTimes(2);
+		await vi.waitFor(async () =>
+			expect((await listRuns()).find((run) => run.id === attempt.id)).toMatchObject({ status: "failed" }),
+		);
+
+		const rename = await fetch(`${base}/api/automations/${attempt.id}`, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "Renamed" }),
+		});
+		expect(rename.status).toBe(200);
+		expect(((await rename.json()) as AutomationRun).name).toBe("Renamed");
+		expect(
+			(
+				await fetch(`${base}/api/automations/${attempt.id}`, {
+					method: "PATCH",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ name: "   " }),
+				})
+			).status,
+		).toBe(400);
+		expect((await fetch(`${base}/api/automations/missing/relaunch`, { method: "POST" })).status).toBe(404);
+
+		expect((await fetch(`${base}/api/automations/${attempt.id}`, { method: "DELETE" })).status).toBe(200);
+		expect((await listRuns()).some((run) => run.id === attempt.id)).toBe(false);
+		expect((await fetch(`${base}/api/automations/${attempt.id}`, { method: "DELETE" })).status).toBe(404);
 	});
 });
 
