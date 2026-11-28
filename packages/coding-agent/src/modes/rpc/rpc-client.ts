@@ -436,8 +436,8 @@ export class RpcClient {
 	/**
 	 * Get current session state.
 	 */
-	async getState(): Promise<RpcSessionState> {
-		const response = await this.send({ type: "get_state" });
+	async getState(includeStreamMessage?: boolean): Promise<RpcSessionState> {
+		const response = await this.send({ type: "get_state", includeStreamMessage });
 		return this.getData(response);
 	}
 

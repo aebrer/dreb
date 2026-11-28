@@ -196,7 +196,7 @@ it.each([false, true])("serves Fleet if startup history repair cannot be saved (
 	});
 	const logger = vi.fn();
 	try {
-		const { base } = await startServer({ automationHistoryFile, logger });
+		const { base, app } = await startServer({ automationHistoryFile, logger });
 		expect((await fetch(`${base}/api/fleet/live`)).status).toBe(200);
 		const inventory = (await (await fetch(`${base}/api/automations`)).json()) as {
 			runs: AutomationRun[];
@@ -209,6 +209,7 @@ it.each([false, true])("serves Fleet if startup history repair cannot be saved (
 		// A second boot reads the canonical path, not the archive. Keep that source even if
 		// the first host never gets another chance to save.
 		expect(await readFile(automationHistoryFile, "utf8")).toBe(original);
+		await app.closeDashboard();
 	} finally {
 		repair.mockRestore();
 	}
@@ -220,6 +221,67 @@ it.each([false, true])("serves Fleet if startup history repair cannot be saved (
 		expect(archive).toBeDefined();
 		expect(await readFile(join(dir, archive!), "utf8")).toBe(original);
 	}
+});
+
+it("leaves unreadable history untouched and recovers it on the next healthy boot", async () => {
+	const dir = await createTempProject();
+	const automationHistoryFile = join(dir, "history.json");
+	const run = savedAutomation(dir);
+	const original = JSON.stringify([run]);
+	await writeFile(automationHistoryFile, original);
+	const reader = vi
+		.spyOn(AutomationRuns.prototype as unknown as { readHistory(path: string): string }, "readHistory")
+		.mockImplementationOnce(() => {
+			throw Object.assign(new Error("Temporary read failure"), { code: "EACCES" });
+		});
+	const blocked = await startServer({ automationHistoryFile });
+	reader.mockRestore();
+	expect((await fetch(`${blocked.base}/api/fleet/live`)).status).toBe(200);
+	expect(await (await fetch(`${blocked.base}/api/automations`)).json()).toMatchObject({
+		runs: [],
+		historyIssue: expect.stringContaining("left in place"),
+	});
+	expect((await fetch(`${blocked.base}/api/automations/setup`, { method: "POST" })).status).toBe(503);
+	expect(await readFile(automationHistoryFile, "utf8")).toBe(original);
+	await blocked.app.closeDashboard();
+	const recovered = await startServer({ automationHistoryFile });
+	expect(await (await fetch(`${recovered.base}/api/automations`)).json()).toMatchObject({
+		runs: [expect.objectContaining({ id: run.id })],
+	});
+	await recovered.app.closeDashboard();
+});
+
+it("prevents a competing Dashboard from loading or writing the history while another owns it", async () => {
+	const dir = await createTempProject();
+	const automationHistoryFile = join(dir, "history.json");
+	const first = new AutomationRuns({
+		historyFile: automationHistoryFile,
+		start: async () => ({
+			file: join(dir, "work.jsonl"),
+			turn: () => new Promise<string>(() => {}),
+			close: async () => {},
+		}),
+	});
+	const { draft, setupFile } = savedAutomation(dir);
+	first.launch("local", "live", setupFile, draft);
+	await vi.waitFor(() => expect(first.get("local", "live")?.workFile).toBeDefined());
+	const original = await readFile(automationHistoryFile, "utf8");
+	const duplicate = await startServer({ automationHistoryFile });
+	expect((await fetch(`${duplicate.base}/api/fleet/live`)).status).toBe(200);
+	expect(await (await fetch(`${duplicate.base}/api/automations`)).json()).toMatchObject({
+		runs: [],
+		historyIssue: expect.stringContaining("Another Dashboard"),
+	});
+	expect((await fetch(`${duplicate.base}/api/automations/setup`, { method: "POST" })).status).toBe(503);
+	expect(await readFile(automationHistoryFile, "utf8")).toBe(original);
+	expect(first.get("local", "live")?.status).toBe("working");
+	await duplicate.app.closeDashboard();
+	await first.close();
+	const restarted = await startServer({ automationHistoryFile });
+	expect(await (await fetch(`${restarted.base}/api/automations`)).json()).toMatchObject({
+		runs: [expect.objectContaining({ id: "live", status: "interrupted" })],
+	});
+	await restarted.app.closeDashboard();
 });
 
 it("resumes a durable setup after Dashboard restart and deduplicates later opens", async () => {
@@ -282,6 +344,41 @@ it("resumes a durable setup after Dashboard restart and deduplicates later opens
 		expect((await fetch(`${base}/api/runtimes/${reopened.key}/${path}`, { method: "POST" })).status).toBe(409);
 	}
 	await pool.stopAll();
+});
+
+it("projects saved automation screenshots and scopes cached image bytes to the run owner and record", async () => {
+	const dir = await createTempProject();
+	const run = savedAutomation(dir);
+	const automationHistoryFile = join(dir, "history.json");
+	await writeFile(automationHistoryFile, JSON.stringify([run]));
+	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+	const message = {
+		type: "message",
+		message: { role: "user", content: [{ type: "image", data: png, mimeType: "image/png" }] },
+	};
+	await writeFile(run.setupFile, `${JSON.stringify(message)}\n`);
+	const auth = new DashboardAuth();
+	const { base, clients } = await startServer({ automationHistoryFile, auth });
+	const transcript = `${base}/api/automations/${run.id}/transcripts/setup`;
+	const result = await fetch(transcript);
+	expect(result.status).toBe(200);
+	const body = await result.text();
+	expect(body).not.toContain(png);
+	const [image] = JSON.parse(body).messages[0].content;
+	expect(image).toMatchObject({ type: "image_reference", mimeType: "image/png" });
+	const original = `${transcript}/images/${image.id}/original`;
+	const ownerImage = await fetch(original);
+	expect(ownerImage.status).toBe(200);
+	expect(Buffer.from(await ownerImage.arrayBuffer())).toEqual(Buffer.from(png, "base64"));
+	expect((await fetch(original.replace("/setup/", "/guard-0/"))).status).toBe(404);
+	vi.spyOn(auth, "authenticate").mockResolvedValue({
+		allowed: true,
+		mode: "remote",
+		identity: { loginName: "other@example.test" } as TailscaleIdentity,
+	} as Awaited<ReturnType<DashboardAuth["authenticate"]>>);
+	expect((await fetch(transcript)).status).toBe(404);
+	expect((await fetch(original)).status).toBe(404);
+	expect(clients).toHaveLength(0);
 });
 
 describe("closed automation setup resume", () => {
@@ -429,6 +526,52 @@ describe("closed automation setup resume", () => {
 		expect(second?.draft.instructions).toBe("Revised terms");
 	});
 
+	it("confirms Stop when saving the final report fails and preserves the last accepted findings", async () => {
+		const { base, dir, pool, key, file, clients } = await fixture();
+		const close = vi.fn(async () => {});
+		const pending = Promise.withResolvers<string>();
+		const work = vi.fn().mockResolvedValueOnce("I wrote the index.").mockReturnValue(pending.promise);
+		const child = vi
+			.spyOn(pool, "startAutomationChild")
+			.mockResolvedValueOnce({
+				file: join(dir, "work.jsonl"),
+				turn: work,
+				streamMessage: async () => undefined,
+				close,
+			})
+			.mockResolvedValueOnce({
+				file: join(dir, "guard.jsonl"),
+				turn: async () => "Verify the index.\nCONTINUE",
+				streamMessage: async () => undefined,
+				close: async () => {},
+			});
+		clients[0].emit({
+			type: "automation_approved",
+			setupFile: file,
+			draft: { name: "Job", cwd: dir, instructions: "Go", orchestrator: {}, guard: {} },
+		});
+		await vi.waitFor(() => expect(work).toHaveBeenCalledTimes(2));
+		const save = vi
+			.spyOn(AutomationRuns.prototype as unknown as { save(): void }, "save")
+			.mockImplementationOnce(() => {
+				throw new Error("No space left");
+			});
+		try {
+			const result = await fetch(`${base}/api/automations/${key}/stop`, { method: "POST" });
+			expect(result.status).toBe(200);
+			expect(await result.json()).toMatchObject({ ok: true, warning: expect.stringContaining("Work stopped") });
+			expect(save).toHaveBeenCalledOnce();
+		} finally {
+			save.mockRestore();
+			pending.resolve("Too late");
+		}
+		const { runs } = (await (await fetch(`${base}/api/automations`)).json()) as { runs: AutomationRun[] };
+		expect(runs[0]).toMatchObject({ status: "stopped", report: expect.stringContaining("Verify the index.") });
+		expect(runs[0].report).toContain("Stopped by user.");
+		expect(close).toHaveBeenCalledOnce();
+		expect(child).toHaveBeenCalledTimes(2);
+	});
+
 	it("relaunches, renames, and deletes a finished run over HTTP", async () => {
 		const { base, dir, pool, key, file, clients } = await fixture();
 		const child = vi.spyOn(pool, "startAutomationChild").mockRejectedValue(new Error("offline fixture"));
@@ -444,7 +587,7 @@ describe("closed automation setup resume", () => {
 		const relaunch = await fetch(`${base}/api/automations/${key}/relaunch`, { method: "POST" });
 		expect(relaunch.status).toBe(201);
 		const attempt = (await relaunch.json()) as AutomationRun;
-		expect(attempt.id).toBe(`${key}-r1`);
+		expect(attempt.id).not.toBe(key);
 		expect(attempt.setupFile).toBe(file);
 		expect(child).toHaveBeenCalledTimes(2);
 		await vi.waitFor(async () =>

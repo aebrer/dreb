@@ -20,6 +20,10 @@ const feedback = "The inventory is missing the file count.";
 const finalInventory = "Inventory: manifest.txt. File count: 1.";
 const conclusion = "Inventory and count verified; the job is complete.";
 const stop = `## Inventory review\n\n${conclusion}`;
+const screenshot = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+	"base64",
+);
 // The owner's "change the launch params" journey (manual review note 1): after a run starts, the
 // closed setup is resumed, the job is revised, and the revised draft launches a second run.
 const revision = "Count the lines in each file as well.";
@@ -48,6 +52,7 @@ function scriptedModel(draft: AutomationDraft) {
 	const calls = { setup: 0, worker: 0, guard: 0 };
 	const errors: Error[] = [];
 	const finalTurn = Promise.withResolvers<void>();
+	const finalReview = Promise.withResolvers<void>();
 	async function reply(body: ChatRequest) {
 		expect(body).toMatchObject({ model, stream: true });
 		const names = body.tools.map(({ function: fn }) => fn.name).sort();
@@ -85,7 +90,7 @@ function scriptedModel(draft: AutomationDraft) {
 					// A replacement worker with just the guard's findings would not have its first answer.
 					expect(JSON.stringify(body.messages.filter(({ role }) => role === "assistant"))).toContain(inventory);
 					expect(content).toContain(feedback);
-					await finalTurn.promise;
+					expect(content).toContain("Task guard feedback (not a user reply):");
 					return { content: finalInventory };
 			}
 		} else {
@@ -94,6 +99,9 @@ function scriptedModel(draft: AutomationDraft) {
 				case 1:
 					expect(content).toContain(instructions);
 					expect(content).toContain(inventory);
+					expect(JSON.stringify(body.messages.filter(({ role }) => role === "system"))).toContain(
+						"If a check requires you to inspect a file or the work transcript, inspect it yourself.",
+					);
 					return toolCall("guard-read", "read", { path: "manifest.txt" });
 				case 2:
 					expect(last).toMatchObject({ role: "tool", tool_call_id: "guard-read" });
@@ -117,14 +125,28 @@ function scriptedModel(draft: AutomationDraft) {
 			expect([req.method, req.url]).toEqual(["POST", "/v1/chat/completions"]);
 			let text = "";
 			for await (const chunk of req) text += chunk;
-			const response = stream(await reply(JSON.parse(text)));
-			res.writeHead(200, { "content-type": "text/event-stream" }).end(response);
+			const delta = await reply(JSON.parse(text));
+			const response = stream(delta);
+			const gate =
+				"content" in delta &&
+				(delta.content === finalInventory
+					? finalTurn.promise
+					: delta.content === `${stop}\n\nSTOP`
+						? finalReview.promise
+						: undefined);
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			if (gate) {
+				const boundary = response.indexOf("\n\n") + 2;
+				res.write(response.slice(0, boundary));
+				await gate;
+				res.end(response.slice(boundary));
+			} else res.end(response);
 		} catch (err) {
 			errors.push(err instanceof Error ? err : new Error(String(err)));
 			res.writeHead(400).end("Unexpected offline fixture request");
 		}
 	});
-	return { server, calls, errors, finishWorker: finalTurn.resolve };
+	return { server, calls, errors, finishWorker: finalTurn.resolve, finishGuard: finalReview.resolve };
 }
 
 async function listen(server: Server) {
@@ -190,7 +212,7 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 					api: "openai-completions",
 					baseUrl: `${origin}/v1`,
 					apiKey: "unused-test-key",
-					models: [{ id: model, name: model }],
+					models: [{ id: model, name: model, input: ["text", "image"] }],
 				},
 				[titleProvider]: {
 					api: "openai-completions",
@@ -251,6 +273,11 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	await page.goto(`${base}/#/automate`, { waitUntil: "domcontentloaded" });
 	await page.getByRole("button", { name: "New automation", exact: true }).click();
 	await composer.fill(request);
+	await page.locator('input[type="file"][accept="image/*"]').setInputFiles({
+		name: "inventory.png",
+		mimeType: "image/png",
+		buffer: screenshot,
+	});
 	await page.getByRole("button", { name: "send ↵", exact: true }).click();
 	const proposal = (text: string) => page.getByRole("region", { name: "Automation draft" }).filter({ hasText: text });
 	const first = proposal(request);
@@ -271,10 +298,10 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 
 	// Host closes setup on launch. The user can still read what they asked for and leave via Automate.
 	await composer.waitFor({ state: "hidden" });
-	await page.getByText(request, { exact: true }).waitFor();
+	await main.locator(".entry.user .entry-body").filter({ hasText: request }).waitFor();
 	await back.click();
 	const past = page.getByRole("region", { name: "Past automations" });
-	const failedCard = past.getByRole("article").filter({ hasText: /failed/i });
+	const failedCard = past.getByRole("row").filter({ hasText: /failed/i });
 	await failedCard.getByRole("link", { name: "Final report" }).click();
 	await main.getByText(/no final assistant text/i).waitFor();
 	await main.getByText(inventory, { exact: false }).waitFor();
@@ -290,20 +317,28 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 	expect([2, 3]).toContain(setupCalls);
 	expect(spawnClient).toHaveBeenCalledTimes(clientsBeforeApproval + 2); // worker, failed guard
 
-	// Keep the second worker's final answer pending until its prior answer is visible in the open transcript.
+	// The provider sends text first and cannot finish until the browser has read it.
+	const active = page.getByRole("region", { name: "Running automations" });
 	try {
+		await failedCard.getByText("Details", { exact: true }).click();
 		await failedCard.getByRole("button", { name: "Relaunch", exact: true }).click();
-		const active = page.getByRole("region", { name: "Running automations" });
 		await active.getByRole("link", { name: "Orchestrator", exact: true }).click();
 		await main.getByText(inventory, { exact: true }).waitFor();
-		expect(await main.getByText(finalInventory, { exact: true }).count()).toBe(0);
+		await main.getByText(finalInventory, { exact: true }).waitFor();
+		expect(stub.calls.guard).toBe(3);
+		stub.finishWorker();
+		await back.click();
+		await active.getByRole("link", { name: "Guard 2", exact: true }).click();
+		await main.getByText(conclusion, { exact: true }).waitFor();
+		expect((await list()).runs.find(({ id }) => id !== failed.id)?.status).toBe("reviewing");
 	} finally {
 		stub.finishWorker();
+		stub.finishGuard();
 	}
-	await main.getByText(finalInventory, { exact: true }).waitFor(); // no reload or navigation
 	await back.click();
-	const completedCard = past.getByRole("article").filter({ hasText: /stopped/i });
+	const completedCard = past.getByRole("row").filter({ hasText: /stopped/i });
 	await completedCard.waitFor();
+	await completedCard.getByText("Details", { exact: true }).click();
 	await completedCard.getByText("Decision history", { exact: true }).click();
 	const accepted = completedCard.locator(".automation-decisions li");
 	expect(await accepted.count()).toBe(2);
@@ -338,12 +373,27 @@ it("approves, reads and relaunches an automation through the mobile dashboard an
 
 	// Open each saved record from the second card, then deep-reload it with every RPC child gone.
 	const openSaved = async (label: string) => {
+		if (
+			label !== "Final report" &&
+			!(await completedCard.locator("details.automation-history-details[open]").count())
+		) {
+			await completedCard.getByText("Details", { exact: true }).click();
+		}
 		await completedCard.getByRole("link", { name: label, exact: true }).click();
 		await back.waitFor();
 		await page.reload({ waitUntil: "domcontentloaded" });
 	};
 	await openSaved("Setup transcript");
-	await main.getByText(request, { exact: true }).waitFor();
+	await main.locator(".entry.user .entry-body").filter({ hasText: request }).waitFor();
+	const preview = main.getByRole("img", { name: "Uploaded image", exact: true });
+	await expect
+		.poll(() => preview.evaluate((image) => (image as unknown as { naturalWidth: number }).naturalWidth))
+		.toBe(1);
+	const previewUrl = (await preview.getAttribute("src"))!;
+	expect(previewUrl).toContain(`/api/automations/${run.id}/transcripts/setup/images/`);
+	const original = await page.request.get(`${base}${previewUrl.replace(/\/preview$/, "/original")}`);
+	expect(original.ok()).toBe(true);
+	expect(await original.body()).toEqual(screenshot);
 	expect(await composer.count()).toBe(0);
 	await back.click();
 	await openSaved("Orchestrator");
@@ -495,19 +545,21 @@ it("resumes a launched setup, revises the job, and launches the revised draft (o
 	const back = page.getByRole("link", { name: /^← Automate$/i });
 	await back.click();
 	const past = page.getByRole("region", { name: "Past automations" });
-	let card = past.getByRole("article").filter({ hasText: firstDraft.name });
+	let card = past.getByRole("row").filter({ hasText: firstDraft.name });
 	await card.getByRole("link", { name: "Final report" }).click();
 	await page
 		.getByRole("main")
 		.getByText(/no final assistant text/i)
 		.waitFor();
 	await back.click();
+	await card.getByText("Details", { exact: true }).click();
 	await card.getByRole("button", { name: "Rename", exact: true }).click();
 	await page.getByRole("textbox", { name: "Name", exact: true }).fill("First job renamed");
 	await page.getByRole("button", { name: "Save", exact: true }).click();
 	await expect.poll(async () => (await list()).runs[0].name).toBe("First job renamed");
 	await page.reload({ waitUntil: "domcontentloaded" });
-	card = past.getByRole("article").filter({ hasText: "First job renamed" });
+	card = past.getByRole("row").filter({ hasText: "First job renamed" });
+	await card.getByText("Details", { exact: true }).click();
 	await card.getByRole("button", { name: "Resume setup", exact: true }).click();
 	await composer.waitFor({ state: "visible" });
 	await page.getByText(request, { exact: true }).waitFor();

@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
-import type { AssistantMessageEvent, ImageContent, Model, Transport } from "@dreb/ai";
+import type { AssistantMessage, AssistantMessageEvent, ImageContent, Model, Transport } from "@dreb/ai";
 import type { AgentSessionEvent, ConfigureAutomationOptions, SessionStats } from "../../core/agent-session.js";
 import type { AutomationDraft } from "../../core/automation.js";
 import type { BashResult } from "../../core/bash-executor.js";
@@ -35,7 +35,7 @@ export type RpcCommand =
 	| { id?: string; type: "dream"; args?: string }
 
 	// State
-	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_state"; includeStreamMessage?: boolean }
 	/**
 	 * Atomically captures dashboard-visible parent-session state. The RPC mode
 	 * writes a matching dashboard_snapshot_barrier immediately before its response;
@@ -273,6 +273,8 @@ export type RpcEvent =
 	| RpcDashboardSnapshotBarrierEvent;
 
 export interface RpcSessionState {
+	/** Populated only when get_state requests the current in-flight assistant message. */
+	streamMessage?: Pick<AssistantMessage, "role" | "model" | "timestamp" | "content">;
 	model?: Model<any>;
 	scopedModels: RpcScopedModel[];
 	/** Current in-memory task list, replaced atomically by the tasks_update tool. */

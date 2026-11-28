@@ -262,6 +262,8 @@ Get current session state.
 {"type": "get_state"}
 ```
 
+Set `"includeStreamMessage": true` to include `streamMessage` when an assistant reply is in flight. This is a snapshot of its text and thinking, not a saved message or a settled turn result. It is omitted by default and when there is no in-flight reply.
+
 Response:
 ```json
 {

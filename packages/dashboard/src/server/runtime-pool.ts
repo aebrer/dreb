@@ -399,6 +399,7 @@ export class RuntimePool {
 			if (!file) throw new Error("Automation requires a saved session");
 			return {
 				file,
+				streamMessage: async () => (await client.getState(true)).streamMessage,
 				turn: (message: string, feedback?: boolean) => client.automationTurn(message, feedback),
 				close: () => client.stop(),
 			};

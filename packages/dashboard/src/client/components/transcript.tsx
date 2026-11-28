@@ -21,7 +21,7 @@ import {
 	Switch,
 	untrack,
 } from "solid-js";
-import { dashboardImageUrl } from "../api.js";
+import { automationImageUrl, dashboardImageUrl } from "../api.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import { expandThinking, imageDisplayMode, isToolAutoOpen } from "../state/preferences.js";
 import type {
@@ -353,10 +353,9 @@ const RENDERABLE_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/g
 const IMAGE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const ORIGINAL_CONFIRM_BYTES = 1024 * 1024;
 
-export interface TranscriptImageScope {
-	runtimeKey: string;
-	agentId?: string;
-}
+export type TranscriptImageScope =
+	| { runtimeKey: string; agentId?: string }
+	| { automation: { id: string; ref: string } };
 
 function formatImageSize(bytes: number): string {
 	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -392,7 +391,9 @@ function TranscriptImageView(props: {
 	const [error, setError] = createSignal<string>();
 	const [lightbox, setLightbox] = createSignal(false);
 	const url = (variant: "preview" | "original") =>
-		dashboardImageUrl(props.scope.runtimeKey, props.image.id, variant, props.scope.agentId);
+		"automation" in props.scope
+			? automationImageUrl(props.scope.automation.id, props.scope.automation.ref, props.image.id, variant)
+			: dashboardImageUrl(props.scope.runtimeKey, props.image.id, variant, props.scope.agentId);
 	const assign = (variant: "preview" | "original") => {
 		const next = url(variant);
 		if (!next) {

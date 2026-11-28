@@ -2194,7 +2194,18 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "get_state": {
-				return success(id, "get_state", getStateForRpc(session, modelFallbackMessage));
+				const state = getStateForRpc(session, modelFallbackMessage);
+				const partial = command.includeStreamMessage === true ? session.agent.state.streamMessage : null;
+				if (partial?.role === "assistant") {
+					const { role, model, timestamp } = partial;
+					state.streamMessage = {
+						role,
+						model,
+						timestamp,
+						content: partial.content.filter((block) => block.type === "text" || block.type === "thinking"),
+					};
+				}
+				return success(id, "get_state", state);
 			}
 
 			case "get_dashboard_snapshot": {

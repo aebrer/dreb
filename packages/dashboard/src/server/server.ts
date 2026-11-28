@@ -784,15 +784,18 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		else res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
 	};
 	app.get("/api/automations", (req, res) =>
-		res.json({ runs: runs.list(owner(req)), setups: pool.automationSetups(owner(req)) }),
+		res.json({
+			runs: runs.list(owner(req)),
+			setups: pool.automationSetups(owner(req)),
+			historyIssue: runs.historyIssue,
+		}),
 	);
 	app.post("/api/automations/:id/stop", (req, res) => {
-		if (!runs.get(owner(req), req.params.id)) {
-			res.status(404).json({ error: "Unknown automation" });
-			return;
+		try {
+			res.json(runs.stop(owner(req), req.params.id));
+		} catch (err) {
+			automationError(res, err);
 		}
-		runs.stop(owner(req), req.params.id);
-		res.json({ ok: true });
 	});
 	// A finished run keeps its approved draft, so a retry needs no new setup conversation.
 	app.post("/api/automations/:id/relaunch", (req, res) => {
@@ -818,9 +821,8 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			automationError(res, err);
 		}
 	});
-	app.get("/api/automations/:id/transcripts/:ref", (req, res) => {
-		const run = runs.get(owner(req), req.params.id);
-		const ref = req.params.ref;
+	function automationTranscript(ownerId: string, id: string, ref: string) {
+		const run = runs.get(ownerId, id);
 		const file =
 			ref === "setup"
 				? run?.setupFile
@@ -829,16 +831,43 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 					: /^guard-(0|[1-9]\d*)$/.test(ref)
 						? run?.guardFiles[Number(ref.slice(6))]
 						: undefined;
-		if (!file) {
+		return file ? { file, running: run?.status === "working" || run?.status === "reviewing" } : undefined;
+	}
+
+	const automationImageScope = (id: string, ref: string, file: string): DashboardImageScope => ({
+		automation: { id, ref, file },
+	});
+
+	app.get("/api/automations/:id/transcripts/:ref", async (req, res) => {
+		const ownerId = owner(req);
+		const { id, ref } = req.params;
+		const source = automationTranscript(ownerId, id, ref);
+		if (!source) {
 			res.status(404).json({ error: "Unknown automation transcript" });
 			return;
 		}
 		try {
-			// `running` lets the read-only viewer stop polling once the transcript can no longer
-			// grow; a terminal run needs no timer and no repeated full-file reads.
+			const { file, running } = source;
+			const streamMessage = running && ref !== "setup" ? await runs.streamMessage(ownerId, id, file) : undefined;
+			let messages: unknown[];
+			try {
+				messages = readSubagentMessages({ sessionFile: file });
+			} catch (err) {
+				// A new unattended session may not flush its log until its first answer completes.
+				if (!running || ref === "setup" || !(err instanceof SubagentSessionLogNotFoundError)) throw err;
+				messages = [];
+			}
+			// If this reply finished during the snapshot RPC, prefer its saved version.
+			const saved =
+				streamMessage &&
+				messages.some((message) => {
+					const entry = message as { role?: string; timestamp?: number } | null;
+					return entry?.role === "assistant" && entry.timestamp === streamMessage.timestamp;
+				});
 			res.json({
-				messages: readSubagentMessages({ sessionFile: file }),
-				running: run?.status === "working" || run?.status === "reviewing",
+				messages: images.project(messages, automationImageScope(id, ref, file)),
+				running,
+				streamMessage: saved ? undefined : streamMessage,
 			});
 		} catch (err) {
 			handleMemoryError(res, err);
@@ -934,6 +963,10 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	}
 
 	app.post("/api/automations/setup", async (req, res) => {
+		if (runs.historyIssue) {
+			res.status(503).json({ error: runs.historyIssue });
+			return;
+		}
 		try {
 			const configured =
 				typeof options.automationSetupDir === "function"
@@ -1139,6 +1172,18 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			}
 		}
 	};
+
+	app.get("/api/automations/:runId/transcripts/:ref/images/:id/:variant", (req, res) => {
+		const { runId, ref, variant } = req.params;
+		const source = automationTranscript(owner(req), runId, ref);
+		if (!source || (variant !== "preview" && variant !== "original")) {
+			res.status(404).json({ error: "Unknown automation transcript image" });
+			return;
+		}
+		void sendImage(req, res, automationImageScope(runId, ref, source.file), variant, async () =>
+			readSubagentMessages({ sessionFile: source.file }),
+		);
+	});
 
 	app.get("/api/runtimes/:key/images/:id/:variant", (req, res) => {
 		const key = String(req.params.key);

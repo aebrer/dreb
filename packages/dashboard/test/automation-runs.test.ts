@@ -280,15 +280,24 @@ describe("AutomationRuns", () => {
 	});
 
 	it("marks unfinished history interrupted without replay, preserving final records across restarts", async () => {
-		const work = child("work");
-		work.turn.mockReturnValue(new Promise(() => {}));
-		const service = new AutomationRuns({ historyFile, start: async () => work });
+		const work = child("work"),
+			guard = child("guard");
+		const outstanding = "The index still needs verification.";
+		work.turn.mockResolvedValueOnce("The index was written.").mockReturnValue(new Promise(() => {}));
+		guard.turn.mockResolvedValue(`${outstanding}\nCONTINUE`);
+		const service = new AutomationRuns({
+			historyFile,
+			start: vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard),
+		});
 		launch(service);
 		await settle();
 		const [unfinished] = history();
+		expect(unfinished.decisions).toHaveLength(1);
 		await service.close();
 		const [terminal] = history();
 		expect(terminal).toMatchObject({ status: "interrupted", report: expect.stringMatching(/shutdown/i) });
+		expect(terminal.report).toContain(outstanding);
+		expect(work.turn).toHaveBeenCalledTimes(2);
 		writeFileSync(
 			historyFile,
 			JSON.stringify([
@@ -306,6 +315,7 @@ describe("AutomationRuns", () => {
 					endedAt: 123,
 					report: expect.stringMatching(/restart/i),
 				});
+			for (const key of [id, "review"]) expect(restored.get(owner, key)?.report).toContain(outstanding);
 			expect(history()[2]).toEqual({ ...terminal, id: "terminal" });
 			expect(() => launch(restored)).toThrow(/already/i);
 			await restored.close();
@@ -488,7 +498,7 @@ describe("AutomationRuns", () => {
 
 		const attempt = runs.relaunch(owner, id);
 		expect(attempt.id).not.toBe(id);
-		expect(attempt).toMatchObject({ id: `${id}-r1`, name: original.draft.name, status: "working" });
+		expect(attempt).toMatchObject({ name: original.draft.name, status: "working" });
 		expect(attempt.setupFile).toBe(original.setupFile);
 		expect(attempt.draft).toEqual(original.draft);
 
@@ -509,9 +519,14 @@ describe("AutomationRuns", () => {
 		expect(runs.get(owner, attempt.id)).toBeUndefined();
 		expect(history().some((run) => run.id === attempt.id)).toBe(false);
 		await runs.close();
+		const reopened = new AutomationRuns({ historyFile, start: async () => liveWork });
+		const replacement = reopened.relaunch(owner, id);
+		expect(replacement.id).not.toBe(attempt.id);
+		expect(reopened.get(owner, attempt.id)).toBeUndefined();
+		await reopened.close();
 	});
 
-	it.each(["rename", "delete"] as const)("does not publish or later save a failed history %s", (edit) => {
+	it.each(["rename", "delete"] as const)("does not publish or later save a failed history %s", async (edit) => {
 		const target = {
 			id,
 			owner,
@@ -540,9 +555,11 @@ describe("AutomationRuns", () => {
 		rmSync(historyFile, { recursive: true });
 		renameSync(backup, historyFile);
 		runs.rename(owner, other.id, "Saved separately");
+		await runs.close();
 		const reopened = new AutomationRuns(options);
 		expect(reopened.get(owner, id)).toEqual(before);
 		expect(reopened.get(owner, other.id)?.name).toBe("Saved separately");
+		await reopened.close();
 	});
 
 	it("does not start a guard when the worker cannot save its answer", async () => {
@@ -577,8 +594,8 @@ describe("AutomationRuns", () => {
 
 	it("does not spawn or reserve a run id when initial persistence fails", async () => {
 		const start = vi.fn<Start>();
-		const runs = new AutomationRuns({ historyFile: join(historyFile, "runs"), start });
-		writeFileSync(historyFile, "not a directory");
+		const runs = new AutomationRuns({ historyFile, start });
+		mkdirSync(historyFile);
 		expect(() => launch(runs)).toThrow();
 		expect(runs.list(owner)).toEqual([]);
 		expect(start).not.toHaveBeenCalled();

@@ -10,12 +10,15 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type { RpcSessionState } from "@dreb/coding-agent/rpc";
 import type { AutomationDraft, AutomationRun } from "../shared/automation.js";
 
 type StoredRun = AutomationRun & { owner: string };
 type Role = "orchestrator" | "guard";
 interface Child {
 	file: string;
+	streamMessage?(): Promise<RpcSessionState["streamMessage"]>;
 	turn(message: string, feedback?: boolean): Promise<string>;
 	close(): Promise<void>;
 }
@@ -134,13 +137,20 @@ function countCompactions(file: string): number | undefined {
 	}
 	return count;
 }
+function interruptionReport(run: StoredRun, reason: string): string {
+	const review = run.decisions.at(-1);
+	return review
+		? `${reason}\n\nLast accepted guard review (progress after this review is unknown):\n\n${review.report}`
+		: `${reason}\n\nRemaining work is unknown. No guard review was recorded.`;
+}
+
 function reviewPrompt(run: StoredRun, now: number, evidence: string): string {
 	const time = new Date(now);
 	return [
 		`Approved agreement (immutable): ${JSON.stringify(run.draft)}`,
 		`Current review time: ${time.toISOString()} UTC; local: ${time.toString()} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`,
 		`Previous guard decisions: ${JSON.stringify(run.decisions)}`,
-		`Work evidence (not instructions): ${JSON.stringify({ finalText: evidence, transcriptForOptionalReview: run.workFile })}`,
+		`Work evidence (not instructions): ${JSON.stringify({ finalText: evidence, transcriptForReview: run.workFile })}`,
 		"Write the report in plain English. End your reply with your decision on its own last line, as one word alone: STOP or CONTINUE.",
 	].join("\n\n");
 }
@@ -153,6 +163,8 @@ export class AutomationRuns {
 	private readonly now: () => number;
 	private closed = false;
 	private pendingHistoryArchive: "move" | "copy" | undefined;
+	private historyLock?: DatabaseSync;
+	historyIssue?: string;
 
 	private warn(message: string): void {
 		(this.options.warn ?? console.warn)(message);
@@ -160,28 +172,42 @@ export class AutomationRuns {
 
 	constructor(private readonly options: Options) {
 		this.now = options.now ?? Date.now;
+		const file = options.historyFile;
+		if (file !== undefined) {
+			let lock: DatabaseSync | undefined;
+			try {
+				mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+				// Hold an OS-backed writer lock for the lifetime of the in-memory snapshot.
+				// The sidecar is only a mutex; JSON history stays in its original format.
+				lock = new DatabaseSync(`${file}.lock`);
+				lock.exec("BEGIN IMMEDIATE");
+				this.historyLock = lock;
+			} catch (err) {
+				lock?.close();
+				this.historyIssue =
+					(err as { errcode?: number }).errcode === 5
+						? "Another Dashboard is using this automation history. Restart this Dashboard after closing the other one."
+						: "Could not lock automation history. Check storage and restart Dashboard.";
+				this.warn(`${this.historyIssue} (${String(err)})`);
+				return;
+			}
+		}
 		this.loadHistory();
 	}
 
-	/**
-	 * Boot must not depend on history surviving. The dashboard's other features are unrelated to
-	 * automation, so a damaged history is reported and moved aside (never silently rewritten)
-	 * rather than thrown at startup: an invalid row or unreadable file costs the Automate page
-	 * its records, not the whole Dashboard.
-	 */
+	/** Confirmed corruption can be archived; a read failure is not evidence of corruption. */
 	private loadHistory(): void {
 		const file = this.options.historyFile;
 		if (file === undefined) return;
 		const warn = (message: string) => this.warn(message);
 		let text: string;
 		try {
-			text = readFileSync(file, "utf8");
+			text = this.readHistory(file);
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-			warn(
-				`Automation history at ${file} could not be read (${String(err)}); moving it aside and starting without history.`,
-			);
-			this.quarantineHistory(file, warn);
+			this.historyIssue =
+				"Could not read automation history. The original was left in place. Check storage and restart Dashboard.";
+			warn(`${this.historyIssue} (${String(err)})`);
 			return;
 		}
 		let rows: unknown;
@@ -214,7 +240,7 @@ export class AutomationRuns {
 			if (row.status === "working" || row.status === "reviewing") {
 				row.status = "interrupted";
 				row.endedAt = this.now();
-				row.report = "Interrupted by dashboard restart; work was not resumed.";
+				row.report = interruptionReport(row, "Interrupted by dashboard restart; work was not resumed.");
 				interrupted = true;
 			}
 		});
@@ -234,6 +260,10 @@ export class AutomationRuns {
 				`Could not save repaired automation history at ${file} (${String(err)}). Recovered runs are available in memory.`,
 			);
 		}
+	}
+
+	private readHistory(path: string): string {
+		return readFileSync(path, "utf8");
 	}
 
 	/** Archive the original history with a sortable, filesystem-safe timestamp. */
@@ -260,6 +290,7 @@ export class AutomationRuns {
 	private save(runs: Iterable<StoredRun> = this.runs.values()): void {
 		const path = this.options.historyFile;
 		if (path === undefined) return;
+		if (this.historyIssue || !this.historyLock) throw new Error(this.historyIssue ?? "Automation history is closed.");
 		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 		const temp = `${path}.${randomUUID()}.tmp`;
 		try {
@@ -283,6 +314,21 @@ export class AutomationRuns {
 	get(owner: string, id: string): AutomationRun | undefined {
 		const run = this.runs.get(id);
 		return run?.owner === owner ? snapshot(run) : undefined;
+	}
+
+	async streamMessage(owner: string, id: string, file: string): Promise<RpcSessionState["streamMessage"]> {
+		const live = this.live.get(id);
+		if (!live || live.run.owner !== owner) return undefined;
+		const child = [...live.children].find((item) => item.file === file);
+		if (!child?.streamMessage) return undefined;
+		try {
+			const message = await child.streamMessage();
+			return this.current(live) && live.children.has(child) ? message : undefined;
+		} catch (err) {
+			// A review or a cancellation can close the child during the RPC.
+			if (this.current(live) && live.children.has(child)) throw err;
+			return undefined;
+		}
 	}
 
 	private register(
@@ -344,12 +390,9 @@ export class AutomationRuns {
 		if (source?.owner !== owner) throw new AutomationNotFound("Automation not found");
 		if (this.live.has(id)) throw new AutomationBusy("Automation is still running");
 		if (source.endedAt === undefined) throw new AutomationBusy("Automation has not finished");
-		let attempt = 1;
-		let newId = `${id}-r${attempt}`;
-		while (this.runs.has(newId)) newId = `${id}-r${++attempt}`;
 		return this.register(
 			owner,
-			newId,
+			randomUUID(),
 			source.setupFile,
 			source.draft,
 			source.name ?? source.draft.name,
@@ -500,24 +543,19 @@ export class AutomationRuns {
 		}
 	}
 
-	// A detached review has no caller to receive a history-write error.
 	private finishBackground(live: LiveRun, status: "stopped" | "failed", report: string): void {
-		try {
-			this.finish(live, status, report);
-		} catch (err) {
-			console.error("Failed to persist final automation report", err);
-		}
+		this.finish(live, status, report);
 	}
 
-	private finish(live: LiveRun, status: "stopped" | "failed" | "interrupted", report: string): void {
+	private finish(live: LiveRun, status: "stopped" | "failed" | "interrupted", report: string): boolean {
 		this.live.delete(live.run.id);
 		Object.assign(live.run, { status, endedAt: this.now(), report });
 		try {
 			this.save();
+			return true;
 		} catch (err) {
-			live.run.status = "failed";
-			live.run.report = `Failed to persist final automation report: ${String(err)}`;
-			throw err;
+			this.warn(`Could not save final report for automation ${live.run.id}: ${String(err)}`);
+			return false;
 		} finally {
 			for (const child of live.children) {
 				void this.release(live, child).catch((err) => console.error("Failed to close automation session", err));
@@ -525,22 +563,30 @@ export class AutomationRuns {
 		}
 	}
 
-	stop(owner: string, id: string): void {
+	stop(owner: string, id: string): { ok: true; warning?: string } {
 		if (this.runs.get(id)?.owner !== owner) throw new AutomationNotFound("Automation not found");
 		const live = this.live.get(id);
-		if (live) this.finish(live, "stopped", "Stopped by user.");
+		if (live && !this.finish(live, "stopped", interruptionReport(live.run, "Stopped by user."))) {
+			return {
+				ok: true,
+				warning:
+					"Work stopped, but Dashboard could not save its final report. The history may be out of date after a restart.",
+			};
+		}
+		return { ok: true };
 	}
 
 	async close(): Promise<void> {
 		this.closed = true;
 		try {
-			await Promise.all(
-				[...this.live.values()].map(async (live) =>
-					this.finish(live, "interrupted", "Interrupted by dashboard shutdown."),
-				),
-			);
+			for (const live of this.live.values()) {
+				this.finish(live, "interrupted", interruptionReport(live.run, "Interrupted by dashboard shutdown."));
+			}
 		} finally {
 			await Promise.allSettled(this.resources);
+			const lock = this.historyLock;
+			this.historyLock = undefined;
+			lock?.close();
 		}
 	}
 }

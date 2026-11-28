@@ -810,10 +810,11 @@ describe("automation inventory and saved records", () => {
 				Array.from(parent.querySelectorAll(".session-title .name"), (e) => e.textContent);
 			const active = el.querySelector(".live-sessions")!;
 			expect(names(active)).toEqual(["a", "b", "c", "z"]);
+			expect(el.querySelector(".past-sessions article")).toBeNull();
 			expect(
-				Array.from(el.querySelectorAll(".past-sessions section"), (group) => [
+				Array.from(el.querySelectorAll(".past-sessions tbody"), (group) => [
 					group.querySelector("h3")?.textContent,
-					names(group),
+					Array.from(group.querySelectorAll(".automation-history-row .name"), (name) => name.textContent),
 				]),
 			).toEqual([
 				["/a", ["old-a", "old-b"]],
@@ -854,8 +855,12 @@ describe("automation inventory and saved records", () => {
 		window.location.hash = "#automate";
 		const el = mount(() => <App />);
 		for (const ref of ["setup", "work", "guard-0", "guard-1", "report"]) {
-			await vi.waitFor(() => expect(el.querySelector("article")?.textContent).toContain("Elapsed: 1m 2s"));
-			el.querySelector<HTMLAnchorElement>(`article a[href="#/automation/run%2Fone/${ref}"]`)!.click();
+			await vi.waitFor(() =>
+				expect(el.querySelector(".automation-history-row")?.textContent).toContain("Elapsed: 1m 2s"),
+			);
+			const row = el.querySelector(".automation-history-row")!;
+			row.querySelector<HTMLDetailsElement>("details.automation-history-details")!.open = true;
+			row.querySelector<HTMLAnchorElement>(`a[href="#/automation/run%2Fone/${ref}"]`)!.click();
 			await vi.waitFor(() =>
 				expect(el.querySelector("main")?.textContent).toContain(
 					ref === "report" ? saved.report : `Saved ${ref} body`,

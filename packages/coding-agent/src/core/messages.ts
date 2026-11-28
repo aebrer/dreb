@@ -163,7 +163,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					const content = typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
 					return {
 						role: "user",
-						content,
+						content:
+							m.customType === "automation-guard-feedback"
+								? [{ type: "text", text: "Task guard feedback (not a user reply):\n\n" }, ...content]
+								: content,
 						timestamp: m.timestamp,
 					};
 				}

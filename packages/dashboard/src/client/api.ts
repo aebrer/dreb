@@ -3,6 +3,7 @@
  * non-OK response throws with the server's error message (no silent fallback).
  */
 
+import type { RpcSessionState } from "@dreb/coding-agent/rpc";
 import type { AutomationRun } from "../shared/automation.js";
 import type {
 	AgentTypeDto,
@@ -102,6 +103,11 @@ export function dashboardImageUrl(
 	return `${scope}/${id}/${variant}`;
 }
 
+export function automationImageUrl(id: string, ref: string, imageId: string, variant: "preview" | "original") {
+	if (!DASHBOARD_IMAGE_ID_PATTERN.test(imageId)) return undefined;
+	return `/api/automations/${encodeURIComponent(id)}/transcripts/${encodeURIComponent(ref)}/images/${imageId}/${variant}`;
+}
+
 export const api = {
 	auth: (signal?: AbortSignal) => request<AuthStatusResponse>("/api/auth", { signal }),
 	connectionDiagnostic: (summary: ClientConnectionDiagnosticDto) =>
@@ -125,16 +131,18 @@ export const api = {
 		return request<DashboardResyncDto>(`/api/resync${suffix}`, { signal });
 	},
 	automations: (signal?: AbortSignal) =>
-		request<{ runs: AutomationRun[]; setups?: import("../shared/protocol.js").FleetRuntimeSnapshotDto[] }>(
-			"/api/automations",
-			{ signal },
-		),
+		request<{
+			runs: AutomationRun[];
+			setups?: import("../shared/protocol.js").FleetRuntimeSnapshotDto[];
+			historyIssue?: string;
+		}>("/api/automations", { signal }),
 	resumeAutomationSetup: (key: string, cwd?: string) =>
 		request<RuntimeInfoDto>(`/api/automations/setup/${encodeURIComponent(key)}/resume`, json({ cwd })),
 	setupAutomation: () => request<RuntimeInfoDto>("/api/automations/setup", json({})),
 	resumeSavedAutomationSetup: (id: string) =>
 		request<RuntimeInfoDto>(`/api/automations/${encodeURIComponent(id)}/resume-setup`, json({})),
-	stopAutomation: (id: string) => request<unknown>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
+	stopAutomation: (id: string) =>
+		request<{ ok: true; warning?: string }>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
 	relaunchAutomation: (id: string) =>
 		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}/relaunch`, json({})),
 	renameAutomation: (id: string, name: string) =>
@@ -142,7 +150,7 @@ export const api = {
 	deleteAutomation: (id: string) =>
 		request<{ ok: true }>(`/api/automations/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>
-		request<{ messages: unknown[]; running: boolean }>(
+		request<{ messages: unknown[]; running: boolean; streamMessage?: RpcSessionState["streamMessage"] }>(
 			`/api/automations/${encodeURIComponent(id)}/transcripts/${encodeURIComponent(ref)}`,
 			{ signal },
 		),

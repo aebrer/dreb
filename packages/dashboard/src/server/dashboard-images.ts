@@ -18,10 +18,9 @@ export const DASHBOARD_IMAGE_MIME_TYPES = new Set<DashboardImageReferenceDto["mi
 	"image/webp",
 ]);
 
-export interface DashboardImageScope {
-	runtimeKey: string;
-	agentId?: string;
-}
+export type DashboardImageScope =
+	| { runtimeKey: string; agentId?: string }
+	| { automation: { id: string; ref: string; file: string } };
 
 export interface DashboardImageBinary {
 	bytes: Uint8Array;
@@ -50,7 +49,9 @@ const DROP = Symbol("drop-dashboard-image");
 const JPEG_EOI = Buffer.from([0xff, 0xd9]);
 
 function scopeKey(scope: DashboardImageScope): string {
-	return `${scope.runtimeKey}\0${scope.agentId ?? ""}`;
+	return "automation" in scope
+		? JSON.stringify(["automation", scope.automation.id, scope.automation.ref, scope.automation.file])
+		: `${scope.runtimeKey}\0${scope.agentId ?? ""}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -277,7 +278,7 @@ export class DashboardImageService {
 		}
 		if (value.type === "image_reference") return isDashboardImageReference(value) ? { ...value } : DROP;
 		const childScope =
-			value.type === "background_agent_event" && typeof value.agentId === "string"
+			"runtimeKey" in scope && value.type === "background_agent_event" && typeof value.agentId === "string"
 				? { runtimeKey: scope.runtimeKey, agentId: value.agentId }
 				: scope;
 		const copy: Record<string, unknown> = {};

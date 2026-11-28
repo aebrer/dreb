@@ -104,6 +104,23 @@ async function setup() {
 }
 
 describe("automation role sessions", () => {
+	it("asks setup to verify each proposed role can do its part before presenting a draft", async () => {
+		const { session, call } = await setup();
+		const options = (await call("automation_options", {})).content[0];
+		if (options.type !== "text") throw new Error("Expected text options");
+		const { tools } = JSON.parse(options.text);
+		// Inventory with ls and an independent read check can use read-only grants.
+		expect(tools.orchestrator).toContain("ls");
+		expect(tools.guard).toContain("read");
+		// Requiring local tests with those grants must lead setup back to the conversation.
+		expect([...tools.orchestrator, ...tools.guard]).not.toContain("bash");
+		const prompt = session.systemPrompt;
+		expect(prompt).toContain("Check what each role can do with the tools in its proposed list.");
+		expect(prompt).toContain("the reviewer can do the agreed checks, including checks for stop conditions");
+		expect(prompt).toContain("Do not promise to run local tests if there is no tool that can run them.");
+		expect(prompt).toContain("Agree on a feasible change before you show the draft.");
+	});
+
 	it("lists exact options; only a dialog can approve the revised instructions and independent removals", async () => {
 		const { session, draft, approved, ask, call, propose, hook } = await setup();
 		expect(session.automationRole).toBe("setup");

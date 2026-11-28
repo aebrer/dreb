@@ -10,11 +10,20 @@ import { type AppStore, routeToHash } from "../state/store.js";
 
 const POLL_MS = 3000;
 
-function ErrorBanner(props: { message: string; dismiss: () => void }): JSX.Element {
+function ErrorBanner(props: { message: string; dismiss: () => void; warning?: boolean }): JSX.Element {
 	return (
 		<BannerRegion
 			banners={
-				props.message ? [{ key: "automation", text: props.message, tone: "error", onDismiss: props.dismiss }] : []
+				props.message
+					? [
+							{
+								key: "automation",
+								text: props.message,
+								tone: props.warning ? "warning" : "error",
+								onDismiss: props.dismiss,
+							},
+						]
+					: []
 			}
 		/>
 	);
@@ -39,7 +48,9 @@ function RunCard(props: {
 	run: AutomationRun;
 	now: number;
 	store: AppStore;
+	past?: boolean;
 	onError: (message: string) => void;
+	onWarning: (message: string) => void;
 }): JSX.Element {
 	const [resuming, setResuming] = createSignal(false);
 	let disposed = false;
@@ -75,7 +86,8 @@ function RunCard(props: {
 		if (stopping()) return;
 		setStopping(true);
 		try {
-			await api.stopAutomation(props.run.id);
+			const result = await api.stopAutomation(props.run.id);
+			if (result.warning) props.onWarning(result.warning);
 			// The inventory poll will move the card to history when the host stops it.
 		} catch (err) {
 			props.onError(err instanceof Error ? err.message : String(err));
@@ -120,17 +132,19 @@ function RunCard(props: {
 			setConfirmingDelete(false);
 		}
 	}
-	return (
-		<FleetCard status={tone()}>
-			<div class="session-title">
-				<span class="name" title={title()}>
-					{title()}
+	const content = (
+		<>
+			<Show when={!props.past}>
+				<div class="session-title">
+					<span class="name" title={title()}>
+						{title()}
+					</span>
+					<StatusChip status={tone()} label={props.run.status} />
+				</div>
+				<span class="session-project" title={props.run.draft.cwd}>
+					{props.run.draft.cwd}
 				</span>
-				<StatusChip status={tone()} label={props.run.status} />
-			</div>
-			<span class="session-project" title={props.run.draft.cwd}>
-				{props.run.draft.cwd}
-			</span>
+			</Show>
 			<div class="session-meta">
 				Elapsed: {elapsed((props.run.endedAt ?? props.now) - props.run.startedAt)} · Compactions:{" "}
 				{props.run.compactions} · Guard decisions: {props.run.decisions.length}
@@ -161,7 +175,7 @@ function RunCard(props: {
 						</a>
 					)}
 				</For>
-				<Show when={props.run.report !== undefined}>
+				<Show when={!props.past && props.run.report !== undefined}>
 					<a class="btn btn-small" href={href("report")}>
 						Final report
 					</a>
@@ -260,13 +274,37 @@ function RunCard(props: {
 					<p>Delete “{title()}” and its saved history? The work it produced is not changed.</p>
 				</Modal>
 			</Show>
-		</FleetCard>
+		</>
+	);
+	if (!props.past) return <FleetCard status={tone()}>{content}</FleetCard>;
+	return (
+		<tr class="disk-row automation-history-row">
+			<td class="fleet-name-cell">
+				<span class="name">{title()}</span>
+			</td>
+			<td data-label="Status">
+				<StatusChip status={tone()} label={props.run.status} />
+			</td>
+			<td class="automation-history-actions">
+				<Show when={props.run.report !== undefined}>
+					<a class="btn btn-small" href={href("report")}>
+						Final report
+					</a>
+				</Show>
+				<details class="automation-history-details">
+					<summary class="btn btn-small">Details</summary>
+					{content}
+				</details>
+			</td>
+		</tr>
 	);
 }
 
 export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 	const [creating, setCreating] = createSignal(false);
 	const [actionError, setActionError] = createSignal("");
+	const [actionWarning, setActionWarning] = createSignal("");
+	const [historyIssue, setHistoryIssue] = createSignal<string>();
 	const [inventoryError, setInventoryError] = createSignal("");
 	const [loaded, setLoaded] = createSignal(false);
 	const [runs, setRuns] = createStore<AutomationRun[]>([]);
@@ -303,6 +341,7 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 			);
 			setNow(Date.now());
 			setLoaded(true);
+			setHistoryIssue(result.historyIssue);
 			setInventoryError("");
 		} catch (err) {
 			if (!controller.signal.aborted) setInventoryError(err instanceof Error ? err.message : String(err));
@@ -335,19 +374,39 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 		}
 	}
 
-	const card = (run: AutomationRun) => <RunCard run={run} now={now()} store={props.store} onError={setActionError} />;
+	const entry = (run: AutomationRun, inHistory = false) => (
+		<RunCard
+			run={run}
+			now={now()}
+			store={props.store}
+			past={inHistory}
+			onError={setActionError}
+			onWarning={setActionWarning}
+		/>
+	);
 	return (
 		<div class="screen-fill">
 			<Topbar store={props.store} active="automate" />
 			<ErrorBanner message={actionError()} dismiss={() => setActionError("")} />
+			<ErrorBanner message={actionWarning()} dismiss={() => setActionWarning("")} warning />
 			<ErrorBanner message={inventoryError()} dismiss={() => setInventoryError("")} />
 			<main class="container">
 				<div class="fleet-head">
 					<h1>automate</h1>
-					<button type="button" class="btn btn-primary" disabled={creating()} onClick={newAutomation}>
+					<button
+						type="button"
+						class="btn btn-primary"
+						disabled={creating() || !!historyIssue()}
+						onClick={newAutomation}
+					>
 						{creating() ? "Opening setup…" : "New automation"}
 					</button>
 				</div>
+				<Show when={historyIssue()}>
+					<p class="pair-error" role="alert">
+						{historyIssue()}
+					</p>
+				</Show>
 				<Show
 					when={loaded()}
 					fallback={<p class="muted">{inventoryError() ? "Inventory unavailable." : "Loading automations…"}</p>}
@@ -398,22 +457,42 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 						<h2>Running automations</h2>
 						<div class="session-grid">
 							<For each={live()} fallback={<p class="muted">No running automations.</p>}>
-								{card}
+								{(run) => entry(run)}
 							</For>
 						</div>
 					</section>
 					<section class="past-sessions" aria-label="Past automations">
 						<h2>Past automations</h2>
-						<For each={[...past().keys()]} fallback={<p class="muted">No past automations.</p>}>
-							{(cwd) => (
-								<section>
-									<h3 class="group-head">{cwd}</h3>
-									<div class="session-grid">
-										<For each={past().get(cwd)}>{card}</For>
-									</div>
-								</section>
-							)}
-						</For>
+						<Show when={past().size} fallback={<p class="muted">No past automations.</p>}>
+							<table class="fleet-session-table automation-history">
+								<caption class="fleet-visually-hidden">Past automations grouped by project</caption>
+								<thead>
+									<tr>
+										<th scope="col">Job</th>
+										<th scope="col" class="fleet-static-heading">
+											Status
+										</th>
+										<th scope="col" class="fleet-static-heading">
+											Actions
+										</th>
+									</tr>
+								</thead>
+								<For each={[...past().keys()]}>
+									{(cwd) => (
+										<tbody class="project-group">
+											<tr class="fleet-project-row">
+												<th scope="rowgroup" colSpan={3}>
+													<div class="group-head">
+														<h3>{cwd}</h3>
+													</div>
+												</th>
+											</tr>
+											<For each={past().get(cwd)}>{(run) => entry(run, true)}</For>
+										</tbody>
+									)}
+								</For>
+							</table>
+						</Show>
 					</section>
 				</Show>
 			</main>
@@ -423,7 +502,12 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 
 /** A saved record never attaches to a runtime, even when its run is still active. */
 export function AutomationRecordScreen(props: { store: AppStore; runId: string; record: string }): JSX.Element {
-	const [entries, setEntries] = createSignal<TranscriptEntry[]>([]);
+	const [savedEntries, setSavedEntries] = createSignal<TranscriptEntry[]>([]);
+	const [partialEntry, setPartialEntry] = createSignal<TranscriptEntry>();
+	const entries = createMemo(() => {
+		const partial = partialEntry();
+		return partial ? [...savedEntries(), partial] : savedEntries();
+	});
 	const [report, setReport] = createSignal("");
 	const [error, setError] = createSignal("");
 	const [loading, setLoading] = createSignal(true);
@@ -441,8 +525,7 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 		controller.abort();
 		clearTimeout(timer);
 	});
-	// A running run keeps appending to its saved transcript. Re-reading on a timer streams
-	// new messages into the same read-only view, so an open transcript needs no reload.
+	// Refresh saved messages and the current RPC assistant snapshot in the same read-only view.
 	async function load(reportOnlyOnce = false) {
 		try {
 			if (props.record === "report") {
@@ -452,14 +535,20 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 				if (run?.report === undefined) throw new Error("Final report not found.");
 				setReport(run.report);
 			} else {
-				const { messages, running } = await api.automationTranscript(props.runId, props.record, controller.signal);
+				const { messages, running, streamMessage } = await api.automationTranscript(
+					props.runId,
+					props.record,
+					controller.signal,
+				);
 				if (stopped) return;
 				setLive(running !== false);
 				const payload = JSON.stringify(messages);
 				if (payload !== lastPayload) {
 					lastPayload = payload;
-					setEntries(messagesToEntries(messages as MessageLike[]));
+					setSavedEntries(messagesToEntries(messages as MessageLike[]));
 				}
+				const partial = streamMessage && messagesToEntries([streamMessage])[0];
+				setPartialEntry(partial?.kind === "assistant" ? { ...partial, streaming: true } : undefined);
 			}
 			if (!stopped) setError("");
 		} catch (err) {
@@ -503,7 +592,11 @@ export function AutomationRecordScreen(props: { store: AppStore; runId: string; 
 							<Show when={entries().length} fallback={!error() && <p class="muted">No saved messages.</p>}>
 								{/* Stable resetKey keeps the read window (and "show earlier") across live refreshes,
 								    matching the Session and subagent viewers. */}
-								<Transcript entries={entries()} resetKey={`${props.runId}:${props.record}`} />
+								<Transcript
+									entries={entries()}
+									resetKey={`${props.runId}:${props.record}`}
+									imageScope={{ automation: { id: props.runId, ref: props.record } }}
+								/>
 							</Show>
 						</Show>
 					</Show>

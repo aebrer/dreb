@@ -417,6 +417,55 @@ body {
 	}
 }
 
+@media (min-width: 701px) {
+	.automation-history thead th:nth-child(2) {
+		width: 8rem;
+	}
+
+	.automation-history thead th:last-child {
+		width: 48%;
+	}
+}
+
+.automation-history .name {
+	overflow-wrap: anywhere;
+}
+
+.automation-history-actions > a {
+	margin: 0 var(--space-2) var(--space-1) 0;
+}
+
+.automation-history-details {
+	display: inline-block;
+}
+
+.automation-history-details[open] {
+	display: block;
+}
+
+.automation-history-details summary {
+	cursor: pointer;
+}
+
+.automation-history-details .session-meta {
+	margin-top: var(--space-2);
+}
+
+@media (max-width: 700px) {
+	.fleet-session-table .automation-history-row {
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: var(--space-1) var(--space-2);
+	}
+
+	.automation-history-row .fleet-name-cell {
+		grid-column: auto;
+	}
+
+	.automation-history-row .automation-history-actions {
+		grid-column: 1 / -1;
+	}
+}
+
 /* Live sessions come first — the fleet's primary content. */
 .live-sessions {
 	margin-bottom: var(--space-6);
