@@ -58,6 +58,8 @@ export interface DashboardRuntimeSnapshot {
 
 export interface RuntimeHandle {
 	key: string;
+	/** Interactive setup belongs to Automate, not the ordinary Fleet inventory. */
+	automationOwner?: string;
 	cwd: string;
 	client: RpcClient;
 	/** Session start time (ms epoch) — stable tiebreak for deterministic fleet ordering. */
@@ -191,7 +193,15 @@ export class RuntimePool {
 	 * insertion order is retained intentionally; the UI owns presentation order.
 	 */
 	fleetSnapshot(): FleetRuntimeSnapshotDto[] {
-		return [...this.runtimes.values()].map((handle) => this.describeFleetRuntime(handle));
+		return this.list()
+			.filter((handle) => handle.automationOwner === undefined)
+			.map((handle) => this.describeFleetRuntime(handle));
+	}
+
+	automationSetups(owner: string): FleetRuntimeSnapshotDto[] {
+		return this.list()
+			.filter((handle) => handle.automationOwner === owner)
+			.map((handle) => this.describeFleetRuntime(handle));
 	}
 
 	list(): RuntimeHandle[] {
@@ -371,11 +381,47 @@ export class RuntimePool {
 		this.fleetSnapshotTimer.unref?.();
 	}
 
+	/** Unattended children are owned by the review loop, never Fleet-editable runtimes. */
+	async startAutomationChild(
+		cwd: string,
+		role: "orchestrator" | "guard",
+		spec: import("@dreb/coding-agent/rpc").AutomationDraft["guard"],
+		sessionDir?: string,
+	) {
+		if (this.closing) throw new Error("Runtime pool is closing");
+		const args = ["--ui", "dashboard", ...this.baseArgs, "--no-extensions"];
+		if (sessionDir) args.push("--session-dir", sessionDir);
+		const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
+		try {
+			await client.start();
+			await client.configureAutomation({ ...spec, role });
+			const { sessionFile: file } = await client.getState();
+			if (!file) throw new Error("Automation requires a saved session");
+			return {
+				file,
+				streamMessage: async () => (await client.getState(true)).streamMessage,
+				turn: (message: string, feedback?: boolean) => client.automationTurn(message, feedback),
+				close: () => client.stop(),
+			};
+		} catch (err) {
+			await client.stop();
+			throw err;
+		}
+	}
+
 	/** Spawn a new runtime in `cwd`, optionally opening an existing session file. */
-	async create(cwd: string, sessionPath?: string): Promise<RuntimeHandle> {
+	async create(
+		cwd: string,
+		sessionPath?: string,
+		automation?: { sessionDir?: string; owner: string },
+	): Promise<RuntimeHandle> {
 		if (this.closing) throw new Error("Runtime pool is closing");
 		const key = randomBytes(6).toString("hex");
 		const args = ["--ui", "dashboard", ...this.baseArgs];
+		if (automation) {
+			args.push("--no-extensions");
+			if (automation.sessionDir) args.push("--session-dir", automation.sessionDir);
+		}
 		if (sessionPath) args.push("--session", sessionPath);
 		const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
 		const handle: RuntimeHandle = {
@@ -386,6 +432,7 @@ export class RuntimePool {
 			lastActivity: this.now(),
 			attention: new Map(),
 			settingsRevision: 0,
+			automationOwner: automation?.owner,
 			sessionFileFallback: sessionPath,
 			backgroundAgents: new Map(),
 		};

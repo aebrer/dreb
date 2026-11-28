@@ -4,6 +4,7 @@ import { complete } from "../src/stream.js";
 import type { Api, Context, Model, StreamOptions } from "../src/types.js";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
@@ -104,10 +105,8 @@ describe("responseId E2E Tests", () => {
 	});
 
 	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
-		const llm = getModel("mistral", "devstral-medium-latest");
-
 		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			await expectResponseId(llm);
+			await expectResponseId(getMistralTestModel());
 		});
 	});
 

@@ -42,7 +42,7 @@ import {
 	setComposerDraft,
 } from "../state/composer-memory.js";
 import type { AskUiQuestion, ExtensionUiRequest, SessionViewState } from "../state/reducer.js";
-import type { AppStore } from "../state/store.js";
+import { type AppStore, findSessionRuntime } from "../state/store.js";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const UPLOAD_DIR_NAME = ".dreb-dashboard-uploads";
@@ -874,7 +874,11 @@ function ImportModal(props: {
 
 export function SessionScreen(props: { store: AppStore; sessionKey: string }): JSX.Element {
 	const session = (): SessionViewState | undefined => props.store.sessions[props.sessionKey];
-	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
+	const runtime = createMemo(() => findSessionRuntime(props.sessionKey, props.store.sessions, props.store.fleet()));
+	const automationSetup = () => {
+		const route = props.store.route();
+		return route.screen === "session" && route.automationSetup === true;
+	};
 	const availableThinkingLevels = createMemo(() => runtime()?.state.availableThinkingLevels ?? ["off"]);
 
 	const [composerText, setComposerText] = createSignal(getComposerDraft(props.sessionKey) ?? "");
@@ -1607,6 +1611,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setActionNotice(undefined);
 		const builtin = parseDashboardBuiltin(text, commands());
 		if (builtin) {
+			if (
+				(automationSetup() || runtime()?.automationSetup) &&
+				["new", "fork", "resume", "import"].includes(builtin.command.name)
+			) {
+				setActionNotice("Setup chats keep the same transcript. Use New automation to start over.");
+				return;
+			}
 			if (fileAttachments().length > 0 || imageAttachments().length > 0) {
 				setActionNotice("Remove attachments before running a built-in command; nothing was sent or discarded.");
 				return;
@@ -1820,8 +1831,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				});
 			}
 			actions.push({
-				label: "Return to fleet",
-				run: () => props.store.navigate({ screen: "fleet" }),
+				label: automationSetup() ? "Return to Automate" : "Return to fleet",
+				run: () => props.store.navigate({ screen: automationSetup() ? "automate" : "fleet" }),
 				disabled: closedState.resuming,
 			});
 			items.push({
@@ -1882,8 +1893,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			<header class="session-bar" classList={{ collapsed: topChromeCollapsed() }}>
 				<div class="session-bar-inner session-bar-main">
 					<div class="session-navigation">
-						<a class="back" href="#/">
-							← fleet
+						<a class="back" href={automationSetup() ? "#/automate" : "#/"}>
+							{automationSetup() ? "← automate" : "← fleet"}
 						</a>
 					</div>
 					<span class="title">{headerTitle()}</span>

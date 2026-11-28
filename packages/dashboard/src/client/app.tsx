@@ -5,6 +5,7 @@
 
 import { createEffect, createMemo, type JSX, Match, onCleanup, onMount, Switch } from "solid-js";
 import { ToastRegion } from "./components/common.js";
+import { AutomateScreen, AutomationRecordScreen } from "./screens/automate.js";
 import { FilesScreen } from "./screens/files.js";
 import { FleetScreen } from "./screens/fleet.js";
 import { MemoriesScreen } from "./screens/memories.js";
@@ -168,6 +169,14 @@ export function App(): JSX.Element {
 		const route = store.route();
 		return route.screen === "session" ? route.key : undefined;
 	});
+	const automationRoute = createMemo(
+		() => {
+			const route = store.route();
+			return route.screen === "automation" ? route : undefined;
+		},
+		undefined,
+		{ equals: (a, b) => a?.runId === b?.runId && a?.ref === b?.ref },
+	);
 	const subagentRoute = createMemo(
 		() => {
 			const route = store.route();
@@ -180,6 +189,12 @@ export function App(): JSX.Element {
 	return (
 		<>
 			<Switch fallback={<FleetScreen store={store} />}>
+				<Match when={store.route().screen === "automate"}>
+					<AutomateScreen store={store} />
+				</Match>
+				<Match when={automationRoute()} keyed>
+					{(route) => <AutomationRecordScreen store={store} runId={route.runId} record={route.ref} />}
+				</Match>
 				<Match when={sessionKey()} keyed>
 					{(key) => <SessionScreen store={store} sessionKey={key} />}
 				</Match>

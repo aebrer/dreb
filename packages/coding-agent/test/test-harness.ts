@@ -334,6 +334,8 @@ export interface HarnessOptions {
 	baseToolsOverride?: Record<string, AgentTool>;
 	/** UI surface type passed to the session (e.g. "dashboard", "rpc"). */
 	uiType?: string;
+	/** Write the session transcript to the harness's temporary directory. */
+	persistSession?: boolean;
 	/** Optional resource loader override. */
 	resourceLoader?: ResourceLoader;
 	/** Inline extensions to load into the session resource loader. */
@@ -383,7 +385,9 @@ function createHarnessWithResourceLoader(
 		streamFn,
 	});
 
-	const sessionManager = SessionManager.inMemory();
+	const sessionManager = options.persistSession
+		? SessionManager.create(tempDir, join(tempDir, "sessions"))
+		: SessionManager.inMemory();
 	const settingsManager = SettingsManager.create(tempDir, tempDir);
 
 	if (options.settings) {

@@ -9,6 +9,20 @@ import type { RuntimeInfoDto } from "../../shared/protocol.js";
 import type { Toast } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 
+export function FleetCard(props: {
+	status: "running" | "attention" | "idle" | "error";
+	children: JSX.Element;
+}): JSX.Element {
+	return (
+		<article
+			class="session-card"
+			classList={{ attention: props.status === "attention", error: props.status === "error" }}
+		>
+			{props.children}
+		</article>
+	);
+}
+
 export function StatusChip(props: { status: "running" | "attention" | "idle" | "error"; label?: string }): JSX.Element {
 	const glyphs = { running: "●", attention: "◆", idle: "○", error: "✕" } as const;
 	const labels = { running: "running", attention: "needs attention", idle: "idle", error: "error" } as const;
@@ -51,7 +65,10 @@ export function ModeBadge(props: { store: AppStore }): JSX.Element {
 	);
 }
 
-export function Topbar(props: { store: AppStore; active: "fleet" | "files" | "memories" | "settings" }): JSX.Element {
+export function Topbar(props: {
+	store: AppStore;
+	active: "fleet" | "automate" | "files" | "memories" | "settings";
+}): JSX.Element {
 	const attentionCount = () =>
 		Object.values(props.store.sessions).filter((s) => s.needsAttention).length +
 		props.store.fleet().runtimes.filter((r) => r.needsAttention).length;
@@ -64,6 +81,9 @@ export function Topbar(props: { store: AppStore; active: "fleet" | "files" | "me
 				<nav>
 					<a href="#/" aria-current={props.active === "fleet" ? "page" : undefined}>
 						fleet{attentionCount() > 0 ? " ◆" : ""}
+					</a>
+					<a href="#/automate" aria-current={props.active === "automate" ? "page" : undefined}>
+						automate
 					</a>
 					<a href="#/files" aria-current={props.active === "files" ? "page" : undefined}>
 						files

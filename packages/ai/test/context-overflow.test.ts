@@ -21,6 +21,7 @@ import { isContextOverflow } from "../src/utils/overflow.js";
 import { hasAzureOpenAICredentials } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
 import { isExpensiveLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
@@ -427,8 +428,8 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 
 	describe.skipIf(!isExpensiveLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral", () => {
-		it("devstral-medium-latest - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("mistral", "devstral-medium-latest");
+		it("should detect overflow via isContextOverflow", async () => {
+			const model = getMistralTestModel();
 			const result = await testContextOverflow(model, process.env.MISTRAL_API_KEY!);
 			logResult(result);
 

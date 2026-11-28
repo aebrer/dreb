@@ -20,9 +20,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_OUT_DIR, parseCaptureArgs } from "./capture-args.js";
 import { createFixtureFileApi, createFixtureMemoryApi } from "./fixture-host-apis.js";
 import { createFixtureRpcClient, FixtureFailures, fixtureControls } from "./fixture-rpc-client.js";
-import { buildDashboardClient, runScreenshotHarness, ScreenshotHarnessError } from "./harness.js";
+import { buildDashboardClient, runScreenshotHarness, runSetupWalkthrough, ScreenshotHarnessError } from "./harness.js";
 import { findLeaks, leakNeedles } from "./leak-guard.js";
-import { buildScenario, FIXTURE_DIRECTORIES, FIXTURE_HOME, liveScenario, memoryEntryContent } from "./scenario.js";
+import {
+	buildScenario,
+	emptySetupScenario,
+	FIXTURE_DIRECTORIES,
+	FIXTURE_HOME,
+	liveScenario,
+	memoryEntryContent,
+} from "./scenario.js";
 import { type SessionFixture, toJsonl } from "./session-builder.js";
 import { SHOTS, selectShots, shotViewport } from "./shots.js";
 
@@ -238,6 +245,29 @@ describe("fixture RPC runtime", () => {
 		expect(failures.messages).toEqual([expect.stringContaining("RpcClient.prompt()")]);
 	});
 
+	it("only accepts ordinary prompts on setup after configuration, and abort returns it to idle", async () => {
+		const dir = await tempDir("dreb-screenshot-setup-");
+		const setup = emptySetupScenario(dir);
+		const client = createFixtureRpcClient({
+			scenario: buildScenario(),
+			version: "9.9.9",
+			failures: new FixtureFailures(),
+			binding: { scenario: setup, paths: { sessionFile: () => join(dir, setup.session.fileName) } },
+		});
+		await client.start();
+		await expect(client.prompt("not configured")).rejects.toThrow(/configured setup session/);
+		await client.configureAutomation({ role: "setup" });
+		await expect(client.configureAutomation({ role: "setup" })).rejects.toThrow(/Expected one configureAutomation/);
+		await client.prompt("Check the cache.");
+		expect(await client.getMessages()).toEqual([
+			expect.objectContaining({ role: "user", content: "Check the cache." }),
+		]);
+		expect((await client.getState()).isStreaming).toBe(true);
+		await client.abort();
+		expect((await client.getState()).isStreaming).toBe(false);
+		expect((await client.getMessages()).at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+	});
+
 	it("rejects session reads on the session-less utility runtime but serves settings", async () => {
 		const failures = new FixtureFailures();
 		const client = createFixtureRpcClient({ scenario: buildScenario(), version: "9.9.9", failures });
@@ -344,6 +374,95 @@ describe("screenshot harness (offline smoke)", () => {
 	beforeAll(async () => {
 		clientDir = await tempDir("dreb-screenshot-client-");
 		await buildDashboardClient(clientDir);
+	}, 120_000);
+
+	it("walks through automation setup offline", async () => {
+		await runSetupWalkthrough(clientDir, async (page, dashboard) => {
+			const clickRequest = async (method: string, path: string, click: () => Promise<void>) => {
+				const [response] = await Promise.all([
+					page.waitForResponse(
+						(r) => r.url() === `${dashboard.baseUrl}${path}` && r.request().method() === method,
+					),
+					click(),
+				]);
+				expect(response.ok(), `${method} ${path}: ${response.status()}`).toBe(true);
+				return response;
+			};
+			const inventory = await clickRequest("GET", "/api/automations", () =>
+				page.getByRole("link", { name: "automate", exact: true }).click(),
+			);
+			expect(await inventory.json()).toMatchObject({ runs: [] });
+			await page.getByText("No past automations.", { exact: true }).waitFor();
+			const setup = await clickRequest("POST", "/api/automations/setup", () =>
+				page.getByRole("button", { name: "New automation" }).click(),
+			);
+			const { key } = await setup.json();
+			expect(typeof key).toBe("string");
+			await page.waitForURL(`${dashboard.baseUrl}/#/automate/setup/${key}`);
+			await page.getByRole("link", { name: "← automate" }).click();
+			await page.getByRole("heading", { name: "Setup chats" }).waitFor();
+			await page.getByRole("link", { name: "Open setup chat" }).click();
+			await page.waitForURL(`${dashboard.baseUrl}/#/automate/setup/${key}`);
+			const turns = dashboard.setupTurns(key);
+			const composer = page.locator(".composer textarea");
+			const working = page.locator(".working");
+			const stop = page.locator(".status-line").getByRole("button", { name: /stop/i });
+			const send = async (text: string) => {
+				await composer.fill(text);
+				await clickRequest("POST", `/api/runtimes/${key}/prompt`, () => page.locator(".composer .send").click());
+				await page.locator(".entry.user").getByText(text, { exact: true }).waitFor();
+				await working.waitFor();
+			};
+			const idle = async () => {
+				await working.waitFor({ state: "hidden" });
+				await stop.waitFor({ state: "hidden" });
+				expect(await composer.isEditable()).toBe(true);
+			};
+
+			await send("Help me check the station cache.");
+			expect(await page.locator(".entry.assistant").count()).toBe(0);
+			turns.delta("Which stations");
+			const assistant = page.locator(".entry.assistant");
+			await assistant.getByText("Which stations", { exact: true }).waitFor();
+			turns.delta(" should we check?");
+			await assistant.getByText("Which stations should we check?", { exact: true }).waitFor();
+			turns.finish("stop");
+			await idle();
+
+			await send("Check the coastal stations."); // No assistant output: Stop must still work.
+			await clickRequest("POST", `/api/runtimes/${key}/abort`, () => stop.click());
+			await idle();
+			await send("Try the harbor station.");
+			turns.finish("error", "Fixture provider unavailable");
+			await assistant.getByRole("alert").filter({ hasText: "Fixture provider unavailable" }).waitFor();
+			await idle();
+			await send("Retry the harbor station.");
+			turns.delta("Ready to continue.");
+			turns.finish("stop");
+			await assistant.getByText("Ready to continue.", { exact: true }).waitFor();
+			await idle();
+
+			await page.setViewportSize({ width: 320, height: 640 });
+			await send("Show the full automation draft.");
+			const longDraft = [
+				"```",
+				"Instructions:",
+				...Array.from({ length: 50 }, (_, i) => `Step ${i + 1}: ${"long-without-spaces".repeat(15)}`),
+				"END OF DRAFT",
+				"```",
+			].join("\n");
+			turns.approvalQuestion(longDraft);
+			const wizard = page.getByRole("region", { name: "Automation draft" });
+			await wizard.getByText(/END OF DRAFT/).waitFor();
+			expect(await page.getByRole("dialog").count()).toBe(0);
+			await wizard.getByText("Approve", { exact: true }).scrollIntoViewIfNeeded();
+			expect(await wizard.getByText("Approve", { exact: true }).isVisible()).toBe(true);
+			expect(await page.evaluate<boolean>("document.documentElement.scrollWidth <= innerWidth")).toBe(true);
+			await clickRequest("POST", `/api/runtimes/${key}/abort`, () =>
+				wizard.getByRole("button", { name: /stop agent/i }).click(),
+			);
+			await idle();
+		});
 	}, 120_000);
 
 	it("renders every shot from fixtures without host data, errors, or stray requests", async () => {

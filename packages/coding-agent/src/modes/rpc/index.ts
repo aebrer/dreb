@@ -5,6 +5,7 @@
  *   import { RpcClient } from "@dreb/coding-agent/rpc";
  */
 
+export type { AutomationDraft, AutomationRoleOptions } from "../../core/automation.js";
 export type { ModelInfo, RpcClientOptions, RpcEventListener, RpcExitInfo, RpcExitListener } from "./rpc-client.js";
 export { RpcClient } from "./rpc-client.js";
 export {

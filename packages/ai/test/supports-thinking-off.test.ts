@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getCopilotModelTransport } from "../scripts/copilot-model-transport.js";
 import {
 	clampThinkingLevel,
 	claudeThinksByDefault,
@@ -91,21 +92,29 @@ describe("Claude thinking capabilities on Anthropic-native transports", () => {
 });
 
 describe("Claude thinking capabilities on GitHub Copilot follow the native rules", () => {
-	it("routes Copilot Claude Opus/Sonnet/Haiku through Anthropic Messages and Fable through completions", () => {
-		for (const id of [
-			"claude-haiku-4.5",
-			"claude-sonnet-4.6",
-			"claude-opus-4.8",
-			"claude-opus-5",
-			"claude-opus-5.5",
-			"claude-sonnet-5.5",
-			"claude-haiku-5.5",
-		] as const) {
-			const model = getModel("github-copilot", id);
-			expect(model.api, id).toBe("anthropic-messages");
-			expect(model.compat, id).toBeUndefined();
-		}
-		expect(getModel("github-copilot", "claude-fable-5").api).toBe("openai-completions");
+	// Exercise the generator's routing rule against known IDs regardless of
+	// which models are offered by the public catalog at build time.
+	it.each([
+		"claude-haiku-4.5",
+		"claude-sonnet-4.6",
+		"claude-opus-4.8",
+		"claude-opus-5",
+		"claude-opus-5.5",
+		"claude-sonnet-5.5",
+		"claude-haiku-5.5",
+	])("routes %s through Anthropic Messages without OpenAI compat", (id) => {
+		expect(getCopilotModelTransport(id)).toEqual({ api: "anthropic-messages" });
+	});
+
+	it.each(["claude-fable-5", "claude-mythos-5", "gemini-3.8-flash"])("routes %s through completions", (id) => {
+		expect(getCopilotModelTransport(id)).toEqual({
+			api: "openai-completions",
+			compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false },
+		});
+	});
+
+	it.each(["gpt-5.3-codex", "gpt-6-luna", "oswe-vscode-prime"])("routes %s through Responses", (id) => {
+		expect(getCopilotModelTransport(id)).toEqual({ api: "openai-responses" });
 	});
 
 	it.each([
@@ -115,7 +124,12 @@ describe("Claude thinking capabilities on GitHub Copilot follow the native rules
 		["claude-sonnet-5.5", { adaptive: true, xhigh: true, max: true, off: true }, "between_tools"],
 		["claude-haiku-5.5", { adaptive: true, xhigh: true, max: true, off: true }, "disabled"],
 	] as const)("Copilot %s", (id, caps, offMode) => {
-		const model = getModel("github-copilot", id);
+		const model: Model<Api> = {
+			...anthropicBase,
+			provider: "github-copilot",
+			id,
+			...getCopilotModelTransport(id),
+		};
 		expect({
 			adaptive: supportsAdaptiveThinking(model),
 			xhigh: supportsXhigh(model),

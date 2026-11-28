@@ -387,9 +387,9 @@ export function SettingsScreen(props: {
 			setSaved(true);
 			setTimeout(() => setSaved(false), 2000);
 		} catch (err) {
-			// RPC validation errors surface verbatim — no silent retry.
-			setError(err instanceof Error ? err.message : String(err));
+			// Refetch clears the shared error signal. Restore the save error after rollback.
 			await refetch();
+			setError(err instanceof Error ? err.message : String(err));
 		}
 	}
 
@@ -1199,6 +1199,34 @@ export function SettingsScreen(props: {
 
 				<section class="settings-section">
 					<h2>dashboard</h2>
+					<Show when={settings()}>
+						{(current) => (
+							<div class="setting-row">
+								<label class="setting-label" for="automation-setup-dir">
+									<span class="name">automation setup directory</span>
+									<span class="hint" id="automation-setup-dir-hint">
+										Host-wide starting directory for new automation setup chats, not the job’s work directory.
+										Blank uses the host home directory. Relative paths start from the dashboard’s startup
+										directory. No restart needed.
+									</span>
+								</label>
+								<span class="setting-control">
+									<input
+										id="automation-setup-dir"
+										aria-describedby="automation-setup-dir-hint"
+										type="text"
+										placeholder="~"
+										value={current().automationSetupDir ?? ""}
+										onChange={(event) => {
+											const directory = event.currentTarget.value.trim();
+											event.currentTarget.value = directory;
+											void save({ automationSetupDir: directory || null });
+										}}
+									/>
+								</span>
+							</div>
+						)}
+					</Show>
 					<div class="appearance-block">
 						<div class="setting-row appearance-heading-row">
 							<span class="setting-label">

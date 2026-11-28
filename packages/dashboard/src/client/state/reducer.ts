@@ -13,6 +13,7 @@ import {
 	type ContextUsageDto,
 	type DashboardImageReferenceDto,
 	MAX_COMPLETED_BACKGROUND_AGENTS,
+	type RuntimeInfoDto,
 	type SubagentArbitrationDto,
 } from "../../shared/protocol.js";
 
@@ -107,6 +108,7 @@ export interface StatusLineEntry {
 }
 
 export interface ClosedSessionViewState {
+	automationSetup?: boolean;
 	/** Effective runtime directory captured before the runtime closed. */
 	cwd?: string;
 	/** Historical directory recorded by the active session, when known. */
@@ -193,7 +195,11 @@ export interface SessionTaskItem {
 	status: "pending" | "in_progress" | "completed";
 }
 
+export type SessionRuntime = Pick<RuntimeInfoDto, "key" | "cwd" | "state" | "settingsRevision">;
+
 export interface SessionViewState {
+	/** Setup runtime metadata belongs to its Session, not to a Fleet card. */
+	setupRuntime?: SessionRuntime;
 	key: string;
 	entries: TranscriptEntry[];
 	streaming: boolean;

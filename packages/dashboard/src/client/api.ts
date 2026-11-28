@@ -3,6 +3,8 @@
  * non-OK response throws with the server's error message (no silent fallback).
  */
 
+import type { RpcSessionState } from "@dreb/coding-agent/rpc";
+import type { AutomationRun } from "../shared/automation.js";
 import type {
 	AgentTypeDto,
 	AuthStatusDto,
@@ -76,7 +78,7 @@ function json(body: unknown): RequestInit {
 	return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
-function jsonWithMethod(method: "PUT" | "DELETE", body: unknown): RequestInit {
+function jsonWithMethod(method: "PUT" | "PATCH" | "DELETE", body: unknown): RequestInit {
 	return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
@@ -101,6 +103,11 @@ export function dashboardImageUrl(
 	return `${scope}/${id}/${variant}`;
 }
 
+export function automationImageUrl(id: string, ref: string, imageId: string, variant: "preview" | "original") {
+	if (!DASHBOARD_IMAGE_ID_PATTERN.test(imageId)) return undefined;
+	return `/api/automations/${encodeURIComponent(id)}/transcripts/${encodeURIComponent(ref)}/images/${imageId}/${variant}`;
+}
+
 export const api = {
 	auth: (signal?: AbortSignal) => request<AuthStatusResponse>("/api/auth", { signal }),
 	connectionDiagnostic: (summary: ClientConnectionDiagnosticDto) =>
@@ -123,6 +130,31 @@ export const api = {
 		const suffix = query.size ? `?${query}` : "";
 		return request<DashboardResyncDto>(`/api/resync${suffix}`, { signal });
 	},
+	automations: (signal?: AbortSignal) =>
+		request<{
+			runs: AutomationRun[];
+			setups?: import("../shared/protocol.js").FleetRuntimeSnapshotDto[];
+			historyIssue?: string;
+			saveIssue?: string;
+		}>("/api/automations", { signal }),
+	resumeAutomationSetup: (key: string, cwd?: string) =>
+		request<RuntimeInfoDto>(`/api/automations/setup/${encodeURIComponent(key)}/resume`, json({ cwd })),
+	setupAutomation: () => request<RuntimeInfoDto>("/api/automations/setup", json({})),
+	resumeSavedAutomationSetup: (id: string) =>
+		request<RuntimeInfoDto>(`/api/automations/${encodeURIComponent(id)}/resume-setup`, json({})),
+	stopAutomation: (id: string) =>
+		request<{ ok: true; warning?: string }>(`/api/automations/${encodeURIComponent(id)}/stop`, json({})),
+	relaunchAutomation: (id: string) =>
+		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}/relaunch`, json({})),
+	renameAutomation: (id: string, name: string) =>
+		request<AutomationRun>(`/api/automations/${encodeURIComponent(id)}`, jsonWithMethod("PATCH", { name })),
+	deleteAutomation: (id: string) =>
+		request<{ ok: true }>(`/api/automations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+	automationTranscript: (id: string, ref: string, signal?: AbortSignal) =>
+		request<{ messages: unknown[]; running: boolean; streamMessage?: RpcSessionState["streamMessage"] }>(
+			`/api/automations/${encodeURIComponent(id)}/transcripts/${encodeURIComponent(ref)}`,
+			{ signal },
+		),
 	createRuntime: (cwd: string, opts: { sessionPath?: string; firstPrompt?: string } = {}) =>
 		request<RuntimeInfoDto>("/api/runtimes", json({ cwd, ...opts })),
 	stopRuntime: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}`, { method: "DELETE" }),

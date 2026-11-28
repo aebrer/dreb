@@ -348,6 +348,15 @@ async function main(): Promise<void> {
 		auth,
 		pool,
 		imageService,
+		automationSetupDir: () => {
+			// Settings are saved by a separate RPC process. Read them again for each setup.
+			settingsManager.reload();
+			const globalError = settingsManager.drainErrors().find(({ scope }) => scope === "global");
+			if (globalError) throw new Error(`Could not reload global settings: ${globalError.error.message}`);
+			return resolveConfiguredDirectory(settingsManager.getGlobalAutomationSetupDir(), startupCwd);
+		},
+		automationHistoryFile: join(agentDir, "automation", "history.json"),
+		automationSessionDir: join(agentDir, "automation", "sessions"),
 		staticDir: existsSync(staticDir) ? staticDir : undefined,
 		serverVersion,
 		onRestart,

@@ -58,6 +58,7 @@ Screenshots of each screen are in the [dreb README](https://github.com/aebrer/dr
   activity/subagent text, and past-session labels wrap within cards or rows
   rather than spilling off-screen. Accessible table headings, keyboard sorting
   buttons, and 44px touch targets are preserved. `+ new session` anywhere.
+- **[Automate](../coding-agent/docs/dashboard.md#automate)** — choose **New automation** to open a setup chat in the usual Session view. It starts in the host user's home directory (or global [`automationSetupDir`](../coding-agent/docs/settings.md#automation)), without a folder picker. Agree on the job's name, work directory, instructions, and separate models and tools for the orchestrator and guard. Choose **Approve** on the full draft to run it (which closes the setup chat) or **Request changes** to revise it. Running jobs have cards and can be stopped or read while replies are still arriving. Past runs use compact rows grouped by project. Open the final report directly or choose **Details** to read transcripts or relaunch, rename, or delete a run. A dashboard restart marks active runs interrupted and reports last-known unfinished work; it does not replay them.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
   inline provider/API failures with partial output preserved, compaction summaries,

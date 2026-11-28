@@ -6,8 +6,9 @@
  */
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
-import type { AssistantMessageEvent, ImageContent, Model, Transport } from "@dreb/ai";
-import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
+import type { AssistantMessage, AssistantMessageEvent, ImageContent, Model, Transport } from "@dreb/ai";
+import type { AgentSessionEvent, ConfigureAutomationOptions, SessionStats } from "../../core/agent-session.js";
+import type { AutomationDraft } from "../../core/automation.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type { DispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
@@ -23,6 +24,8 @@ import type { SourceInfo } from "../../core/source-info.js";
 
 export type RpcCommand =
 	// Prompting
+	| { id?: string; type: "configure_automation"; options: ConfigureAutomationOptions }
+	| { id?: string; type: "automation_turn"; message: string; feedback?: boolean }
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
@@ -32,7 +35,7 @@ export type RpcCommand =
 	| { id?: string; type: "dream"; args?: string }
 
 	// State
-	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_state"; includeStreamMessage?: boolean }
 	/**
 	 * Atomically captures dashboard-visible parent-session state. The RPC mode
 	 * writes a matching dashboard_snapshot_barrier immediately before its response;
@@ -263,9 +266,15 @@ export interface RpcMessageUpdateEvent {
 export type RpcSessionEvent = Exclude<AgentSessionEvent, { type: "message_update" }> | RpcMessageUpdateEvent;
 
 /** Non-response JSONL messages emitted by the RPC server on stdout. */
-export type RpcEvent = RpcSessionEvent | RpcExtensionUIRequest | RpcDashboardSnapshotBarrierEvent;
+export type RpcEvent =
+	| { type: "automation_approved"; draft: AutomationDraft; setupFile: string }
+	| RpcSessionEvent
+	| RpcExtensionUIRequest
+	| RpcDashboardSnapshotBarrierEvent;
 
 export interface RpcSessionState {
+	/** Populated only when get_state requests the current in-flight assistant message. */
+	streamMessage?: Pick<AssistantMessage, "role" | "model" | "timestamp" | "content">;
 	model?: Model<any>;
 	scopedModels: RpcScopedModel[];
 	/** Current in-memory task list, replaced atomically by the tasks_update tool. */
@@ -306,6 +315,8 @@ export interface RpcSessionState {
 
 // Success responses with data
 export type RpcResponse =
+	| { id?: string; type: "response"; command: "configure_automation"; success: true }
+	| { id?: string; type: "response"; command: "automation_turn"; success: true; data: { text: string } }
 	// Prompting (async - events follow)
 	| { id?: string; type: "response"; command: "prompt"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }
@@ -669,6 +680,8 @@ export interface RpcSettingsSnapshot {
 	agentModels?: Record<string, string[]>;
 	/** Global-only fail-closed Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings;
+	/** Global-only path for new Dashboard automation setup sessions. Absent means the host home directory. */
+	automationSetupDir?: string;
 	/** Effective automatic tab-title configuration. */
 	tabTitle?: TabTitleSettings;
 	/** Raw effective persisted model patterns. Absent means the future-inclusive all-model scope. */
@@ -742,6 +755,8 @@ export interface RpcSettingsUpdate {
 	agentModels?: Record<string, string[]>;
 	/** Ordered exact model references; null removes the filter and restores implicit all. */
 	enabledModels?: string[] | null;
+	/** Updates the global setup path; null or a blank string restores the host home directory. */
+	automationSetupDir?: string | null;
 	/** Replaces the complete global-only arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings | null;
 	/** Partial global automatic tab-title configuration update. `model: null` removes the pinned model, restoring the default route (parent in single-model mode, otherwise Explore-agent routing). */

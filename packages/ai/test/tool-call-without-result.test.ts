@@ -9,6 +9,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
 import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
@@ -187,10 +188,8 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
-		const model = getModel("mistral", "devstral-medium-latest");
-
 		it("should filter out tool calls without corresponding tool results", { retry: 3, timeout: 30000 }, async () => {
-			await testToolCallWithoutResult(model);
+			await testToolCallWithoutResult(getMistralTestModel());
 		});
 	});
 

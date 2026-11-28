@@ -156,6 +156,7 @@ export interface Settings {
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
+	automationSetupDir?: string; // Global Dashboard setup cwd, independent of the agreed work directory.
 	sessionDir?: string; // Custom main-session storage directory (same format as --session-dir CLI flag)
 	/** Global-only custom root for subagent child-session logs. Project settings are ignored. */
 	subagentSessionDir?: string;
@@ -703,6 +704,18 @@ export class SettingsManager {
 	/** Read the global-only subagent transcript root; project settings cannot redirect it. */
 	getGlobalSubagentSessionDir(): string | undefined {
 		return this.globalSettings.subagentSessionDir;
+	}
+
+	/** Project settings cannot redirect the Dashboard's automation setup sessions. */
+	getGlobalAutomationSetupDir(): string | undefined {
+		const directory = this.globalSettings.automationSetupDir;
+		return typeof directory === "string" ? directory.trim() || undefined : undefined;
+	}
+
+	setGlobalAutomationSetupDir(directory: string | undefined): void {
+		this.globalSettings.automationSetupDir = directory?.trim() || undefined;
+		this.markModified("automationSetupDir");
+		this.save();
 	}
 
 	getDefaultProvider(): string | undefined {

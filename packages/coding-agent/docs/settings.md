@@ -409,6 +409,20 @@ Dashboard host-wide inventory is deliberately different: it reads only the globa
 
 Both settings accept the same path syntax: absolute paths stay absolute, `~` and `~/...` expand from the user home directory, and relative paths resolve against an explicit runtime base. That base is the main CLI cwd for CLI settings/flags/hooks, Dashboard's startup cwd for its global main inventory, and the AgentSession runtime cwd for `subagentSessionDir`. Empty or whitespace-only values are treated as unset. The footer / Dashboard daily cost ("today") sums today's transcripts from every root a session can see: the built-in nested store, the active session's flat root, the global and effective `sessionDir`, and both the configured and legacy subagent roots. Files reachable from more than one root are counted once. Sessions written to a project `sessionDir` that isn't visible from the current session are not counted. These roots affect transcripts only; they do not relocate credentials, `settings.json`, or other agent configuration.
 
+### Automation
+
+| Setting | Scope | Default | Description |
+|---------|-------|---------|-------------|
+| `automationSetupDir` | Global only | Host home directory | Starting directory for new Dashboard automation setup chats. Project values are ignored. |
+
+```json
+{
+  "automationSetupDir": "~/dreb/automation-setups"
+}
+```
+
+The Dashboard's **Automate → New automation** opens its setup conversation in this directory. It is only where that conversation starts: each approved job runs in the work directory agreed in the chat, and a run's history stays in `<agent-dir>/automation/history.json`. Absolute paths stay absolute, `~` and `~/...` expand from the user home directory, and relative paths resolve against the directory that started Dashboard. The directory must already exist; a missing one is reported when a setup starts rather than created. Blank or `null` clears the setting and uses the host home directory. Dashboard reads the global value again for each new setup, so a change applies to the next setup without restarting Dashboard; running automations and already-open setup chats are untouched. Because the setting controls where an unattended conversation starts, project settings cannot override it, and `set_settings` accepts it only globally. See [dashboard.md](dashboard.md#automate) and the [`set_settings` key table](rpc.md#settings).
+
 ### Model Cycling
 
 | Setting | Type | Default | Description |

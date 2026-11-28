@@ -475,6 +475,7 @@ type SettingsReader = Pick<
 	| "getSingleModelMode"
 	| "getAgentModels"
 	| "getGlobalSubagentArbiterSettings"
+	| "getGlobalAutomationSetupDir"
 	| "getTabTitleSettings"
 	| "getEnabledModels"
 	| "hasProjectEnabledModelsOverride"
@@ -512,6 +513,7 @@ type SettingsWriter = SettingsRefresher &
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
 		| "setGlobalSubagentArbiterSettings"
+		| "setGlobalAutomationSetupDir"
 		| "setGlobalTabTitleSettings"
 		| "setEnabledModels"
 	>;
@@ -519,8 +521,8 @@ type SettingsWriter = SettingsRefresher &
 /**
  * Handle the `get_settings` RPC command: snapshot the persistent default settings.
  *
- * Most fields read the SettingsManager's merged (global + project) view. Context trust
- * fields intentionally read global settings only, so projects cannot expand the policy.
+ * Most fields read the SettingsManager's merged (global + project) view. Context trust,
+ * Dispatch Arbiter, and the Dashboard automation setup directory read global settings only.
  * These seed fresh runtimes, NOT the live session state (`get_state` reports that). Extracted
  * (like {@link deleteSessionForRpc}) so it is unit-testable without a live RPC session.
  */
@@ -554,6 +556,7 @@ export function getSettingsForRpc(
 		singleModelMode: settingsManager.getSingleModelMode(),
 		agentModels: settingsManager.getAgentModels(),
 		subagentArbiter: settingsManager.getGlobalSubagentArbiterSettings(),
+		automationSetupDir: settingsManager.getGlobalAutomationSetupDir(),
 		tabTitle: settingsManager.getTabTitleSettings(),
 		enabledModels,
 		resolvedScopedModels: scopeResolution.models.map(({ model, thinkingLevel }) => ({
@@ -678,6 +681,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"agentModels",
 	"enabledModels",
 	"subagentArbiter",
+	"automationSetupDir",
 	"tabTitle",
 ] as const;
 
@@ -972,6 +976,11 @@ export async function setSettingsForRpc(
 	const hasAnySetting = SETTINGS_UPDATE_KEYS.some((key) => update[key] !== undefined);
 	if (!hasAnySetting) {
 		return { ok: false, error: "set_settings requires at least one setting to change" };
+	}
+
+	const automationSetupDir = update.automationSetupDir;
+	if (automationSetupDir !== undefined && automationSetupDir !== null && typeof automationSetupDir !== "string") {
+		return { ok: false, error: "Invalid automationSetupDir: must be a string or null" };
 	}
 
 	if (update.defaultThinkingLevel !== undefined) {
@@ -1301,6 +1310,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.subagentArbiter !== undefined) {
 				settingsManager.setGlobalSubagentArbiterSettings(subagentArbiter);
+			}
+			if (automationSetupDir !== undefined) {
+				settingsManager.setGlobalAutomationSetupDir(automationSetupDir ?? undefined);
 			}
 			if (tabTitle !== undefined) {
 				settingsManager.setGlobalTabTitleSettings(tabTitle);
@@ -2040,7 +2052,10 @@ export async function runRpcMode(
 			// Force the next stats request to await a fresh per-session cost scan.
 			subagentCostGeneration++;
 		}
-		if (tabTitleGenerator && !session.sessionName) {
+		// Unattended roles already have an approved run name and must not send work
+		// context to the model selected for automatic titles.
+		const role = session.automationRole;
+		if (tabTitleGenerator && !session.sessionName && role !== "orchestrator" && role !== "guard") {
 			if (event.type === "tool_execution_end") {
 				tabTitleGenerator.onToolEnd({
 					toolName: event.toolName,
@@ -2057,11 +2072,41 @@ export async function runRpcMode(
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
+		if (
+			session.automationRole === "setup" &&
+			["prompt", "steer", "follow_up", "abort", "reload", "new_session", "switch_session"].includes(command.type)
+		)
+			session.invalidateAutomationDraft();
 
 		switch (command.type) {
 			// =================================================================
 			// Prompting
 			// =================================================================
+
+			case "configure_automation": {
+				await session.configureAutomation(command.options, (draft) =>
+					output({ type: "automation_approved", draft, setupFile: session.sessionFile }),
+				);
+				return success(id, command.type);
+			}
+			case "automation_turn": {
+				const role = session.automationRole;
+				if (role !== "orchestrator" && role !== "guard") {
+					return error(id, command.type, "automation_turn requires an orchestrator or guard session");
+				}
+				if (
+					typeof command.message !== "string" ||
+					(command.feedback !== undefined && typeof command.feedback !== "boolean")
+				) {
+					return error(
+						id,
+						command.type,
+						"automation_turn expects a string message and an optional boolean feedback",
+					);
+				}
+				const text = await session.automationTurn(command.message, command.feedback);
+				return success(id, command.type, { text });
+			}
 
 			case "prompt": {
 				const rejection = getBuiltinPromptRejection(command.message);
@@ -2149,7 +2194,18 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "get_state": {
-				return success(id, "get_state", getStateForRpc(session, modelFallbackMessage));
+				const state = getStateForRpc(session, modelFallbackMessage);
+				const partial = command.includeStreamMessage === true ? session.agent.state.streamMessage : null;
+				if (partial?.role === "assistant") {
+					const { role, model, timestamp } = partial;
+					state.streamMessage = {
+						role,
+						model,
+						timestamp,
+						content: partial.content.filter((block) => block.type === "text" || block.type === "thinking"),
+					};
+				}
+				return success(id, "get_state", state);
 			}
 
 			case "get_dashboard_snapshot": {

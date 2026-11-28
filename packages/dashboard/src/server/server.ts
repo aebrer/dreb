@@ -8,9 +8,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { checkSessionFile } from "@dreb/coding-agent";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
@@ -32,6 +32,7 @@ import {
 	MAX_SESSION_PREVIEW_CHARACTERS,
 } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
+import { AutomationBusy, AutomationInput, AutomationNotFound, AutomationRuns } from "./automation-runs.js";
 import {
 	DASHBOARD_IMAGE_ID_PATTERN,
 	DashboardImageNotFoundError,
@@ -43,7 +44,7 @@ import { EventHub, formatHeartbeatFrame, type SseWriteMetadata } from "./event-h
 import { defaultPlaces, FileApi, resolveExistingDirectory } from "./files.js";
 import { ImagePreviewWorker } from "./image-preview.js";
 import { MemoryApi } from "./memories.js";
-import type { DashboardRuntimeSnapshot, RuntimePool } from "./runtime-pool.js";
+import type { DashboardRuntimeSnapshot, RuntimeHandle, RuntimePool } from "./runtime-pool.js";
 import { readSubagentMessages, SubagentSessionLogNotFoundError } from "./subagent-log.js";
 
 export type DashboardServerApp = express.Express & {
@@ -65,6 +66,9 @@ export interface DashboardSessionInfoSource {
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
 	pool: RuntimePool;
+	automationSetupDir?: string | (() => string | undefined);
+	automationHistoryFile?: string;
+	automationSessionDir?: string;
 	/** Directory of built client assets; omit to skip static serving (tests). */
 	staticDir?: string;
 	/** Session listing (cross-project) — injected so tests can stub it. */
@@ -243,6 +247,11 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		new MemoryApi(options.memoryHomeDir ?? homedir(), (op, scopeId, detail) =>
 			log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
 		);
+	const runs = new AutomationRuns({
+		historyFile: options.automationHistoryFile,
+		warn: (message) => log(`automation history: ${message}`),
+		start: (cwd, role, spec) => pool.startAutomationChild(cwd, role, spec, options.automationSessionDir),
+	});
 	const hub = options.eventHub ?? new EventHub();
 	const images = options.imageService ?? new DashboardImageService(new ImagePreviewWorker());
 	hub.setEventProjector((key, event) => (key ? images.projectEvent(event, { runtimeKey: key }) : event));
@@ -261,7 +270,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const app = express() as DashboardServerApp;
 	let closePromise: Promise<void> | undefined;
 	app.closeDashboard = () => {
-		closePromise ??= images.close();
+		closePromise ??= Promise.all([images.close(), runs.close()]).then(() => {});
 		return closePromise;
 	};
 	app.disable("x-powered-by");
@@ -649,7 +658,12 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	const getLiveFleet = async (): Promise<FleetDto> => ({
-		runtimes: await Promise.all(pool.list().map((handle) => pool.describe(handle))),
+		runtimes: await Promise.all(
+			pool
+				.list()
+				.filter((handle) => handle.automationOwner === undefined)
+				.map((handle) => pool.describe(handle)),
+		),
 		diskSessions: [],
 		diskSessionsComplete: false,
 	});
@@ -660,14 +674,20 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	};
 
 	/** Map the one-RPC parent snapshot consistently for recovery and drill-in hydration. */
-	const toRuntimeHydration = (snapshot: DashboardRuntimeSnapshot): RuntimeHydrationDto => ({
-		key: snapshot.key,
-		state: snapshot.snapshot.state,
-		messages: images.project(snapshot.snapshot.messages, { runtimeKey: snapshot.key }),
-		backgroundAgents: snapshot.snapshot.backgroundAgents,
-		pendingExtensionUiRequests: snapshot.snapshot.pendingExtensionUiRequests ?? [],
-		barrierSeq: snapshot.barrierSeq,
-	});
+	const toRuntimeHydration = (snapshot: DashboardRuntimeSnapshot): RuntimeHydrationDto => {
+		const handle = pool.get(snapshot.key);
+		return {
+			...(handle?.automationOwner
+				? { automationSetup: { cwd: handle.cwd, settingsRevision: handle.settingsRevision } }
+				: {}),
+			key: snapshot.key,
+			state: snapshot.snapshot.state,
+			messages: images.project(snapshot.snapshot.messages, { runtimeKey: snapshot.key }),
+			backgroundAgents: snapshot.snapshot.backgroundAgents,
+			pendingExtensionUiRequests: snapshot.snapshot.pendingExtensionUiRequests ?? [],
+			barrierSeq: snapshot.barrierSeq,
+		};
+	};
 
 	app.get("/api/fleet/live", (_req, res) => {
 		getLiveFleet()
@@ -717,7 +737,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			let barrierSeq: number;
 			if (activeKey) {
 				const handle = pool.get(activeKey);
-				if (!handle) {
+				if (!handle || (handle.automationOwner && handle.automationOwner !== owner(req))) {
 					const body: DashboardResyncDto = { fleet: await getFleet(), barrierSeq: hub.currentSequence };
 					res.json(body);
 					return;
@@ -752,6 +772,302 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		})().catch((err) => res.status(502).json({ error: String(err?.message ?? err) }));
 	});
 
+	function owner(req: AuthedRequest): string {
+		const decision = req.authDecision;
+		if (!decision?.allowed) throw new Error("Not authenticated");
+		return decision.mode === "remote" ? `remote:${decision.identity.loginName}` : "local";
+	}
+	const automationError = (res: Response, err: unknown): void => {
+		if (err instanceof AutomationNotFound) res.status(404).json({ error: String(err) });
+		else if (err instanceof AutomationBusy) res.status(409).json({ error: String(err) });
+		else if (err instanceof AutomationInput) res.status(400).json({ error: String(err) });
+		else res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+	};
+	app.get("/api/automations", (req, res) =>
+		res.json({
+			runs: runs.list(owner(req)),
+			setups: pool.automationSetups(owner(req)),
+			historyIssue: runs.historyIssue,
+			saveIssue: runs.saveIssue,
+		}),
+	);
+	app.post("/api/automations/:id/stop", (req, res) => {
+		try {
+			res.json(runs.stop(owner(req), req.params.id));
+		} catch (err) {
+			automationError(res, err);
+		}
+	});
+	// A finished run keeps its approved draft, so a retry needs no new setup conversation.
+	app.post("/api/automations/:id/relaunch", (req, res) => {
+		try {
+			res.status(201).json(runs.relaunch(owner(req), req.params.id));
+		} catch (err) {
+			automationError(res, err);
+		}
+	});
+	app.patch("/api/automations/:id", (req, res) => {
+		const name = typeof req.body?.name === "string" ? req.body.name : "";
+		try {
+			res.json(runs.rename(owner(req), req.params.id, name));
+		} catch (err) {
+			automationError(res, err);
+		}
+	});
+	app.delete("/api/automations/:id", (req, res) => {
+		try {
+			runs.delete(owner(req), req.params.id);
+			res.json({ ok: true });
+		} catch (err) {
+			automationError(res, err);
+		}
+	});
+	function automationTranscript(ownerId: string, id: string, ref: string) {
+		const run = runs.get(ownerId, id);
+		const file =
+			ref === "setup"
+				? run?.setupFile
+				: ref === "work"
+					? run?.workFile
+					: /^guard-(0|[1-9]\d*)$/.test(ref)
+						? run?.guardFiles[Number(ref.slice(6))]
+						: undefined;
+		return file ? { file, running: run?.status === "working" || run?.status === "reviewing" } : undefined;
+	}
+
+	const automationImageScope = (id: string, ref: string, file: string): DashboardImageScope => ({
+		automation: { id, ref, file },
+	});
+
+	app.get("/api/automations/:id/transcripts/:ref", async (req, res) => {
+		const ownerId = owner(req);
+		const { id, ref } = req.params;
+		const source = automationTranscript(ownerId, id, ref);
+		if (!source) {
+			res.status(404).json({ error: "Unknown automation transcript" });
+			return;
+		}
+		try {
+			const { file, running } = source;
+			const streamMessage = running && ref !== "setup" ? await runs.streamMessage(ownerId, id, file) : undefined;
+			let messages: unknown[];
+			try {
+				messages = readSubagentMessages({ sessionFile: file });
+			} catch (err) {
+				// A new unattended session may not flush its log until its first answer completes.
+				if (!running || ref === "setup" || !(err instanceof SubagentSessionLogNotFoundError)) throw err;
+				messages = [];
+			}
+			// If this reply finished during the snapshot RPC, prefer its saved version.
+			const saved =
+				streamMessage &&
+				messages.some((message) => {
+					const entry = message as { role?: string; timestamp?: number } | null;
+					return entry?.role === "assistant" && entry.timestamp === streamMessage.timestamp;
+				});
+			res.json({
+				messages: images.project(messages, automationImageScope(id, ref, file)),
+				running,
+				streamMessage: saved ? undefined : streamMessage,
+			});
+		} catch (err) {
+			handleMemoryError(res, err);
+		}
+	});
+	interface SetupSource {
+		owner: string;
+		cwd: string;
+		file: string;
+		sessionId: string;
+		hadMessages: boolean;
+		requireFile: boolean;
+	}
+	const liveSetups = new WeakMap<RuntimeHandle, SetupSource>();
+	// Closed keys are ephemeral capabilities, not a second on-disk session inventory.
+	const closedSetups = new Map<string, SetupSource>();
+	const resumingSetups = new Set<string>();
+	const maxClosedSetups = 256;
+	// A closed setup stays resumable so a launched run's own setup can be reopened and edited.
+	function retireClosedSetup(handle: RuntimeHandle, setup: SetupSource): void {
+		setup.hadMessages ||= (handle.lastState?.messageCount ?? 0) > 0;
+		setup.requireFile ||= existsSync(setup.file);
+		if (closedSetups.size >= maxClosedSetups) {
+			const oldest = closedSetups.keys().next();
+			if (!oldest.done) closedSetups.delete(oldest.value);
+		}
+		closedSetups.set(handle.key, setup);
+	}
+
+	async function startSetup(who: string, cwd: string, source?: SetupSource) {
+		let path: string | undefined;
+		if (source) {
+			const stat = lstatSync(source.file, { throwIfNoEntry: false });
+			// SessionManager may not have written a fresh session yet. Never pass a missing
+			// or invalid file to --session: opening it may silently create a new session.
+			if (stat || source.requireFile || source.hadMessages) {
+				const check = stat?.isFile() && checkSessionFile(source.file);
+				if (!check || !check.ok || check.header.id !== source.sessionId)
+					throw Object.assign(new Error("Recorded setup transcript is missing or invalid"), { status: 409 });
+				path = check.path;
+			}
+		}
+		const h = await pool.create(cwd, path, { sessionDir: options.automationSessionDir, owner: who });
+		try {
+			await h.client.configureAutomation(
+				path && source ? { role: "setup", resumeSessionId: source.sessionId } : { role: "setup" },
+			);
+			const info = await pool.describe(h);
+			const { sessionFile: file, sessionId, messageCount } = info.state;
+			if (!file || !isAbsolute(file) || !sessionId || (path && (path !== file || source?.sessionId !== sessionId)))
+				throw new Error("Unexpected setup session identity");
+			if (source?.hadMessages && !messageCount) throw new Error("Recorded setup transcript loaded without messages");
+			const setup = {
+				owner: who,
+				cwd,
+				file,
+				sessionId,
+				hadMessages: messageCount > 0,
+				requireFile: path !== undefined,
+			};
+			liveSetups.set(h, setup);
+			h.client.onEvent((event) => {
+				if (event.type === "message_start" || event.type === "message_end") setup.hadMessages = true;
+				if (event.type !== "automation_approved" || pool.get(h.key) !== h) return;
+				try {
+					if (event.setupFile !== setup.file) throw new Error("the setup session changed since creation");
+					// The run id is this setup generation's own key. A resumed setup is a new
+					// generation, so re-approving a revised draft there starts a new run instead
+					// of colliding with the run the earlier generation already launched. Within one
+					// generation the child cannot emit a second approval at all.
+					runs.launch(who, h.key, setup.file, event.draft, { id: setup.sessionId, cwd: setup.cwd });
+				} catch (err) {
+					const reason = err instanceof Error ? err.message : String(err);
+					hub.publish(h.key, {
+						type: "extension_ui_request",
+						method: "notify",
+						notifyType: "error",
+						message: `The automation did not start: ${reason}. Nothing is running.`,
+					});
+					return;
+				}
+				// The approved conversation no longer controls the run, so the host closes it
+				// instead of leaving a live chat whose messages do nothing. The transcript stays
+				// readable and the closed setup stays resumable.
+				retireClosedSetup(h, setup);
+				void pool.stop(h.key);
+			});
+			return info;
+		} catch (err) {
+			await pool.stop(h.key);
+			throw err;
+		}
+	}
+
+	app.post("/api/automations/setup", async (req, res) => {
+		if (runs.historyIssue) {
+			res.status(503).json({ error: runs.historyIssue });
+			return;
+		}
+		try {
+			const configured =
+				typeof options.automationSetupDir === "function"
+					? options.automationSetupDir()
+					: options.automationSetupDir;
+			const cwd = await resolveExistingDirectory(configured ?? homedir());
+			res.status(201).json(await startSetup(owner(req), cwd));
+		} catch (err) {
+			handleMemoryError(res, err);
+		}
+	});
+	async function resumeSetup(source: SetupSource, requestedCwd?: string) {
+		if (resumingSetups.has(source.file))
+			throw Object.assign(new Error("Setup resume already in progress"), { status: 409 });
+		resumingSetups.add(source.file);
+		try {
+			const active = await pool.findBySessionFile(source.file);
+			if (active) {
+				if (!requestedCwd && liveSetups.get(active)?.owner === source.owner) return pool.describe(active);
+				throw Object.assign(new Error("Setup transcript is already open"), { status: 409 });
+			}
+			const cwd = await resolveExistingDirectory(requestedCwd ?? source.cwd);
+			const info = await startSetup(source.owner, cwd, source);
+			for (const [key, previous] of closedSetups) {
+				if (previous.owner === source.owner && previous.file === source.file) closedSetups.delete(key);
+			}
+			return info;
+		} finally {
+			resumingSetups.delete(source.file);
+		}
+	}
+
+	app.post("/api/automations/:id/resume-setup", async (req, res) => {
+		const who = owner(req);
+		const run = runs.get(who, req.params.id);
+		if (!run) {
+			res.status(404).json({ error: "Unknown automation" });
+			return;
+		}
+		try {
+			if (!isAbsolute(run.setupFile) || !lstatSync(run.setupFile, { throwIfNoEntry: false })?.isFile()) {
+				res.status(409).json({ error: "Recorded setup transcript is missing or invalid" });
+				return;
+			}
+			const check = checkSessionFile(run.setupFile);
+			if (!check.ok || (run.setupSession && check.header.id !== run.setupSession.id)) {
+				res.status(409).json({ error: "Recorded setup transcript is missing or invalid" });
+				return;
+			}
+			res.status(201).json(
+				await resumeSetup({
+					owner: who,
+					cwd: run.setupSession?.cwd ?? check.header.cwd,
+					file: check.path,
+					sessionId: check.header.id,
+					hadMessages: true,
+					requireFile: true,
+				}),
+			);
+		} catch (err) {
+			handleMemoryError(res, err);
+		}
+	});
+
+	app.post("/api/automations/setup/:key/resume", async (req, res) => {
+		const key = req.params.key;
+		const who = owner(req);
+		const source = closedSetups.get(key);
+		if (!source || source.owner !== who) {
+			if (pool.get(key)?.automationOwner === who) res.status(409).json({ error: "Setup is still open" });
+			else res.status(404).json({ error: "Unknown closed setup" });
+			return;
+		}
+		const body = req.body ?? {};
+		if (
+			Array.isArray(body) ||
+			Object.keys(body).some((name) => name !== "cwd") ||
+			(body.cwd !== undefined && typeof body.cwd !== "string")
+		) {
+			res.status(400).json({ error: "Expected only an optional cwd" });
+			return;
+		}
+		try {
+			res.status(201).json(await resumeSetup(source, body.cwd));
+		} catch (err) {
+			handleMemoryError(res, err);
+		}
+	});
+	app.use("/api/runtimes/:key", (req, res, next) => {
+		const h = pool.get(String(req.params.key));
+		if (h?.automationOwner && (h.automationOwner !== owner(req) || !liveSetups.has(h))) {
+			res.status(404).json({ error: "Unknown setup session" });
+			return;
+		}
+		if (h?.automationOwner && req.method === "POST" && /^\/(?:new-session|fork|resume|import)\/?$/i.test(req.path)) {
+			res.status(409).json({ error: "Setup chats keep the same transcript. Use New automation to start over." });
+			return;
+		}
+		next();
+	});
 	// -- runtimes ---------------------------------------------------------------
 	app.post("/api/runtimes", (req, res) => {
 		(async () => {
@@ -767,6 +1083,8 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	app.delete("/api/runtimes/:key", (req, res) => {
+		const handle = pool.get(req.params.key);
+		const setup = handle && liveSetups.get(handle);
 		pool
 			.stop(req.params.key)
 			.then((stopped) => {
@@ -774,6 +1092,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 					res.status(404).json({ error: `No runtime ${String(req.params.key)}` });
 					return;
 				}
+				if (setup && handle) retireClosedSetup(handle, setup);
 				images.removeRuntime(String(req.params.key));
 				log(`runtime ${String(req.params.key)} stopped`);
 				res.json({ ok: true });
@@ -854,6 +1173,18 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			}
 		}
 	};
+
+	app.get("/api/automations/:runId/transcripts/:ref/images/:id/:variant", (req, res) => {
+		const { runId, ref, variant } = req.params;
+		const source = automationTranscript(owner(req), runId, ref);
+		if (!source || (variant !== "preview" && variant !== "original")) {
+			res.status(404).json({ error: "Unknown automation transcript image" });
+			return;
+		}
+		void sendImage(req, res, automationImageScope(runId, ref, source.file), variant, async () =>
+			readSubagentMessages({ sessionFile: source.file }),
+		);
+	});
 
 	app.get("/api/runtimes/:key/images/:id/:variant", (req, res) => {
 		const key = String(req.params.key);
@@ -1146,6 +1477,10 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			return;
 		}
 		try {
+			if (req.body?.type !== "extension_ui_response" || typeof req.body.id !== "string") {
+				res.status(400).json({ error: "Expected extension UI response" });
+				return;
+			}
 			handle.client.sendExtensionUIResponse(req.body);
 			res.json({ ok: true });
 		} catch (err) {

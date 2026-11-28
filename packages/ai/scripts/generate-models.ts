@@ -5,6 +5,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Api, KnownProvider, Model } from "../src/types.js";
 import { deriveCodexModels } from "./codex-models.js";
+import { getCopilotModelTransport } from "./copilot-model-transport.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -498,23 +499,10 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				if (m.tool_call !== true) continue;
 				if (m.status === "deprecated") continue;
 
-				// Claude Opus/Sonnet/Haiku 4.x and later route to Copilot's Anthropic Messages
-				// endpoint (/v1/messages), which honors adaptive thinking and native effort.
-				// Fable/Mythos stay on OpenAI completions until dreb models their thinking rules.
-				const isCopilotClaude = /^claude-(haiku|sonnet|opus)-([4-9]|\d{2,})([.\-]|$)/.test(modelId);
-				// gpt-5 and gpt-6 models require responses API, others use completions
-				const needsResponsesApi = modelId.startsWith("gpt-5") || modelId.startsWith("gpt-6") || modelId.startsWith("oswe");
-
-				const api: Api = isCopilotClaude
-					? "anthropic-messages"
-					: needsResponsesApi
-						? "openai-responses"
-						: "openai-completions";
-
 				const copilotModel: Model<any> = {
 					id: modelId,
 					name: m.name || modelId,
-					api,
+					...getCopilotModelTransport(modelId),
 					provider: "github-copilot",
 					baseUrl: "https://api.individual.githubcopilot.com",
 					reasoning: m.reasoning === true,
@@ -528,14 +516,6 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					contextWindow: m.limit?.context || 128000,
 					maxTokens: m.limit?.output || 8192,
 					headers: { ...COPILOT_STATIC_HEADERS },
-					// compat only applies to openai-completions
-					...(api === "openai-completions" ? {
-						compat: {
-							supportsStore: false,
-							supportsDeveloperRole: false,
-							supportsReasoningEffort: false,
-						},
-					} : {}),
 				};
 
 				models.push(copilotModel);

@@ -8,6 +8,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { getCopilotTestModel } from "./fixtures/copilot-models.js";
+import { getMistralTestModel } from "./fixtures/mistral-models.js";
 import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
 import { isLiveApiEnabled } from "./live-api.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
@@ -360,22 +361,20 @@ describe("AI Providers Empty Message Tests", () => {
 	});
 
 	describe.skipIf(!isLiveApiEnabled() || !process.env.MISTRAL_API_KEY)("Mistral Provider Empty Messages", () => {
-		const llm = getModel("mistral", "devstral-medium-latest");
-
 		it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
-			await testEmptyMessage(llm);
+			await testEmptyMessage(getMistralTestModel());
 		});
 
 		it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
-			await testEmptyStringMessage(llm);
+			await testEmptyStringMessage(getMistralTestModel());
 		});
 
 		it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
-			await testWhitespaceOnlyMessage(llm);
+			await testWhitespaceOnlyMessage(getMistralTestModel());
 		});
 
 		it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
-			await testEmptyAssistantMessage(llm);
+			await testEmptyAssistantMessage(getMistralTestModel());
 		});
 	});
 

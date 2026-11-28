@@ -110,6 +110,38 @@ Response:
 
 The `images` field is optional. Each image uses `ImageContent` format: `{"type": "image", "data": "base64-encoded-data", "mimeType": "image/png"}`.
 
+#### automation_turn
+
+Run one turn on an `orchestrator` or `guard` automation session. Unlike `prompt`, this command replies **after** the turn settles. Events still stream; an `agent_end` event can precede automatic retry or compaction, so wait for the matching response instead.
+
+```json
+{"id":"turn-1","type":"automation_turn","message":"Summarize the changes."}
+```
+
+```json
+{"id":"turn-1","type":"response","command":"automation_turn","success":true,"data":{"text":"The changes are ready for review."}}
+```
+
+The initial message is sent without prompt-template or skill expansion. Set `"feedback": true` to start a turn with a visible custom message labeled `automation-guard-feedback` instead. Automation sessions use their role's foreground tools, not `subagent` or `wait`. A second in-flight automation turn, outstanding background work, terminal error, abort, failed transcript append or compaction, or lack of a fresh assistant answer returns `success: false`.
+
+`await client.automationTurn(message, feedback?)` returns the final assistant text. It has no client-side request timeout and rejects if the RPC process exits.
+
+Before the first prompt, send `configure_automation` once on a fresh, idle session (`await client.configureAutomation(options)`). Use a separate session for each role. For example, configure the interactive setup session with:
+
+```json
+{"id":"setup-1","type":"configure_automation","options":{"role":"setup"}}
+```
+
+Use ordinary `prompt` turns for setup. Only setup can emit `automation_approved`: selecting **Approve** on the full proposal emits `{"type":"automation_approved","draft":...,"setupFile":...}`. The draft contains `name` (a short job title), `instructions`, `cwd`, `orchestrator` and `guard`; `setupFile` identifies the setup transcript. **Request changes**, dismissal and chat text do not emit this event.
+
+For each unattended session, copy the role's exact `provider`, `model` and `tools` from the approved draft into `options` alongside `role`. For example:
+
+```json
+{"id":"guard-1","type":"configure_automation","options":{"role":"guard","provider":"anthropic","model":"claude-opus-5-5","tools":["read","grep"]}}
+```
+
+An unknown model, missing credentials or invalid tool list fails configuration; nothing is silently substituted. Once configured, use `automation_turn` for work or review. See [Automate](dashboard.md#automate) for the role catalogs and review loop.
+
 #### steer
 
 Queue a steering message while the agent is running. It is delivered after the current assistant turn finishes executing its tool calls, before the next LLM call. Skill commands and prompt templates are expanded. Extension commands are not allowed (use `prompt` instead).
@@ -229,6 +261,8 @@ Get current session state.
 ```json
 {"type": "get_state"}
 ```
+
+Set `"includeStreamMessage": true` to include `streamMessage` when an assistant reply is in flight. This is a snapshot of its text and thinking, not a saved message or a settled turn result. It is omitted by default and when there is no in-flight reply.
 
 Response:
 ```json
@@ -1465,6 +1499,7 @@ Response:
       "thinking": "medium",
       "guidePath": "~/.dreb/agent/model-routing-guide.md"
     },
+    "automationSetupDir": "~/dreb/automation-setups",
     "tabTitle": {
       "enabled": true,
       "model": "anthropic/claude-haiku-4-5",
@@ -1655,6 +1690,7 @@ Valid keys and values:
 | `enabledModels` | Non-empty ordered array of available exact `provider/model` references, or explicit `null` to remove the global filter and restore implicit all. Duplicate, glob, fuzzy, and thinking-suffix entries are rejected. |
 | `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
 | `tabTitle` | Partial object. Keys: `enabled` boolean, exact available `model` (`null` removes the pin: parent directly in single-model mode, otherwise Explore-agent routing), positive whole-number `triggerAfter`, positive whole-number `maxTitleLength`. Unknown nested keys and an empty object are rejected. |
+| `automationSetupDir` | Path string or `null`; global-only, so a project `settings.json` cannot redirect setup chats. Starting directory for **new** Dashboard automation setup conversations: absolute paths stay absolute, `~` and `~/...` expand from the user home directory, and relative paths resolve against the Dashboard's startup directory. The directory must already exist. `null` clears it and falls back to the host home directory. It is read for each new setup, so no restart is needed, and it never changes where an approved job runs. Dashboard Settings exposes the same value. See [Settings](settings.md#automation). |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 

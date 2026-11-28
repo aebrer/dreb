@@ -8,7 +8,7 @@
 import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { Modal, relativeTime, Topbar } from "../components/common.js";
+import { FleetCard, Modal, relativeTime, Topbar } from "../components/common.js";
 import { FleetSortHeader, FleetSortReset, fleetColumnSort } from "../components/fleet-sort-headers.js";
 import { RenameSessionModal } from "../components/rename-session-modal.js";
 import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
@@ -58,7 +58,7 @@ function SessionTime(props: { value: string; label: string }): JSX.Element {
 function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.Element {
 	const status = () => sessionCardStatus(props.store, props.runtime);
 	return (
-		<article class="session-card" classList={{ attention: status() === "attention", error: status() === "error" }}>
+		<FleetCard status={status()}>
 			<SessionCardSummary store={props.store} runtime={props.runtime} />
 			<div class="session-actions">
 				<button
@@ -79,7 +79,7 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 					stop runtime
 				</button>
 			</div>
-		</article>
+		</FleetCard>
 	);
 }
 

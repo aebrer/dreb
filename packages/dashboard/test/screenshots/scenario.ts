@@ -701,7 +701,7 @@ export interface SubagentScenario {
 
 export interface LiveRuntimeScenario {
 	/** Stable handle for shot definitions. */
-	slug: "tidewatch" | "pantry" | "fieldNotes" | "kiln";
+	slug: "tidewatch" | "pantry" | "fieldNotes" | "kiln" | "setup";
 	session: SessionFixture;
 	model: StateModel;
 	thinkingLevel: RpcSessionState["thinkingLevel"];
@@ -726,6 +726,30 @@ export interface LiveRuntimeScenario {
 	 * instead of the generic state restored from a snapshot.
 	 */
 	liveEvents?: RpcEvent[];
+}
+
+export function emptySetupScenario(cwd: string): LiveRuntimeScenario {
+	return {
+		slug: "setup",
+		session: new SessionBuilder({
+			id: "3121ec59-40a4-4837-a5b5-0c5f0e5a138c",
+			cwd,
+			startedAt: NOW_MS,
+			name: "Automation setup",
+			model: OPUS,
+		}).build(),
+		model: MODELS.opus,
+		thinkingLevel: "low",
+		status: "idle",
+		createdAt: NOW_MS,
+		lastActivity: NOW_MS,
+		tasks: [],
+		contextTokens: 0,
+		tokensTotal: 0,
+		cost: 0,
+		gitBranch: "",
+		subagents: [],
+	};
 }
 
 // ---------------------------------------------------------------------------

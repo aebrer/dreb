@@ -364,6 +364,8 @@ export interface ExtensionUiRequestDto {
  */
 export interface RuntimeHydrationDto {
 	key: string;
+	/** Setup sessions are not Fleet members; hydrate their host metadata with the Session state. */
+	automationSetup?: Pick<RuntimeInfoDto, "cwd" | "settingsRevision">;
 	state: SessionStateDto;
 	messages: unknown[];
 	backgroundAgents: BackgroundAgentDto[];
@@ -562,6 +564,8 @@ export interface SettingsDto {
 	agentModels?: Record<string, string[]>;
 	/** Global-only Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettingsDto | null;
+	/** Global-only path for new automation setup sessions. Absent means the host home directory. */
+	automationSetupDir?: string;
 	/** Effective automatic tab-title configuration. */
 	tabTitle?: TabTitleSettingsDto;
 	/** Raw effective persisted patterns; absent means future-inclusive implicit all. */
@@ -574,7 +578,7 @@ export interface SettingsDto {
 	enabledModelsSource: "default" | "global" | "project";
 }
 
-/** Dashboard settings mutation payload. Unlike a snapshot, null explicitly clears enabledModels, and tabTitle.model: null removes the pinned title model. */
+/** Dashboard settings mutation payload. Null clears enabledModels, automationSetupDir, or the tabTitle.model pin. */
 export type SettingsUpdateDto = Partial<
 	Pick<
 		SettingsDto,
@@ -598,7 +602,7 @@ export type SettingsUpdateDto = Partial<
 		| "agentModels"
 		| "subagentArbiter"
 	>
-> & { enabledModels?: string[] | null; tabTitle?: TabTitleSettingsUpdateDto };
+> & { enabledModels?: string[] | null; tabTitle?: TabTitleSettingsUpdateDto; automationSetupDir?: string | null };
 
 export type SettingsSaveResultDto = SettingsDto & { warnings?: string[] };
 
