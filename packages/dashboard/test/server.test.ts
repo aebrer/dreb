@@ -201,10 +201,13 @@ it.each([false, true])("serves Fleet if startup history repair cannot be saved (
 		const inventory = (await (await fetch(`${base}/api/automations`)).json()) as {
 			runs: AutomationRun[];
 			setups: unknown[];
+			saveIssue?: string;
 		};
 		expect(inventory.runs).toEqual([expect.objectContaining({ id: "saved-run", status: "interrupted" })]);
 		expect(inventory.setups).toEqual([]);
 		expect(logger).toHaveBeenCalledWith(expect.stringContaining("Could not save repaired automation history"));
+		// Recovered-in-memory records are announced, because a restart would lose them again.
+		expect(inventory.saveIssue).toContain("out of date after a restart");
 		expect(repair).toHaveBeenCalledOnce();
 		// A second boot reads the canonical path, not the archive. Keep that source even if
 		// the first host never gets another chance to save.
@@ -565,9 +568,17 @@ describe("closed automation setup resume", () => {
 			save.mockRestore();
 			pending.resolve("Too late");
 		}
-		const { runs } = (await (await fetch(`${base}/api/automations`)).json()) as { runs: AutomationRun[] };
-		expect(runs[0]).toMatchObject({ status: "stopped", report: expect.stringContaining("Verify the index.") });
-		expect(runs[0].report).toContain("Stopped by user.");
+		const inventory = (await (await fetch(`${base}/api/automations`)).json()) as {
+			runs: AutomationRun[];
+			saveIssue?: string;
+		};
+		expect(inventory.runs[0]).toMatchObject({
+			status: "stopped",
+			report: expect.stringContaining("Verify the index."),
+		});
+		expect(inventory.runs[0].report).toContain("Stopped by user.");
+		// The same failure is visible to anyone who opens Automate, not only to this Stop response.
+		expect(inventory.saveIssue).toContain("out of date after a restart");
 		expect(close).toHaveBeenCalledOnce();
 		expect(child).toHaveBeenCalledTimes(2);
 	});

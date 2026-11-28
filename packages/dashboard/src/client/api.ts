@@ -135,6 +135,7 @@ export const api = {
 			runs: AutomationRun[];
 			setups?: import("../shared/protocol.js").FleetRuntimeSnapshotDto[];
 			historyIssue?: string;
+			saveIssue?: string;
 		}>("/api/automations", { signal }),
 	resumeAutomationSetup: (key: string, cwd?: string) =>
 		request<RuntimeInfoDto>(`/api/automations/setup/${encodeURIComponent(key)}/resume`, json({ cwd })),

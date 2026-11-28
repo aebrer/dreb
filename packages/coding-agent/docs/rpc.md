@@ -1499,6 +1499,7 @@ Response:
       "thinking": "medium",
       "guidePath": "~/.dreb/agent/model-routing-guide.md"
     },
+    "automationSetupDir": "~/dreb/automation-setups",
     "tabTitle": {
       "enabled": true,
       "model": "anthropic/claude-haiku-4-5",
@@ -1689,6 +1690,7 @@ Valid keys and values:
 | `enabledModels` | Non-empty ordered array of available exact `provider/model` references, or explicit `null` to remove the global filter and restore implicit all. Duplicate, glob, fuzzy, and thinking-suffix entries are rejected. |
 | `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
 | `tabTitle` | Partial object. Keys: `enabled` boolean, exact available `model` (`null` removes the pin: parent directly in single-model mode, otherwise Explore-agent routing), positive whole-number `triggerAfter`, positive whole-number `maxTitleLength`. Unknown nested keys and an empty object are rejected. |
+| `automationSetupDir` | Path string or `null`; global-only, so a project `settings.json` cannot redirect setup chats. Starting directory for **new** Dashboard automation setup conversations: absolute paths stay absolute, `~` and `~/...` expand from the user home directory, and relative paths resolve against the Dashboard's startup directory. The directory must already exist. `null` clears it and falls back to the host home directory. It is read for each new setup, so no restart is needed, and it never changes where an approved job runs. Dashboard Settings exposes the same value. See [Settings](settings.md#automation). |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 

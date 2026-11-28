@@ -840,6 +840,31 @@ describe("automation inventory and saved records", () => {
 		expect(inventory.mock.calls[1][0]?.aborted).toBe(true);
 	});
 
+	it("warns when automation history could not be saved and stays dismissed while unchanged", async () => {
+		vi.useFakeTimers();
+		const stale =
+			"Dashboard could not save automation history. Run records and final reports may be out of date after a restart.";
+		const recovered = "Automation history is behind again after the store failed a second time.";
+		const inventory = vi.mocked(api.automations).mockClear().mockResolvedValue({ runs: [], saveIssue: stale });
+		const store = makeStore();
+		const { container: el, dispose } = mountDisposable(() => <AutomateScreen store={store} />);
+		try {
+			const banners = () => Array.from(el.querySelectorAll(".banner.warning"));
+			await vi.waitFor(() => expect(banners()).toHaveLength(1));
+			expect(banners()[0].textContent).toContain("out of date after a restart");
+			banners()[0].querySelector<HTMLElement>(".banner-dismiss")!.click();
+			// Polling keeps reporting the same fault; it does not reopen a dismissed warning.
+			await vi.advanceTimersByTimeAsync(9_000);
+			expect(banners()).toHaveLength(0);
+			inventory.mockResolvedValue({ runs: [], saveIssue: recovered });
+			await vi.advanceTimersByTimeAsync(3_000);
+			expect(banners().map((banner) => banner.textContent)).toEqual([expect.stringContaining("second time")]);
+		} finally {
+			dispose();
+			store.stop();
+		}
+	});
+
 	it("opens each saved transcript and the run report without creating or hydrating a runtime", async () => {
 		const saved = { ...run("run/one", "/project", 0, "stopped"), endedAt: 62_000, report: "Saved final report body" };
 		vi.mocked(api.automations).mockResolvedValue({ runs: [saved] });

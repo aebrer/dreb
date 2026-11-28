@@ -137,11 +137,18 @@ function countCompactions(file: string): number | undefined {
 	}
 	return count;
 }
-function interruptionReport(run: StoredRun, reason: string): string {
+/**
+ * The status the run had when it ended decides what can honestly be claimed. A run stopped
+ * mid-review did have a review; only its decision is missing, and that stays true whether the
+ * review was cut short or its verdict simply never reached the history file.
+ */
+function interruptionReport(run: StoredRun, reason: string, status: StoredRun["status"]): string {
 	const review = run.decisions.at(-1);
-	return review
-		? `${reason}\n\nLast accepted guard review (progress after this review is unknown):\n\n${review.report}`
-		: `${reason}\n\nRemaining work is unknown. No guard review was recorded.`;
+	if (review)
+		return `${reason}\n\nLast accepted guard review (progress after this review is unknown):\n\n${review.report}`;
+	if (status === "reviewing")
+		return `${reason}\n\nRemaining work is unknown. A guard review was in progress when the run ended, so no decision was recorded.`;
+	return `${reason}\n\nRemaining work is unknown. No guard review was recorded.`;
 }
 
 function reviewPrompt(run: StoredRun, now: number, evidence: string): string {
@@ -165,6 +172,12 @@ export class AutomationRuns {
 	private pendingHistoryArchive: "move" | "copy" | undefined;
 	private historyLock?: DatabaseSync;
 	historyIssue?: string;
+	/**
+	 * Set while the durable history is behind what this Dashboard knows. Unlike `historyIssue`,
+	 * which means Automate cannot be trusted at all, this only means records may need another
+	 * write. Any successful save clears it, so a transient storage fault heals itself.
+	 */
+	saveIssue?: string;
 
 	private warn(message: string): void {
 		(this.options.warn ?? console.warn)(message);
@@ -238,9 +251,14 @@ export class AutomationRuns {
 			}
 			this.runs.set(row.id, row);
 			if (row.status === "working" || row.status === "reviewing") {
+				const endedDuring = row.status;
 				row.status = "interrupted";
 				row.endedAt = this.now();
-				row.report = interruptionReport(row, "Interrupted by dashboard restart; work was not resumed.");
+				row.report = interruptionReport(
+					row,
+					"Interrupted by dashboard restart; work was not resumed.",
+					endedDuring,
+				);
 				interrupted = true;
 			}
 		});
@@ -253,11 +271,9 @@ export class AutomationRuns {
 			this.pendingHistoryArchive = "copy";
 		}
 		if (!(interrupted || rejected.length > 0)) return;
-		try {
-			this.save();
-		} catch (err) {
+		if (!this.persist("repaired automation history")) {
 			warn(
-				`Could not save repaired automation history at ${file} (${String(err)}). Recovered runs are available in memory.`,
+				`Recovered runs are available in memory until a later write can save them. The original stays available for the next startup.`,
 			);
 		}
 	}
@@ -287,6 +303,26 @@ export class AutomationRuns {
 		}
 	}
 
+	/**
+	 * Durable write that never ends a run. History is the record the owner reads afterwards, so a
+	 * failed write is reported and left for a later write to heal rather than thrown at the work
+	 * that already succeeded. Only launch keeps the hard-fail contract: starting a run whose record
+	 * cannot be written is worse than not starting it.
+	 */
+	private persist(what: string): boolean {
+		try {
+			this.save();
+			return true;
+		} catch (err) {
+			this.saveIssue =
+				"Dashboard could not save automation history. Run records and final reports may be out of date after a restart.";
+			this.warn(
+				`Could not save ${what} (${String(err)}). It stays in this Dashboard and is written again with the next history save.`,
+			);
+			return false;
+		}
+	}
+
 	private save(runs: Iterable<StoredRun> = this.runs.values()): void {
 		const path = this.options.historyFile;
 		if (path === undefined) return;
@@ -297,6 +333,12 @@ export class AutomationRuns {
 			writeFileSync(temp, `${JSON.stringify([...runs])}\n`, { mode: 0o600, flag: "wx" });
 			if (this.pendingHistoryArchive) this.archiveHistory(path, this.pendingHistoryArchive);
 			renameSync(temp, path);
+			// Every write replaces the whole snapshot, so a successful one also repairs whatever a
+			// earlier failure left unsaved.
+			if (this.saveIssue !== undefined) {
+				this.saveIssue = undefined;
+				this.warn("Automation history is back in sync with the runs in this Dashboard.");
+			}
 		} catch (error) {
 			try {
 				rmSync(temp, { force: true });
@@ -474,7 +516,7 @@ export class AutomationRuns {
 		const work = await this.acquire(live, "orchestrator");
 		if (!this.current(live) || !work) return;
 		run.workFile = work.file;
-		this.save();
+		this.persist("the work transcript reference");
 		let feedback: string | undefined;
 		const counts = new Map<string, number>();
 		while (this.current(live)) {
@@ -488,11 +530,11 @@ export class AutomationRuns {
 			if (!this.current(live)) return;
 			live.lastEvidence = evidence;
 			run.status = "reviewing";
-			this.save();
+			this.persist("the start of a guard review");
 			const guard = await this.acquire(live, "guard");
 			if (!this.current(live) || !guard) return;
 			run.guardFiles.push(guard.file);
-			this.save();
+			this.persist("a guard transcript reference");
 			const response = await guard.turn(reviewPrompt(run, this.now(), evidence));
 			if (!this.current(live)) return;
 			let decision = parseGuardReport(response);
@@ -537,7 +579,9 @@ export class AutomationRuns {
 			}
 			feedback = decision.report;
 			run.status = "working";
-			this.save();
+			// The verdict is already in memory and will be written with the next history save, so a
+			// failed write here must not cancel work the owner asked to continue.
+			this.persist("an accepted guard decision");
 			await this.release(live, guard);
 			// The while condition rechecks identity after the asynchronous close.
 		}
@@ -551,11 +595,7 @@ export class AutomationRuns {
 		this.live.delete(live.run.id);
 		Object.assign(live.run, { status, endedAt: this.now(), report });
 		try {
-			this.save();
-			return true;
-		} catch (err) {
-			this.warn(`Could not save final report for automation ${live.run.id}: ${String(err)}`);
-			return false;
+			return this.persist(`the final report for automation ${live.run.id}`);
 		} finally {
 			for (const child of live.children) {
 				void this.release(live, child).catch((err) => console.error("Failed to close automation session", err));
@@ -566,7 +606,7 @@ export class AutomationRuns {
 	stop(owner: string, id: string): { ok: true; warning?: string } {
 		if (this.runs.get(id)?.owner !== owner) throw new AutomationNotFound("Automation not found");
 		const live = this.live.get(id);
-		if (live && !this.finish(live, "stopped", interruptionReport(live.run, "Stopped by user."))) {
+		if (live && !this.finish(live, "stopped", interruptionReport(live.run, "Stopped by user.", live.run.status))) {
 			return {
 				ok: true,
 				warning:
@@ -580,8 +620,15 @@ export class AutomationRuns {
 		this.closed = true;
 		try {
 			for (const live of this.live.values()) {
-				this.finish(live, "interrupted", interruptionReport(live.run, "Interrupted by dashboard shutdown."));
+				this.finish(
+					live,
+					"interrupted",
+					interruptionReport(live.run, "Interrupted by dashboard shutdown.", live.run.status),
+				);
 			}
+			// A shutdown is the last chance to write records a storage fault left behind, and it is
+			// the common recovery: writes are healthy again before the next startup reads them.
+			if (this.saveIssue !== undefined) this.persist("automation history before shutdown");
 		} finally {
 			await Promise.allSettled(this.resources);
 			const lock = this.historyLock;

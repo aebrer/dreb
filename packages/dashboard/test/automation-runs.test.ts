@@ -218,6 +218,14 @@ describe("AutomationRuns", () => {
 		runs.stop(owner, id);
 		const stopped = history();
 		expect(stopped[0]).toMatchObject({ status: "stopped", report: expect.stringMatching(/user/i) });
+		// The host was inside a review, so the report says that instead of claiming nothing was reviewed.
+		if (stage === "close") {
+			// That review's CONTINUE landed and was accepted before Stop, so the report quotes it.
+			expect(stopped[0].report).toContain("Last accepted guard review");
+		} else {
+			expect(stopped[0].report).toContain("A guard review was in progress");
+			expect(stopped[0].report).not.toContain("No guard review was recorded");
+		}
 		acquired.resolve(guard);
 		response.resolve("too late\nCONTINUE");
 		closed.resolve();
@@ -321,6 +329,182 @@ describe("AutomationRuns", () => {
 			await restored.close();
 		}
 		expect(start).not.toHaveBeenCalled();
+	});
+
+	describe("history write failures", () => {
+		/**
+		 * Replace the durable write with one that can be switched off mid-run. The real method is
+		 * captured before any spy exists, so a leaked mock cannot become the "original".
+		 */
+		const realSave = (AutomationRuns.prototype as unknown as { save(runs?: Iterable<unknown>): void }).save;
+		function breakableSave() {
+			let broken = 0;
+			const spy = vi
+				.spyOn(AutomationRuns.prototype as unknown as { save(runs?: Iterable<unknown>): void }, "save")
+				.mockImplementation(function (this: AutomationRuns, runs?: Iterable<unknown>): void {
+					if (broken > 0) {
+						if (broken === 1) broken = 0;
+						throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+					}
+					realSave.call(this, runs);
+				});
+			return {
+				spy,
+				/** Fail the next write only: a transient fault. */
+				breakOnce: () => {
+					broken = 1;
+				},
+				/** Fail every write until `healWrites`. */
+				breakWrites: () => {
+					broken = Number.MAX_SAFE_INTEGER;
+				},
+				healWrites: () => {
+					broken = 0;
+				},
+			};
+		}
+
+		it("keeps working through a failed status write and heals the history on the next write", async () => {
+			const work = child("work"),
+				guard = child("guard");
+			work.turn.mockResolvedValueOnce("First pass done.").mockResolvedValueOnce("All finished.");
+			guard.turn.mockResolvedValueOnce("Keep going.\nCONTINUE").mockResolvedValueOnce("All finished.\nSTOP");
+			const save = breakableSave();
+			const warnings: string[] = [];
+			const runs = new AutomationRuns({
+				historyFile,
+				warn: (message) => warnings.push(message),
+				start: vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValue(guard),
+			});
+			launch(runs);
+			save.breakOnce();
+			await settle();
+			try {
+				// Host bookkeeping failed once; the run the owner asked for still finished.
+				expect(runs.get(owner, id)).toMatchObject({ status: "stopped", report: "All finished." });
+				expect(work.turn).toHaveBeenCalledTimes(2);
+				// The next successful write rewrote the whole snapshot.
+				expect(history()[0]).toMatchObject({ status: "stopped", report: "All finished." });
+				expect(runs.saveIssue).toBeUndefined();
+				expect(warnings.join("\n")).toMatch(/Could not save the work transcript reference/);
+			} finally {
+				save.spy.mockRestore();
+				await runs.close();
+			}
+		});
+
+		it("keeps a run alive across a sustained write failure and reports the record as unsaved", async () => {
+			const work = child("work"),
+				guard = child("guard");
+			work.turn.mockResolvedValue("Two files left.");
+			guard.turn.mockResolvedValue("Stop condition met: the deadline passed.\nSTOP");
+			const save = breakableSave();
+			const runs = new AutomationRuns({
+				historyFile,
+				warn: () => {},
+				start: vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard),
+			});
+			launch(runs);
+			save.breakWrites();
+			await settle();
+			try {
+				expect(runs.get(owner, id)).toMatchObject({
+					status: "stopped",
+					report: "Stop condition met: the deadline passed.",
+				});
+				expect(work.close).toHaveBeenCalledTimes(1);
+				expect(runs.saveIssue).toMatch(/out of date after a restart/);
+				expect(history()[0]).toMatchObject({ status: "working", decisions: [] });
+			} finally {
+				save.healWrites();
+				save.spy.mockRestore();
+				await runs.close();
+			}
+		});
+
+		it("writes a missing final report again before shutdown so the next boot reads the truth", async () => {
+			const work = child("work"),
+				guard = child("guard");
+			const report = "Stop condition met: the deadline passed with one item outstanding.";
+			work.turn.mockResolvedValue("Two files left.");
+			const save = breakableSave();
+			guard.turn.mockImplementation(async () => {
+				save.breakWrites();
+				return `${report}\nSTOP`;
+			});
+			const warnings: string[] = [];
+			const runs = new AutomationRuns({
+				historyFile,
+				warn: (message) => warnings.push(message),
+				start: vi.fn<Start>().mockResolvedValueOnce(work).mockResolvedValueOnce(guard),
+			});
+			launch(runs);
+			await settle();
+			try {
+				// The owner sees the truth in this Dashboard; the durable record is behind it.
+				expect(runs.get(owner, id)).toMatchObject({ status: "stopped", report });
+				expect(runs.saveIssue).toMatch(/out of date after a restart/);
+				expect(history()[0]).toMatchObject({ status: "reviewing", decisions: [] });
+				expect(warnings.join("\n")).toMatch(/Could not save the final report for automation/);
+				// Writes recover before the restart that would otherwise read the stale row.
+				save.healWrites();
+			} finally {
+				await runs.close();
+				save.spy.mockRestore();
+			}
+			expect(runs.saveIssue).toBeUndefined();
+			expect(history()[0]).toMatchObject({ status: "stopped", decisions: [{ action: "stop", report }], report });
+			const restarted = new AutomationRuns({ historyFile, start: vi.fn<Start>() });
+			expect(restarted.get(owner, id)).toMatchObject({ status: "stopped", report });
+			await restarted.close();
+		});
+
+		it("keeps a failed repair of recovered history visible until a later write saves it", () => {
+			const good = {
+				id: "kept",
+				owner,
+				setupFile: join(dir, "setup.jsonl"),
+				draft: agreement("Keep me"),
+				status: "working",
+				startedAt: 5,
+				compactions: 0,
+				guardFiles: [],
+				decisions: [],
+			};
+			writeFileSync(historyFile, JSON.stringify([good]));
+			const save = breakableSave();
+			save.breakWrites();
+			const runs = new AutomationRuns({ historyFile, warn: () => {}, start: vi.fn<Start>() });
+			save.spy.mockRestore();
+			expect(runs.get(owner, "kept")).toMatchObject({ status: "interrupted" });
+			expect(runs.saveIssue).toMatch(/out of date after a restart/);
+		});
+
+		it("says only what is honestly known about an interrupted run with no accepted decision", () => {
+			const row = {
+				owner,
+				setupFile: join(dir, "setup.jsonl"),
+				draft: agreement("Check the project"),
+				startedAt: 5,
+				compactions: 0,
+				guardFiles: [],
+				decisions: [],
+			};
+			writeFileSync(
+				historyFile,
+				JSON.stringify([
+					{ ...row, id: "in-review", status: "reviewing" },
+					{ ...row, id: "in-work", status: "working" },
+				]),
+			);
+			const runs = new AutomationRuns({ historyFile, warn: () => {}, start: vi.fn<Start>() });
+			const review = runs.get(owner, "in-review")?.report ?? "";
+			const work = runs.get(owner, "in-work")?.report ?? "";
+			expect(review).toContain("A guard review was in progress");
+			expect(review).not.toContain("No guard review was recorded");
+			expect(work).toContain("No guard review was recorded");
+			expect(work).not.toContain("A guard review was in progress");
+		});
 	});
 
 	it.each(["{", "{}", "[{}]"])("moves unusable history %s aside and still starts", (raw) => {

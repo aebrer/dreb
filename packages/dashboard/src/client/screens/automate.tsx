@@ -305,6 +305,10 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 	const [actionError, setActionError] = createSignal("");
 	const [actionWarning, setActionWarning] = createSignal("");
 	const [historyIssue, setHistoryIssue] = createSignal<string>();
+	const [saveIssue, setSaveIssue] = createSignal("");
+	// A dismissed storage warning stays dismissed while the message is unchanged, so the poll does
+	// not reopen a banner the owner already acknowledged.
+	let dismissedSaveIssue: string | undefined;
 	const [inventoryError, setInventoryError] = createSignal("");
 	const [loaded, setLoaded] = createSignal(false);
 	const [runs, setRuns] = createStore<AutomationRun[]>([]);
@@ -342,6 +346,7 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 			setNow(Date.now());
 			setLoaded(true);
 			setHistoryIssue(result.historyIssue);
+			setSaveIssue(result.saveIssue === dismissedSaveIssue ? "" : (result.saveIssue ?? ""));
 			setInventoryError("");
 		} catch (err) {
 			if (!controller.signal.aborted) setInventoryError(err instanceof Error ? err.message : String(err));
@@ -389,6 +394,14 @@ export function AutomateScreen(props: { store: AppStore }): JSX.Element {
 			<Topbar store={props.store} active="automate" />
 			<ErrorBanner message={actionError()} dismiss={() => setActionError("")} />
 			<ErrorBanner message={actionWarning()} dismiss={() => setActionWarning("")} warning />
+			<ErrorBanner
+				message={saveIssue()}
+				dismiss={() => {
+					dismissedSaveIssue = saveIssue();
+					setSaveIssue("");
+				}}
+				warning
+			/>
 			<ErrorBanner message={inventoryError()} dismiss={() => setInventoryError("")} />
 			<main class="container">
 				<div class="fleet-head">

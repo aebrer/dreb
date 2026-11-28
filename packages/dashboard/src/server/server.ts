@@ -788,6 +788,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			runs: runs.list(owner(req)),
 			setups: pool.automationSetups(owner(req)),
 			historyIssue: runs.historyIssue,
+			saveIssue: runs.saveIssue,
 		}),
 	);
 	app.post("/api/automations/:id/stop", (req, res) => {

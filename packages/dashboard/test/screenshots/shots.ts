@@ -85,7 +85,7 @@ const SESSION_LIVE = ['.working:has-text("bash")'];
 function automateShot(viewport: ViewportName): ShotDefinition {
 	return {
 		name: `automate-${viewport}-dark`,
-		alt: `dreb dashboard Automate inventory on ${viewport}: a finished station cache review, its guard decision and final report`,
+		alt: `dreb dashboard Automate inventory on ${viewport}: past runs grouped by project with status chips, final reports and details actions`,
 		viewport,
 		colorMode: "dark",
 		route: { screen: "automate" },
